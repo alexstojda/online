@@ -329,6 +329,91 @@ bool ChildSession::_handleInput(const char *buffer, int length)
 
         return success;
     }
+    else if (tokens.equals(0, "extractdocumentstructure"))
+    {
+        if (tokens.size() < 2)
+        {
+            sendTextFrameAndLogError("error: cmd=extractdocumentstructure kind=syntax");
+            return false;
+        }
+
+        if (!_isDocLoaded)
+        {
+            sendTextFrameAndLogError("error: cmd=extractdocumentstructure kind=docnotloaded");
+            return false;
+        }
+
+        assert(!getDocURL().empty());
+        assert(!getJailedFilePath().empty());
+
+        char* data = _docManager->getLOKit()->extractDocumentStructureRequest(getJailedFilePath().c_str());
+        if (!data)
+        {
+            LOG_TRC("extractDocumentStructureRequest returned no data.");
+            sendTextFrame("extracteddocumentstructure: { }");
+            return false;
+        }
+
+        LOG_TRC("Extracted document structure: " << data);
+        bool success = sendTextFrame("extracteddocumentstructure: " + std::string(data));
+        free(data);
+
+        return success;
+    }
+    else if (tokens.equals(0, "transformdocumentstructure"))
+    {
+        if (tokens.size() < 3)
+        {
+            sendTextFrameAndLogError("error: cmd=transformdocumentstructure kind=syntax");
+            return false;
+        }
+
+        if (!_isDocLoaded)
+        {
+            sendTextFrameAndLogError("error: cmd=transformdocumentstructure kind=docnotloaded");
+            return false;
+        }
+
+        assert(!getDocURL().empty());
+        assert(!getJailedFilePath().empty());
+
+        const std::string command = ".uno:TransformDocumentStructure";
+
+        //unfortunatelly tokens are generated only from the 1. line
+        //but our json string probably many lines long
+
+        //std::string transform;
+        //getTokenString(tokens[2], "transform", transform);
+        const char* strJSON = strstr(buffer,"transform=");
+        if (!strJSON)
+        {
+            return false;
+        }
+        strJSON+=10;
+
+        //send uno command
+        getLOKitDocument()->setView(_viewId);
+        //getLOKitDocument()->postUnoCommand(command.c_str(), transform.c_str(), false);
+
+        const std::string arguments = "{"
+            "\"DataJson\":{"
+                "\"type\":\"string\","
+                "\"value\":\"" +std::string(strJSON)+ "\""
+            "}}";
+
+
+        fprintf(stderr, "%s\n", "SZUCSI ChildSession::_handleInput_BeforeUNO_COMMAND");
+        getLOKitDocument()->postUnoCommand(command.c_str(), arguments.c_str(), false);
+//        getLOKitDocument()->postUnoCommand(command.c_str(), strJSON, true);
+        fprintf(stderr, "%s\n", "SZUCSI ChildSession::_handleInput_After_UNO_COMMAND");
+
+        //char* data = _docManager->getLOKit()->transformDocumentStructureRequest(getJailedFilePath().c_str());
+        //LOG_TRC("transformed document structure: " << data);
+        bool success =true; // = sendTextFrame("transformeddocumentstructure: " + std::string(data));
+        //free(data);
+
+        return success;
+    }
     else if (tokens.equals(0, "getthumbnail"))
     {
         if (tokens.size() < 3)
