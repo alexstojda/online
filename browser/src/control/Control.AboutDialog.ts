@@ -1,3 +1,5 @@
+/** */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -7,6 +9,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 /*
  * AboutDialog - implements Help - About dialog with version and warnings
  */
@@ -118,7 +121,7 @@ class AboutDialog {
 		var box = document.getElementById(aboutDialogId + '-box');
 		var innerDiv = L.DomUtil.create('div', '', null);
 		box.insertBefore(innerDiv, box.firstChild);
-		innerDiv.innerHTML = content.outerHTML;
+		innerDiv.appendChild(content);
 
 		var form = document.getElementById('about-dialog-box');
 

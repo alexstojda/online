@@ -57,8 +57,6 @@ class StatusBar extends JSDialog.Toolbar {
 			this.showItem('statusselectionmode-container', false);
 		} else {
 			this.enableItem('languagestatus', true);
-			this.showItem('insertmode-container', true);
-			this.showItem('statusselectionmode-container', true);
 		}
 		this.updateVisibilityForToolbar(context);
 	}
@@ -259,7 +257,7 @@ class StatusBar extends JSDialog.Toolbar {
 		if (this.parentContainer.firstChild)
 			return;
 
-		this.parentContainer.innerHTML = '';
+		this.parentContainer.replaceChildren();
 		this.builder.build(this.parentContainer, this.getToolItems());
 
 		this.onLanguagesUpdated();

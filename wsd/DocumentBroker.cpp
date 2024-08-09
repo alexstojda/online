@@ -313,8 +313,26 @@ void DocumentBroker::pollThread()
     // Download and load the document.
     if (_initialWopiFileInfo)
     {
-        downloadAdvance(_childProcess->getJailId(), _uriPublic, std::move(_initialWopiFileInfo));
+        try
+        {
+            downloadAdvance(_childProcess->getJailId(), _uriPublic, std::move(_initialWopiFileInfo));
+        }
+        catch (const std::exception& exc)
+        {
+            LOG_ERR("Failed to advance download [" << _docKey << "]: " << exc.what());
+
+            stop("advance download failed");
+
+            // Stop to mark it done and cleanup.
+            _poll->stop();
+
+            // Async cleanup.
+            COOLWSD::doHousekeeping();
+
+            return;
+        }
     }
+
 
 #if !MOBILEAPP
     static const std::size_t IdleDocTimeoutSecs
@@ -873,6 +891,11 @@ bool DocumentBroker::download(
     {
         _docState.setStatus(DocumentState::Status::Downloading);
 
+        if(_unitWsd != nullptr)
+        {
+            _unitWsd->onPerfDocumentLoading();
+        }
+
         // Pass the public URI to storage as it needs to load using the token
         // and other storage-specific data provided in the URI.
         LOG_DBG("Creating new storage instance for URI ["
@@ -1230,6 +1253,9 @@ DocumentBroker::updateSessionWithWopiInfo(const std::shared_ptr<ClientSession>& 
     std::optional<bool> isAdminUser = wopiFileInfo->getIsAdminUser();
     if (!wopiFileInfo->getIsAdminUserError().empty())
         _serverAudit.set("is_admin", wopiFileInfo->getIsAdminUserError());
+
+    if (!COOLWSD::getHardwareResourceWarning().empty())
+        _serverAudit.set("hardwarewarning", COOLWSD::getHardwareResourceWarning());
 
     if (!wopiFileInfo->getUserCanWrite() ||
         session->isReadOnly()) // Readonly. Second boolean checks for URL "permission=readonly"
@@ -2418,6 +2444,12 @@ void DocumentBroker::setLoaded()
             std::max(std::chrono::seconds(minTimeoutSecs), std::chrono::seconds(5)));
         LOG_DBG("Document loaded in " << _loadDuration << ", saving-timeout set to "
                                       << _saveManager.getSavingTimeout());
+
+        if(_unitWsd != nullptr)
+        {
+            _unitWsd->onPerfDocumentLoaded();
+        }
+
     }
 }
 
@@ -3347,8 +3379,7 @@ bool DocumentBroker::handleInput(const std::shared_ptr<Message>& message)
             COOLProtocol::getTokenString((*message)[3], "clientid", clientId);
             LOG_CHECK_RET(!clientId.empty(), false);
 
-            std::string decoded;
-            Poco::URI::decode(url, decoded);
+            const std::string decoded = Util::decodeURIComponent(url);
             const std::string filePath(FileUtil::buildLocalPathToJail(COOLWSD::EnableMountNamespaces,
                                                                       COOLWSD::ChildRoot + getJailId(),
                                                                       JAILED_DOCUMENT_ROOT + decoded));
@@ -4625,6 +4656,12 @@ void DocumentBroker::switchMode(const std::shared_ptr<ClientSession>& session,
 void DocumentBroker::startSwitchingToOffline(const std::shared_ptr<ClientSession>& session)
 {
     LOG_DBG("Starting switching to Offline mode");
+
+    if (_docState.activity() != DocumentState::Activity::None)
+    {
+        // It's not safe to call startActivity() while executing another.
+        return;
+    }
 
     // Transition.
     if (!startActivity(DocumentState::Activity::SwitchingToOffline))

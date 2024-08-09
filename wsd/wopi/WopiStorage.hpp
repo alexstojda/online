@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "CharacterConverter.hpp"
 #include <COOLWSD.hpp>
 #include <HttpRequest.hpp>
 #include <Log.hpp>
@@ -166,13 +167,14 @@ public:
         std::optional<bool> _isAdminUser = std::nullopt;
 
         /// error code if integration does not use isAdminUser field properly
-        std::string _isAdminUserError = "";
+        std::string _isAdminUserError;
     };
 
     WopiStorage(const Poco::URI& uri, const std::string& localStorePath,
                 const std::string& jailPath)
         : StorageBase(uri, localStorePath, jailPath)
         , _wopiSaveDuration(std::chrono::milliseconds::zero())
+        , _utf7Converter("UTF-8", "UTF-7")
         , _legacyServer(COOLWSD::getConfigValue<bool>("storage.wopi.is_legacy_server", false))
     {
         LOG_INF("WopiStorage ctor with localStorePath: ["
@@ -254,6 +256,9 @@ private:
 
     /// The http::Session used for uploading asynchronously.
     std::shared_ptr<http::Session> _uploadHttpSession;
+
+    /// Filename converter to UTF-7.
+    Util::CharacterConverter _utf7Converter;
 
     /// Whether or not this is a legacy server.
     const bool _legacyServer;

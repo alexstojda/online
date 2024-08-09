@@ -487,11 +487,16 @@ export class Header extends app.definitions.canvasSectionObject {
 	}
 
 	_bindContextMenu(): void {
+		if ((window as any).mode.isMobile() || this._map.isReadOnlyMode()) {
+			// On mobile, we use the mobile wizard rather than the context menu
+			return;
+		}
+
 		this._unBindContextMenu();
 		$.contextMenu({
 			selector: '#canvas-container',
 			className: 'cool-font',
-			zIndex: 10,
+			zIndex: 1500,
 			items: this._menuItem,
 			callback: function() { return; }
 		});

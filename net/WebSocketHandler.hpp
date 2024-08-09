@@ -784,7 +784,10 @@ protected:
                   [[maybe_unused]] unsigned char flags, bool flush = true) const
     {
         if (!socket || data == nullptr || len == 0)
+        {
+            LOG_DBG("Socket or data missing. Cannot send WS frame");
             return -1;
+        }
 
         if (socket->isClosed())
         {
@@ -944,7 +947,7 @@ protected:
     }
 
     /// Implementation of the ProtocolHandlerInterface.
-    void dumpState(std::ostream& os) const override;
+    void dumpState(std::ostream& os, const std::string& indent) const override;
 
     static std::string generateKey();
     static std::string computeAccept(const std::string &key);

@@ -81,6 +81,9 @@ class UserList extends L.Control {
 			this.options.noUser = _('0 users');
 		}
 
+		const userListElement = document.getElementById('userListSummary');
+		userListElement.setAttribute('aria-label', _('User List Summary'));
+
 		this.registerHeaderAvatarEvents();
 	}
 
@@ -121,7 +124,7 @@ class UserList extends L.Control {
 		app.setFollowingOff();
 	}
 
-	followUser(viewId: number) {
+	followUser(viewId: number, instantJump: boolean = true) {
 		const myViewId = this.map._docLayer._viewId;
 		const followingViewId = app.getFollowedViewId();
 		const followMyself = viewId === followingViewId;
@@ -129,13 +132,11 @@ class UserList extends L.Control {
 		app.setFollowingUser(viewId);
 
 		if (followMyself) {
-			this.map._goToViewId(myViewId);
-			this.map._setFollowing(true, myViewId);
+			this.map._setFollowing(true, myViewId, instantJump);
 			this.renderAll();
 			return;
 		} else if (viewId !== -1) {
-			this.map._goToViewId(viewId);
-			this.map._setFollowing(true, viewId);
+			this.map._setFollowing(true, viewId, instantJump);
 		} else {
 			this.unfollowAll();
 			this.map._setFollowing(false, -1);
@@ -576,7 +577,7 @@ class UserList extends L.Control {
 
 		followingChip.onclick = () => {
 			this.unfollowAll();
-			this.renderFollowingChip();
+			this.renderAll();
 		};
 
 		followingChip.title = this.options.followingChipTooltipText;
@@ -595,5 +596,5 @@ L.control.createUserListWidget = function () {
 	// TODO: this is not interactive
 	const userlistElement = L.DomUtil.create('div');
 	app.map.userList.renderHeaderAvatarPopover(userlistElement);
-	return userlistElement.outerHTML;
+	return userlistElement;
 };

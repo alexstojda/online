@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.63])
 
-AC_INIT([coolwsd], [24.04.5.3], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
+AC_INIT([coolwsd], [24.04.6.1], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
 LT_INIT([shared, disable-static, dlopen])
 
 AM_INIT_AUTOMAKE([1.10 foreign subdir-objects tar-pax -Wno-portability])
@@ -360,10 +360,6 @@ AC_ARG_WITH([compiler-plugins],
             AS_HELP_STRING([--with-compiler-plugins=<path>],
                 [Experimental! Unlikely to work for anyone except Noel! Enable compiler plugins that will perform additional checks during
                  building.]))
-
-AC_ARG_ENABLE([setcap],
-            AS_HELP_STRING([--disable-setcap],
-                          [Do not set capabilities on files. For packaging builds]))
 
 AC_ARG_ENABLE([werror],
             AS_HELP_STRING([--disable-werror],
@@ -1463,18 +1459,6 @@ if test -n "$with_user_id"; then
 fi
 AC_DEFINE_UNQUOTED([COOL_USER_ID],["$COOL_USER_ID"],[The user-name which is allowed to run coolwsd and its tools])
 
-AM_CONDITIONAL([ENABLE_SETCAP], [test "$enable_setcap" != "no" -a `uname -s` = "Linux" -a "$enable_fuzzers" != "yes" -a "$host_os" != "emscripten"])
-
-ENABLE_SETCAP=
-if test "$enable_setcap" != "no" -a `uname -s` = "Linux" -a "$enable_fuzzers" != "yes" -a "$host_os" != "emscripten"; then
-    ENABLE_SETCAP=true
-    setcap_msg="setcap enabled"
-else
-    setcap_msg="setcap disabled"
-fi
-
-AC_SUBST(ENABLE_SETCAP)
-
 AC_CONFIG_LINKS([discovery.xml:discovery.xml])
 AC_CONFIG_LINKS([browser/package.json:browser/package.json])
 AC_CONFIG_LINKS([browser/.eslintrc:browser/.eslintrc])
@@ -1832,7 +1816,6 @@ Configuration:
     Test assertion logging    $log_asserts_msg
     Uglification and bundling $bundle_msg
     Anonymization             $anonym_msg
-    Set capabilities          $setcap_msg
     Browsersync               $browsersync_msg
     cypress                   $cypress_msg
     C++ compiler flags        $CXXFLAGS

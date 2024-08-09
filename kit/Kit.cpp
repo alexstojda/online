@@ -182,8 +182,7 @@ namespace
 
     std::string pathFromFileURL(const std::string &uri)
     {
-        std::string decoded;
-        Poco::URI::decode(uri, decoded);
+        const std::string decoded = Util::decodeURIComponent(uri);
         if (decoded.rfind("file://", 0) != 0)
         {
             LOG_ERR("Asked to load a very unusual file path: '" << uri << "' -> '" << decoded << "'");
@@ -1753,6 +1752,12 @@ std::string Document::getDefaultTheme(const std::shared_ptr<ChildSession>& sessi
     return darkTheme ? "Dark" : "Light";
 }
 
+std::string Document::getDefaultBackgroundTheme(const std::shared_ptr<ChildSession>& session) const
+{
+    bool darkTheme = session->getDarkBackground() == "true";
+    return darkTheme ? "Dark" : "Light";
+}
+
 std::shared_ptr<lok::Document> Document::load(const std::shared_ptr<ChildSession>& session,
                                               const std::string& renderOpts)
 {
@@ -1935,12 +1940,14 @@ std::shared_ptr<lok::Document> Document::load(const std::shared_ptr<ChildSession
     }
     std::string theme = getDefaultTheme(session);
 
+    std::string backgroundTheme = getDefaultBackgroundTheme(session);
+
     LOG_INF("Initializing for rendering session [" << sessionId << "] on document url [" <<
-            anonymizeUrl(_url) << "] with: [" << makeRenderParams(_renderOpts, userNameAnonym, spellOnline, theme) << "].");
+            anonymizeUrl(_url) << "] with: [" << makeRenderParams(_renderOpts, userNameAnonym, spellOnline, theme, backgroundTheme) << "].");
 
     // initializeForRendering() should be called before
     // registerCallback(), as the previous creates a new view in Impress.
-    const std::string renderParams = makeRenderParams(_renderOpts, userName, spellOnline, theme);
+    const std::string renderParams = makeRenderParams(_renderOpts, userName, spellOnline, theme, backgroundTheme);
 
     _loKitDocument->initializeForRendering(renderParams.c_str());
 
@@ -2083,7 +2090,8 @@ Object::Ptr makePropertyValue(const std::string& type, const T& val)
 }
 
 /* static */ std::string Document::makeRenderParams(const std::string& renderOpts, const std::string& userName,
-                                                    const std::string& spellOnline, const std::string& theme)
+                                                    const std::string& spellOnline, const std::string& theme,
+                                                    const std::string& backgroundTheme)
 {
     Object::Ptr renderOptsObj;
 
@@ -2115,6 +2123,9 @@ Object::Ptr makePropertyValue(const std::string& type, const T& val)
 
     if (!theme.empty())
         renderOptsObj->set(".uno:ChangeTheme", makePropertyValue("string", theme));
+
+    if (!backgroundTheme.empty())
+        renderOptsObj->set(".uno:InvertBackground", makePropertyValue("string", backgroundTheme));
 
     if (renderOptsObj)
     {
@@ -2949,6 +2960,7 @@ void lokit_main(
                 bool useMountNamespaces,
                 bool queryVersion,
                 bool displayVersion,
+                bool sysTemplateIncomplete,
 #else
                 int docBrokerSocket,
                 const std::string& userInterface,
@@ -3056,6 +3068,22 @@ void lokit_main(
             const std::string tmpSubDir = Poco::Path(tempRoot, "cool-" + jailId).toString();
             const std::string jailTmpDir = Poco::Path(jailPath, "tmp").toString();
 
+            const std::string sysTemplateSubDir = Poco::Path(tempRoot, "systemplate-" + jailId).toString();
+            const std::string jailEtcDir = Poco::Path(jailPath, "etc").toString();
+
+            if (sysTemplateIncomplete && JailUtil::isBindMountingEnabled())
+            {
+                Poco::File(Poco::Path(sysTemplateSubDir, "etc").toString()).createDirectories();
+                if (!JailUtil::SysTemplate::updateDynamicFiles(sysTemplateSubDir))
+                {
+                    LOG_WRN("Failed to update the dynamic files in ["
+                            << sysTemplateSubDir
+                            << "]. Will clone systemplate into the "
+                               "jails, which is more resource intensive.");
+                    JailUtil::disableBindMounting(); // We can't mount from incomplete systemplate.
+                }
+            }
+
             // The bind-mount implementation: inlined here to mirror
             // the fallback link/copy version bellow.
             const auto mountJail = [&]() -> bool {
@@ -3067,6 +3095,20 @@ void lokit_main(
                     LOG_ERR("Failed to mount [" << sysTemplate << "] -> [" << jailPathStr
                                                 << "], will link/copy contents.");
                     return false;
+                }
+
+                // if we know that the etc dir of sysTemplate is out of date, then
+                // ro bind-mount a replacement up-to-date /etc
+                if (sysTemplateIncomplete)
+                {
+                    LOG_INF("Mounting " << sysTemplateSubDir << " -> " << jailEtcDir);
+                    if (!JailUtil::bind(sysTemplateSubDir, jailEtcDir)
+                        || !JailUtil::remountReadonly(sysTemplateSubDir, jailEtcDir))
+                    {
+                        LOG_ERR("Failed to mount [" << sysTemplateSubDir << "] -> [" << jailEtcDir
+                                                    << "], will link/copy contents.");
+                        return false;
+                    }
                 }
 
                 // Mount loTemplate inside it.
@@ -3607,26 +3649,6 @@ static int sendURPToLO(void* pContext, signed char* pBuffer, int bytesToRead)
     return bytesRead;
 }
 
-// temp workaround of changed signature of startURP. Compile detect
-// old signature and if so return nullptr
-extern "C" int (*ObsoleteStartURPSignature)(LibreOfficeKit*, void*, void**,
-             int (*)(void* pContext, const signed char* pBuffer, int nLen),
-             int (**)(void* pContext, const signed char* pBuffer, int nLen));
-
-template<class T> void* doStartURP(T&, std::true_type)
-{
-    (void)receiveURPFromLO;
-    (void)sendURPToLO;
-    return nullptr;
-}
-
-template<class T> void* doStartURP(T& LOKit, std::false_type)
-{
-    return LOKit->startURP(reinterpret_cast<void*>(URPfromLoFDs[1]),
-                           reinterpret_cast<void*>(URPtoLoFDs[0]),
-                           receiveURPFromLO, sendURPToLO);
-}
-
 bool startURP(std::shared_ptr<lok::Office> LOKit, void** ppURPContext)
 {
     if (!isURPEnabled())
@@ -3641,7 +3663,9 @@ bool startURP(std::shared_ptr<lok::Office> LOKit, void** ppURPContext)
         return false;
     }
 
-    *ppURPContext = doStartURP(LOKit, std::is_same<decltype(LibreOfficeKitClass::startURP), decltype(ObsoleteStartURPSignature)>() );
+    *ppURPContext = LOKit->startURP(reinterpret_cast<void*>(URPfromLoFDs[1]),
+                                    reinterpret_cast<void*>(URPtoLoFDs[0]),
+                                    receiveURPFromLO, sendURPToLO);
 
     if (!*ppURPContext)
     {

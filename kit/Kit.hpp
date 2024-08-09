@@ -39,7 +39,7 @@ void lokit_main(
 #if !MOBILEAPP
     const std::string& childRoot, const std::string& jailId, const std::string& sysTemplate,
     const std::string& loTemplate, bool noCapabilities, bool noSeccomp, bool useMountNamespaces,
-    bool queryVersionInfo, bool displayVersion,
+    bool queryVersionInfo, bool displayVersion, bool sysTemplateIncomplete,
 #else
     int docBrokerSocket, const std::string& userInterface,
 #endif
@@ -312,13 +312,16 @@ private:
 
     std::string getDefaultTheme(const std::shared_ptr<ChildSession>& session) const;
 
+    std::string getDefaultBackgroundTheme(const std::shared_ptr<ChildSession>& session) const;
+
     std::shared_ptr<lok::Document> load(const std::shared_ptr<ChildSession>& session,
                                         const std::string& renderOpts);
 
     bool forwardToChild(const std::string& prefix, const std::vector<char>& payload);
 
     static std::string makeRenderParams(const std::string& renderOpts, const std::string& userName,
-                                        const std::string& spellOnline, const std::string& theme);
+                                        const std::string& spellOnline, const std::string& theme,
+                                        const std::string& backgroundTheme);
     bool isTileRequestInsideVisibleArea(const TileCombined& tileCombined);
 
 public:
@@ -427,7 +430,6 @@ private:
     ThreadPool _deltaPool;
     std::unique_ptr<DeltaGenerator> _deltaGen;
 
-    std::condition_variable _cvLoading;
     int _editorId;
     bool _editorChangeWarning;
     std::map<int, std::unique_ptr<CallbackDescriptor>> _viewIdToCallbackDescr;

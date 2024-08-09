@@ -390,8 +390,10 @@ L.Map.include({
 				break;
 			}
 		}
+
+		var map = this;
+
 		if (command.startsWith('.uno:SpellOnline')) {
-			var map = this;
 			var val = map['stateChangeHandler'].getItemValue('.uno:SpellOnline');
 
 			// proceed if the toggle button is pressed
@@ -408,9 +410,11 @@ L.Map.include({
 			&& !command.startsWith('.uno:ToolbarMode') && !force) {
 			console.debug('Cannot execute: ' + command + ' when dialog is opened.');
 			this.dialog.blinkOpenDialog();
-		} else if (this.isEditMode() || isAllowedInReadOnly) {
-			if (!this.messageNeedsToBeRedirected(command))
-				app.socket.sendMessage('uno ' + command + (json ? ' ' + JSON.stringify(json) : ''));
+		} else if ((this.isEditMode() || isAllowedInReadOnly) && !this.messageNeedsToBeRedirected(command)) {
+			app.socket.sendMessage('uno ' + command + (json ? ' ' + JSON.stringify(json) : ''));
+			// user interaction turns off the following of other users
+			if (map.userList && map._docLayer && map._docLayer._viewId)
+				map.userList.followUser(map._docLayer._viewId);
 		}
 	},
 
@@ -559,7 +563,7 @@ L.Map.include({
 		searchInput.addEventListener('input', function () {
 			// Hide all elements within the #online-help-content on first key stroke/at start of filter content
 			if (!startFilter || !isAnyMatchingContent) {
-				helpContentParent.setAttribute('style', 'background-color: var(--color-background-dark) !important');
+				helpContentParent.style.backgroundColor = 'var(--color-background-dark) !important';
 				// Hide all <p> tags within .text, .spreadsheet, or .presentation sections
 				document.querySelectorAll('#online-help-content > *:not(a), .link-section p, .product-header').forEach(function (element) {
 					// Check if the element has class text, spreadsheet, or presentation

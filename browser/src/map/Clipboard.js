@@ -43,13 +43,20 @@ L.Clipboard = L.Class.extend({
 		this._map.on('commandresult', this._onCommandResult, this);
 
 		div.setAttribute('id', this._dummyDivName);
-		div.setAttribute('style', 'user-select: text !important');
+		div.style.userSelect = 'text !important';
 		div.style.opacity = '0';
 		div.setAttribute('contenteditable', 'true');
 		div.setAttribute('type', 'text');
-		div.setAttribute('style', 'position: fixed; left: 0px; top: -200px; width: 15000px; height: 200px; ' +
-				 'overflow: hidden; z-index: -1000; -webkit-user-select: text !important; display: block; ' +
-				 'font-size: 6pt');
+		div.style.position = 'fixed';
+		div.style.left = '0px';
+		div.style.top = '-200px';
+		div.style.width = '15000px';
+		div.style.height = '200px';
+		div.style.overflow = 'hidden';
+		div.style.zIndex = '-1000';
+		div.style['-webkit-user-select'] = 'text !important';
+		div.style.display = 'block';
+		div.style.fontSize = '6pt';
 
 		// so we get events to where we want them.
 		var parent = document.getElementById('map');
@@ -645,8 +652,18 @@ L.Clipboard = L.Class.extend({
 
 	_resetDiv: function() {
 		// cleanup the content:
-		this._dummyDiv.innerHTML =
-			'<b style="font-weight:normal; background-color: transparent; color: transparent;"><span>&nbsp;&nbsp;</span></b>';
+		this._dummyDiv.replaceChildren();
+
+		let bElement = document.createElement('b');
+		bElement.style.fontWeight = 'normal';
+		bElement.style.backgroundColor = 'transparent';
+		bElement.style.color = 'transparent';
+
+		let span = document.createElement('span');
+		span.textContent = '  ';
+
+		bElement.appendChild(span);
+		this._dummyDiv.appendChild(bElement);
 	},
 
 	// Try-harder fallbacks for emitting cut/copy/paste events.
@@ -1175,7 +1192,7 @@ L.Clipboard = L.Class.extend({
 	_warnCopyPaste: function() {
 		var msg;
 		if (window.mode.isMobile() || window.mode.isTablet()) {
-			msg = _('<p>Please use the copy/paste buttons on your on-screen keyboard.</p>');
+			msg = _('<p>Please use the paste buttons on your on-screen keyboard.</p>');
 		} else {
 			msg = _('<p>Your browser has very limited access to the clipboard, so use these keyboard shortcuts:</p><table class="warn-copy-paste"><tr><td><kbd>Ctrl</kbd><span class="kbd--plus">+</span><kbd>C</kbd></td><td><kbd>Ctrl</kbd><span class="kbd--plus">+</span><kbd>X</kbd></td><td><kbd>Ctrl</kbd><span class="kbd--plus">+</span><kbd>V</kbd></td></tr><tr><td>Copy</td><td>Cut</td><td>Paste</td></tr></table>');
 			msg = L.Util.replaceCtrlAltInMac(msg);

@@ -599,6 +599,39 @@ void ClientRequestDispatcher::onConnect(const std::shared_ptr<StreamSocket>& soc
     LOG_TRC("Connected to ClientRequestDispatcher");
 }
 
+void launchAsyncCheckFileInfo(const std::string& id, const FileServerRequestHandler::ResourceAccessDetails& accessDetails,
+                              std::unordered_map<std::string, std::shared_ptr<RequestVettingStation>>& requestVettingStations)
+{
+    const std::string requestKey = RequestDetails::getRequestKey(
+        accessDetails.wopiSrc(), accessDetails.accessToken());
+
+    std::vector<std::string> options = {
+        "access_token=" + accessDetails.accessToken(), "access_token_ttl=0"
+    };
+
+    if (!accessDetails.permission().empty())
+        options.push_back("permission=" + accessDetails.permission());
+
+    const RequestDetails fullRequestDetails =
+        RequestDetails(accessDetails.wopiSrc(), options, /*compat=*/std::string());
+
+    if (requestVettingStations.find(requestKey) != requestVettingStations.end())
+    {
+        LOG_TRC("Found RVS under key: " << requestKey << ", nothing to do");
+    }
+    else
+    {
+        LOG_TRC("Creating RVS with key: " << requestKey << ", for DocumentLoadURI: "
+                                          << fullRequestDetails.getDocumentURI());
+        auto it = requestVettingStations.emplace(
+            requestKey, std::make_shared<RequestVettingStation>(
+                            COOLWSD::getWebServerPoll(), fullRequestDetails));
+
+        it.first->second->handleRequest(id);
+    }
+}
+
+
 void ClientRequestDispatcher::handleIncomingMessage(SocketDisposition& disposition)
 {
     std::shared_ptr<StreamSocket> socket = _socket.lock();
@@ -658,7 +691,25 @@ void ClientRequestDispatcher::handleIncomingMessage(SocketDisposition& dispositi
         }
 
         // Routing
-        if (UnitWSD::isUnitTesting() && UnitWSD::get().handleHttpRequest(request, message, socket))
+        const bool isUnitTesting = UnitWSD::isUnitTesting();
+        bool handledByUnitTesting = false;
+        if (isUnitTesting)
+        {
+            handledByUnitTesting = UnitWSD::get().handleHttpRequest(request, message, socket);
+            if (!handledByUnitTesting)
+            {
+                auto mapAccessDetails = UnitWSD::get().parallelizeCheckInfo(request, message, socket);
+                if (!mapAccessDetails.empty())
+                {
+                    auto accessDetails = FileServerRequestHandler::ResourceAccessDetails(
+                        mapAccessDetails.at("wopiSrc"),
+                        mapAccessDetails.at("accessToken"),
+                        mapAccessDetails.at("permission"));
+                    launchAsyncCheckFileInfo(_id, accessDetails, RequestVettingStations);
+                }
+            }
+        }
+        if (handledByUnitTesting)
         {
             // Unit testing, nothing to do here
         }
@@ -710,33 +761,7 @@ void ClientRequestDispatcher::handleIncomingMessage(SocketDisposition& dispositi
                                        Util::decodeURIComponent(accessDetails.wopiSrc()),
                                    "Expected identical WOPISrc in the request as in cool.html");
 
-                    const std::string requestKey = RequestDetails::getRequestKey(
-                        accessDetails.wopiSrc(), accessDetails.accessToken());
-
-                    std::vector<std::string> options = {
-                        "access_token=" + accessDetails.accessToken(), "access_token_ttl=0"
-                    };
-
-                    if (!accessDetails.permission().empty())
-                        options.push_back("permission=" + accessDetails.permission());
-
-                    const RequestDetails fullRequestDetails =
-                        RequestDetails(accessDetails.wopiSrc(), options, /*compat=*/std::string());
-
-                    if (RequestVettingStations.find(requestKey) != RequestVettingStations.end())
-                    {
-                        LOG_TRC("Found RVS under key: " << requestKey << ", nothing to do");
-                    }
-                    else
-                    {
-                        LOG_TRC("Creating RVS with key: " << requestKey << ", for DocumentLoadURI: "
-                                                          << fullRequestDetails.getDocumentURI());
-                        auto it = RequestVettingStations.emplace(
-                            requestKey, std::make_shared<RequestVettingStation>(
-                                            COOLWSD::getWebServerPoll(), fullRequestDetails));
-
-                        it.first->second->handleRequest(_id);
-                    }
+                    launchAsyncCheckFileInfo(_id, accessDetails, RequestVettingStations);
                 }
 
                 socket->shutdown();
@@ -834,7 +859,7 @@ void ClientRequestDispatcher::handleIncomingMessage(SocketDisposition& dispositi
         else if (requestDetails.equals(RequestDetails::Field::Type, "cool") &&
                  requestDetails.equals(1, "clipboard"))
         {
-//          Util::dumpHex(std::cerr, socket->getInBuffer(), "clipboard:\n"); // lots of data ...
+            //              Util::dumpHex(std::cerr, socket->getInBuffer(), "clipboard:\n"); // lots of data ...
             handleClipboardRequest(request, message, disposition, socket);
         }
 
@@ -1166,8 +1191,7 @@ void ClientRequestDispatcher::handleMediaRequest(const Poco::Net::HTTPRequest& r
 
     LOG_DBG_S("Media request: " << request.getURI());
 
-    std::string decoded;
-    Poco::URI::decode(request.getURI(), decoded);
+    const std::string decoded = Util::decodeURIComponent(request.getURI());
     Poco::URI requestUri(decoded);
     Poco::URI::QueryParameters params = requestUri.getQueryParameters();
     std::string WOPISrc, serverId, viewId, tag, mime;
@@ -1606,8 +1630,7 @@ void ClientRequestDispatcher::handlePostRequest(const RequestDetails& requestDet
 
         bool foundDownloadId = !url.empty();
 
-        std::string decoded;
-        Poco::URI::decode(url, decoded);
+        const std::string decoded = Util::decodeURIComponent(url);
 
         const Poco::Path filePath(FileUtil::buildLocalPathToJail(COOLWSD::EnableMountNamespaces, COOLWSD::ChildRoot + jailId,
                                                                  JAILED_DOCUMENT_ROOT + decoded));

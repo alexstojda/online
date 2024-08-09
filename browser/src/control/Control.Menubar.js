@@ -1007,6 +1007,7 @@ L.Control.Menubar = L.Control.extend({
 				{uno: '.uno:SpellOnline'},
 				{name: _UNO('.uno:ShowResolvedAnnotations', 'text'), id: 'showresolved', type: 'action', uno: '.uno:ShowResolvedAnnotations'},
 				{name: _('Dark Mode'), id: 'toggledarktheme', type: 'action'},
+				{name: _('Invert Background'), id: 'invertbackground', type: 'action'},
 			]
 			},
 			window.enableAccessibility ?
@@ -1059,6 +1060,7 @@ L.Control.Menubar = L.Control.extend({
 				{uno: '.uno:SpellOnline'},
 				{name: _UNO('.uno:FullScreen', 'presentation'), id: 'fullscreen', type: 'action', mobileapp: false},
 				{name: _('Dark Mode'), id: 'toggledarktheme', type: 'action'},
+				{name: _('Invert Background'), id: 'invertbackground', type: 'action'},
 			]
 			},
 			{name: _UNO('.uno:TableMenu', 'text'/*HACK should be 'presentation', but not in xcu*/), id: 'tablemenu', type: 'menu', menu: [
@@ -1119,6 +1121,7 @@ L.Control.Menubar = L.Control.extend({
 				{uno: '.uno:SpellOnline'},
 				{name: _UNO('.uno:FullScreen', 'presentation'), id: 'fullscreen', type: 'action', mobileapp: false},
 				{name: _('Dark Mode'), id: 'toggledarktheme', type: 'action'},
+				{name: _('Invert Background'), id: 'invertbackground', type: 'action'},
 			]
 			},
 			{name: _UNO('.uno:TableMenu', 'text'/*HACK should be 'presentation', but not in xcu*/), id: 'tablemenu', type: 'menu', menu: [
@@ -1178,6 +1181,7 @@ L.Control.Menubar = L.Control.extend({
 				{uno: '.uno:SpellOnline'},
 				{name: _UNO('.uno:FullScreen', 'presentation'), id: 'fullscreen', type: 'action', mobileapp: false},
 				{name: _('Dark Mode'), id: 'toggledarktheme', type: 'action'},
+				{name: _('Invert Background'), id: 'invertbackground', type: 'action'},
 			]
 			},
 			{name: _UNO('.uno:SheetMenu', 'spreadsheet'), id: 'sheetmenu', type: 'menu', menu: [
@@ -1493,6 +1497,11 @@ L.Control.Menubar = L.Control.extend({
 	},
 
 	_onRefresh: function() {
+		if (!this._initialized) {
+			this._initialized = true;
+			this._onDocLayerInit();
+		}
+
 		// clear initial menu
 		L.DomUtil.removeChildNodes(this._menubarCont);
 
@@ -1528,6 +1537,24 @@ L.Control.Menubar = L.Control.extend({
 		document.getElementById('main-menu').setAttribute('role', 'menubar');
 		this._addTabIndexPropsToMainMenu();
 		this._createFileIcon();
+	},
+
+	// Function to check if an event is already bound
+	_isEventBound: function(element, eventType, namespace) {
+		var events = $._data($(element)[0], 'events');
+		if (events && events[eventType]) {
+			return namespace 
+				? events[eventType].some(event => event.namespace === namespace)
+				: true;
+		}
+		return false;
+	},
+
+	// Function to bind an event if it's not already bound
+	_bindEventIfNotBound: function(element, eventType, namespace, data, handler) {
+		if (!this._isEventBound(element, eventType, namespace)) {
+			$(element).bind(eventType + (namespace ? '.' + namespace : ''), data, handler);
+		}
 	},
 
 	_onStyleMenu: function (e) {
@@ -1573,12 +1600,11 @@ L.Control.Menubar = L.Control.extend({
 	_onDocLayerInit: function() {
 		this._onRefresh();
 
-		$('#main-menu').bind('select.smapi', {self: this}, this._onItemSelected);
-
-		$('#main-menu').bind('beforeshow.smapi', {self: this}, this._beforeShow);
-		$('#main-menu').bind('click.smapi', {self: this}, this._onClicked);
-
-		$('#main-menu').bind('keydown', {self: this}, this._onKeyDown);
+		// Usage
+		this._bindEventIfNotBound('#main-menu', 'select', 'smapi', {self: this}, this._onItemSelected);
+		this._bindEventIfNotBound('#main-menu', 'beforeshow', 'smapi', {self: this}, this._beforeShow);
+		this._bindEventIfNotBound('#main-menu', 'click', 'smapi', {self: this}, this._onClicked);
+		this._bindEventIfNotBound('#main-menu', 'keydown', '', {self: this}, this._onKeyDown);
 
 		if (window.mode.isMobile()) {
 			$('#main-menu').parent().css('height', '0');
@@ -2133,7 +2159,7 @@ L.Control.Menubar = L.Control.extend({
 			}
 		}
 
-		if (menuItem.id === 'runmacro' && window.enableMacrosExecution === 'false')
+		if (menuItem.id === 'runmacro' && !window.enableMacrosExecution)
 			return false;
 
 		if (menuItem.type === 'action') {
@@ -2175,6 +2201,9 @@ L.Control.Menubar = L.Control.extend({
 			return false;
 
 		if (menuItem.id === 'changesmenu' && this._map['wopi'].HideChangeTrackingControls)
+			return false;
+
+		if (menuItem.id === 'invertbackground' && !window.prefs.getBoolean('darkTheme'))
 			return false;
 
 

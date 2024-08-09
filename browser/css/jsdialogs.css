@@ -259,7 +259,6 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 /* Badge */
 .ui-badge {
 	padding: 5px !important;
-	color: var(--color-main-text);
 	background-color: var(--color-background-darker);
 	border-width: 0px;
 	border-radius: var(--border-radius);
@@ -268,6 +267,30 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	font-weight: normal;
 }
 
+#toolbar-down .ui-separator.vertical {
+	background-color: var(--color-status-badge);
+	opacity: 0.2;
+}
+
+#toolbar-down .ui-badge,
+#toolbar-down .unolabel {
+	font-family: var(--cool-font);
+	font-size: var(--default-font-size);
+	color: var(--color-status-badge) !important;
+}
+
+#toolbar-down .ui-badge:hover,
+#toolbar-down .menubutton:hover .unolabel {
+	color: var(--color-main-text) !important;
+}
+
+#toolbar-down .unoarrow {
+	border-top-color: var(--color-status-badge);
+}
+
+#toolbar-down .menubutton:hover .unoarrow {
+	border-top-color: var(--color-main-text);
+}
 /* Tabs */
 
 .ui-tabs-content.jsdialog {
@@ -444,7 +467,8 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	padding-inline-end: 3px;
 }
 
-.ui-treeview.disabled {
+.ui-treeview.disabled,
+.ui-treeview-entry.disabled {
 	background-color: var(--color-background-dark) !important;
 	color: var(--color-text-lighter) !important;
 }
@@ -618,6 +642,10 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	background-color: var(--color-background-lighter);
 }
 /* input text */
+
+.ui-dialog .jsdialog.ui-edit:focus-visible {
+	outline-offset: -2px;
+}
 
 .jsdialog.ui-edit, #hyperlink-text-box:not(.mobile-wizard) {
 	color: var(--color-text-dark);
@@ -991,10 +1019,10 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 .ui-iconview {
 	overflow: auto;
-	display: inline-flex;
-	display: -ms-inline-flexbox;
-	flex-wrap: wrap;
 	justify-content: space-between;
+	display: grid;
+	grid-template-columns: 1fr 1fr 1fr;
+	max-height: 40vh;
 }
 
 .ui-iconview.mobile-wizard {
@@ -1016,6 +1044,8 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	border: 1px solid transparent;
 	border-radius: var(--border-radius);
 	padding-top: 5px;
+	text-wrap: nowrap;
+	font-family: var(--jquery-ui-font);
 }
 
 .ui-iconview-entry.selected {
@@ -1031,6 +1061,17 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 .ui-iconview-separator {
 	flex: 0 0 99%;
+}
+
+.icon-view-item-container {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	margin: 5px;
+	text-align: center;
+	word-wrap: break-word;
+	overflow-wrap: break-word;
 }
 
 /* Autofilter dropdown */

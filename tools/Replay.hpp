@@ -29,7 +29,17 @@
 
 #include <iostream>
 #include <fstream>
+#include <config_version.h>
+#include <ctime>
+#include <Util.hpp>
+#include <common/Log.hpp>
 
+struct PerfMetricInfo
+{
+    std::string phase;
+    std::string metric;
+    size_t data;
+};
 
 // store buckets of latency
 struct Histogram {
@@ -86,16 +96,8 @@ struct Histogram {
         }
     }
 
-    void dumpLatencyToCSV(std::string fileName)
+    std::vector<PerfMetricInfo> GetLatencyStats(std::string typeOfLatency, std::string testPhase)
     {
-        std::ofstream file(fileName + "Latency.csv", std::ios::out | std::ios::app);
-
-        if (file.tellp() == 0)
-        {
-            file << "Total Items, <10ms, <100ms, >100ms";
-            file << "\n";
-        }
-
         size_t totalTiles = _items;
         size_t subTenCount = _buckets[0];
         size_t subOneHundredCount = 0;
@@ -113,11 +115,13 @@ struct Histogram {
             }
         }
 
-        file << totalTiles << ",";
-        file << subTenCount << ",";
-        file << subOneHundredCount << ",";
-        file << overOneHundredCount << ",";
-        file << "\n";
+        std::vector<PerfMetricInfo> latencyStatsList;
+        latencyStatsList.push_back(PerfMetricInfo {testPhase, typeOfLatency + " Total tiles", totalTiles});
+        latencyStatsList.push_back(PerfMetricInfo {testPhase, typeOfLatency + " Sub_10ms", subTenCount});
+        latencyStatsList.push_back(PerfMetricInfo {testPhase, typeOfLatency + " Sub_100ms", subOneHundredCount});
+        latencyStatsList.push_back(PerfMetricInfo {testPhase, typeOfLatency + " Over_100ms", overOneHundredCount});
+
+        return latencyStatsList;
     }
 
 };
@@ -131,9 +135,11 @@ struct Stats {
         _connections(0)
     {
         _startUpMemoryUsage = GetMemoryUsage();
+        _timer.reset(new Util::SysStopwatch());
         _peakMemoryUsage = 0;
     }
     std::chrono::steady_clock::time_point _start;
+    std::unique_ptr<Util::SysStopwatch> _timer;
     size_t _bytesSent;
     size_t _bytesRecvd;
     size_t _tileCount;
@@ -144,6 +150,9 @@ struct Stats {
     size_t _peakMemoryUsage;
     size_t _startUpMemoryUsage;
 
+
+    std::string _testType;
+
     // message size breakdown
     struct MessageStat {
         size_t size;
@@ -151,6 +160,8 @@ struct Stats {
     };
     std::unordered_map<std::string, MessageStat> _recvd;
     std::unordered_map<std::string, MessageStat> _sent;
+
+    std::vector<PerfMetricInfo> _perfStatsList;
 
     size_t GetMemoryUsage()
     {
@@ -161,7 +172,7 @@ struct Stats {
 
         while (std::getline(smapsFile, line))
         {
-            if (line.find("Pss_Dirty:") == 0)
+            if (line.find("Private_Dirty:") == 0)
             {
                 std::stringstream ss(line);
                 std::string key;
@@ -242,12 +253,9 @@ struct Stats {
             " server sent " << Util::getHumanizedBytes(_bytesRecvd) <<
             " (" << recvKbps << " kB/s) to " << _connections << " connections.\n";
 
-        _pingLatency.dumpLatencyToCSV("Ping");
-        _tileLatency.dumpLatencyToCSV("Tile");
 
-        dumpStressToCSV(runMs);
-        dumpNetworkStatsToCSV(_bytesRecvd,_bytesSent);
-        dumpPeakMemoryUsageToCPU(_peakMemoryUsage);
+       endPhase(Log::Phase::Edit);
+       dumpPerfStatsToCSV(_perfStatsList);
 
         std::cout << "we sent:\n";
         dumpMap(_sent);
@@ -256,46 +264,106 @@ struct Stats {
         dumpMap(_recvd);
     }
 
-    void dumpStressToCSV(size_t runMs)
+
+    void endPhase(Log::Phase phase)
     {
-        std::ofstream file("CPU.csv", std::ios::out | std::ios::app);
+        std::string phaseAsString = Log::toStringShort(phase);
 
-        if (file.tellp() == 0)
+        const auto now = std::chrono::steady_clock::now();
+        const size_t runMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - _start).count();
+        _start = std::chrono::steady_clock::now();
+
+        size_t cpuTime = _timer->elapsedTime().count();
+        _timer.reset(new Util::SysStopwatch);
+
+        _perfStatsList.push_back(GetStressStats(runMs, phaseAsString));
+        _perfStatsList.push_back(GetCPUUSageStats(cpuTime, phaseAsString));
+
+        if(phase == Log::Phase::Edit)
         {
-            file << "Stress (m/s)";
-            file << "\n";
-        }
+            std::vector<PerfMetricInfo> statsList;
 
-        file << runMs << "\n";
+            _perfStatsList.push_back(GetPeakMemoryUsageStats(_peakMemoryUsage, phaseAsString));
+
+            statsList = GetNetworkStats(_bytesRecvd / 1000, _bytesSent / 1000, phaseAsString);
+            for(size_t i = 0; i < statsList.size(); i++)
+            {
+                _perfStatsList.push_back(statsList[i]);
+            }
+
+            statsList = _pingLatency.GetLatencyStats("PL", phaseAsString);
+            for(size_t i = 0; i < statsList.size(); i++)
+            {
+                _perfStatsList.push_back(statsList[i]);
+            }
+
+            statsList = _tileLatency.GetLatencyStats("TL", phaseAsString);
+            for(size_t i = 0; i < statsList.size(); i++)
+            {
+                _perfStatsList.push_back(statsList[i]);
+            }
+        }
     }
 
-    void dumpNetworkStatsToCSV(size_t recievedKb, size_t sentKb)
+    PerfMetricInfo GetStressStats(size_t runMs, std::string testPhase)
     {
-        std::ofstream file("Network.csv", std::ios::out | std::ios::app);
+        PerfMetricInfo stressStats = {testPhase, "Stress run (ms)", runMs};
+        return  stressStats;
+    }
+
+    PerfMetricInfo GetCPUUSageStats(size_t cpuUsage, std::string testPhase)
+    {
+        PerfMetricInfo cpuStats = {testPhase, "CPU Usage (us)", cpuUsage};
+        return cpuStats;
+    }
+
+    std::vector<PerfMetricInfo> GetNetworkStats(size_t recievedKb, size_t sentKb, std::string testPhase)
+    {
+        std::vector<PerfMetricInfo> networkStatsList;
+
+        networkStatsList.push_back(PerfMetricInfo{testPhase, "Bytes recieved (kB)", recievedKb});
+        networkStatsList.push_back(PerfMetricInfo{testPhase, "Bytes sent (kB)", sentKb});
+
+        return networkStatsList;
+    }
+
+    PerfMetricInfo GetPeakMemoryUsageStats(size_t peakMemory, std::string testPhase)
+    {
+        PerfMetricInfo peakMemoryStats = {testPhase, "Peak memory usage (kB)", peakMemory};
+        return peakMemoryStats;
+    }
+
+    void dumpPerfStatsToCSV(std::vector<PerfMetricInfo> perfData)
+    {
+        std::ofstream file("PerformanceMetricsSummary.csv", std::ios::out | std::ios::app);
 
         if(file.tellp() == 0)
         {
-            file << "Bytes recieved (kB)" << ", Bytes sent(kB)";
+            file << "Commit Hash" << "," << "Date" << "," << "Test" << "," << "Phase" << "," << "Metric" << "," << "Value";
             file << "\n";
         }
 
-        file << recievedKb << "," << sentKb << ",";
-        file << "\n";
-    }
+        std::string commitHash = COOLWSD_VERSION_HASH;
 
-    void dumpPeakMemoryUsageToCPU(size_t peakMemory)
-    {
-        std::ofstream file("PeakMemoryUsage.csv", std::ios::out | std::ios::app);
+        time_t now = time(0);
+        struct tm datetime;
+        localtime_r(&now, &datetime);
 
-        if(file.tellp() == 0)
+        char formattedDate[50];
+        strftime(formattedDate, 50, "%d/%m/%y", &datetime);
+
+        for(size_t i = 0; i < perfData.size(); i++)
         {
-            file << "Peak memory usage per document (kB)";
+            file << commitHash << "," << formattedDate << "," << _testType << "," << perfData[i].phase << "," << perfData[i].metric << "," << perfData[i].data;
             file << "\n";
         }
-
-        file << peakMemory;
-        file << "\n";
     }
+
+    void setTypeOfTest(std::string testType)
+    {
+        _testType = testType;
+    }
+
 };
 
 // Avoid a MessageHandler for now.
@@ -461,10 +529,14 @@ public:
             std::cerr << _logPre << "msg " << out << "\n";
         }
 
-        size_t postDocumentLoadingMemory = _stats->GetMemoryUsage() - _stats->_startUpMemoryUsage;
-        if((postDocumentLoadingMemory > _stats->_peakMemoryUsage))
+        size_t currentMemoryUsage = _stats->GetMemoryUsage();
+        if (currentMemoryUsage > _stats->_startUpMemoryUsage)
         {
-            _stats->_peakMemoryUsage = postDocumentLoadingMemory;
+            size_t postDocumentLoadingMemory = currentMemoryUsage - _stats->_startUpMemoryUsage;
+            if (postDocumentLoadingMemory > _stats->_peakMemoryUsage)
+            {
+                _stats->_peakMemoryUsage = postDocumentLoadingMemory;
+            }
         }
         // FIXME: translate mouse events relative to view-port etc.
         return out;

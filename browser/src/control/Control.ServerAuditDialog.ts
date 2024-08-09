@@ -1,3 +1,5 @@
+/** */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -7,6 +9,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 /*
  * ServerAuditDialog - Dialog for admin users showing checklist of server security settings
  */
@@ -71,6 +74,20 @@ class ServerAuditDialog {
 					_('Integrator is not ready for PostMessage calls'),
 					'SDK: post-message-initialization',
 					'https://sdk.collaboraonline.com/docs/postmessage_api.html#initialization',
+				],
+			},
+			hardwarewarning: {
+				lowresources: [
+					_(
+						'Your server is configured with insufficient hardware resources, which may lead to poor performance.',
+					),
+					'SDK: hardware-requirements',
+					'https://sdk.collaboraonline.com/docs/installation/Configuration.html#performance',
+				],
+				ok: [
+					_('Hardware resources are sufficient for optimal performance'),
+					'',
+					'',
 				],
 			},
 		};

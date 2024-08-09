@@ -739,6 +739,7 @@ Util::RuntimeConstant<bool> COOLWSD::SSLTermination;
 #endif
 unsigned COOLWSD::MaxConnections;
 unsigned COOLWSD::MaxDocuments;
+std::string COOLWSD::HardwareResourceWarning = "ok";
 std::string COOLWSD::OverrideWatermark;
 std::set<const Poco::Util::AbstractConfiguration*> COOLWSD::PluginConfigurations;
 std::chrono::steady_clock::time_point COOLWSD::StartTime;
@@ -2626,19 +2627,8 @@ void COOLWSD::innerInitialize(Application& self)
 #endif // CODE_COVERAGE
 
     // Setup the jails.
-    bool UseMountNamespaces = getConfigValue<bool>(conf, "mount_namespaces", false);
-
-    NoCapsForKit =
-        Util::isKitInProcess() || !getConfigValue<bool>(conf, "security.capabilities", true);
-    if (NoCapsForKit && UseMountNamespaces)
-    {
-        // With NoCapsForKit we won't chroot and with UseMountNamespaces we use a different
-        // path to confined /tmp, so with both we need to make an extra layer of adjustments
-        // so just disable MountNamespaces in NoCapsForKit mode.
-        LOG_WRN("MountNamespaces is not compatible with NoCapsForKit. Disabling.");
-        UseMountNamespaces = false;
-    }
-
+    const bool capsDisabled = !getConfigValue<bool>(conf, "security.capabilities", true);
+    const bool UseMountNamespaces = capsDisabled || getConfigValue<bool>(conf, "mount_namespaces", false);
     setupChildRoot(UseMountNamespaces);
 
     LOG_DBG("FileServerRoot before config: " << FileServerRoot);
@@ -2725,9 +2715,12 @@ void COOLWSD::innerInitialize(Application& self)
     // It is worth avoiding configuring with a large number of under-weight
     // containers / VMs - better to have fewer, stronger ones.
     if (nThreads < 4)
+    {
         LOG_WRN("Fewer threads than recommended. Having at least four threads for "
                 "provides significant parallelism that can be used for burst "
                 "compression of newly visible document pages, giving lower latency.");
+        HardwareResourceWarning = "lowresources";
+    }
 
 #elif defined(__EMSCRIPTEN__)
     // disable threaded image scaling for wasm for now
@@ -2772,6 +2765,10 @@ void COOLWSD::innerInitialize(Application& self)
 
 #if !MOBILEAPP
     NoSeccomp = Util::isKitInProcess() || !getConfigValue<bool>(conf, "security.seccomp", true);
+    // Take "NoCaps" as a goal considered achieved if EnableMountNamespaces is possible
+    NoCapsForKit = Util::isKitInProcess() || (capsDisabled && !EnableMountNamespaces);
+    if (capsDisabled && !EnableMountNamespaces)
+        LOG_WRN("MountNamespaces not possible to achieve running without capabilities.");
     AdminEnabled = getConfigValue<bool>(conf, "admin_console.enable", true);
     IndirectionServerEnabled = !getConfigValue<std::string>(conf, "indirection_endpoint.url", "").empty();
 #if ENABLE_DEBUG
@@ -4082,6 +4079,16 @@ public:
            << "\n  UserInterface: " << COOLWSD::UserInterface
             ;
 
+#if !MOBILEAPP
+        if (FetchHttpSession)
+        {
+            os << "\nFetchHttpSession:\n";
+            FetchHttpSession->dumpState(os, "\n  ");
+        }
+        else
+#endif // !MOBILEAPP
+            os << "\nFetchHttpSession: null\n";
+
         os << "\nServer poll:\n";
         _acceptPoll.dumpState(os);
 
@@ -4233,7 +4240,7 @@ private:
 };
 
 #if !MOBILEAPP
-void COOLWSD::processFetchUpdate()
+void COOLWSD::processFetchUpdate(SocketPoll& poll)
 {
     try
     {
@@ -4272,7 +4279,7 @@ void COOLWSD::processFetchUpdate()
                         << httpResponse->statusLine().reasonPhrase());
         });
 
-        FetchHttpSession->asyncRequest(request, *COOLWSD::getWebServerPoll());
+        FetchHttpSession->asyncRequest(request, poll);
     }
     catch(const Poco::Exception& exc)
     {
@@ -4543,7 +4550,7 @@ int COOLWSD::innerMain()
             = std::chrono::duration_cast<std::chrono::milliseconds>(timeNow - stampFetch);
         if (fetchUpdateCheck > std::chrono::milliseconds::zero() && durationFetch > fetchUpdateCheck)
         {
-            processFetchUpdate();
+            processFetchUpdate(mainWait);
             stampFetch = timeNow;
         }
 #endif

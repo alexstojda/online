@@ -1,3 +1,5 @@
+/** */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -73,6 +75,9 @@ class LayerDrawing {
 	private renderedSlides: Map<string, ImageBitmap> = new Map();
 	private requestedSlideHash: string = null;
 	private prefetchedSlideHash: string = null;
+	private nextRequestedSlideHash: string = null;
+	private nextPrefetchedSlideHash: string = null;
+	private slideRequestTimeout: any = null;
 	private resolutionWidth: number = 960;
 	private resolutionHeight: number = 540;
 	private canvasWidth: number = 0;
@@ -131,10 +136,17 @@ class LayerDrawing {
 		return this.renderedSlides.get(startSlideHash);
 	}
 
-	public requestSlide(slideNumber: number, callback: VoidFunction) {
-		this.onSlideRenderingCompleteCallback = callback;
+	public getCanvasSize(): [number, number] {
+		return [this.canvasWidth, this.canvasHeight];
+	}
+
+	public onUpdatePresentationInfo() {
 		this.computeInitialResolution();
 		this.initializeCanvas();
+	}
+
+	public requestSlide(slideNumber: number, callback: VoidFunction) {
+		this.onSlideRenderingCompleteCallback = callback;
 
 		const startSlideHash = this.helper.getSlideHash(slideNumber);
 		this.requestSlideImpl(startSlideHash);
@@ -164,19 +176,49 @@ class LayerDrawing {
 		}
 		if (
 			slideHash === this.requestedSlideHash ||
-			slideHash === this.prefetchedSlideHash
-		)
+			slideHash === this.prefetchedSlideHash ||
+			slideHash === this.nextRequestedSlideHash ||
+			slideHash === this.nextPrefetchedSlideHash
+		) {
 			return;
+		}
 
-		// TODO: queue
-		if (this.requestedSlideHash || this.prefetchedSlideHash) {
-			setTimeout(this.requestSlideImpl.bind(this), 500, slideHash, prefetch);
+		if (
+			this.requestedSlideHash ||
+			this.prefetchedSlideHash ||
+			this.slideRequestTimeout
+		) {
+			if (!prefetch || !this.slideRequestTimeout) {
+				if (!prefetch) {
+					// maybe user has switched to a new slide
+					clearTimeout(this.slideRequestTimeout);
+					this.nextRequestedSlideHash = slideHash;
+					this.nextPrefetchedSlideHash = null;
+				} else {
+					// prefetching and nothing already queued
+					this.nextPrefetchedSlideHash = slideHash;
+				}
+				this.slideRequestTimeout = setTimeout(() => {
+					this.slideRequestTimeout = null;
+					this.nextRequestedSlideHash = null;
+					this.nextPrefetchedSlideHash = null;
+					this.requestSlideImpl(slideHash, prefetch);
+				}, 500);
+			}
+			return;
 		}
 
 		if (prefetch) {
 			this.prefetchedSlideHash = slideHash;
+			this.requestedSlideHash = null;
 		} else {
 			this.requestedSlideHash = slideHash;
+			this.prefetchedSlideHash = null;
+		}
+
+		if (this.renderedSlides.has(slideHash)) {
+			this.onSlideRenderingComplete();
+			return;
 		}
 
 		const backgroundRendered = this.drawBackground(slideHash);
@@ -262,10 +304,8 @@ class LayerDrawing {
 			this.backgroundChecksums.set(pageHash, imageInfo.checksum);
 			this.cachedBackgrounds.set(imageInfo.checksum, imageInfo);
 
-			if (info.slideHash === this.requestedSlideHash) {
-				this.clearCanvas();
-				this.drawBitmap(imageInfo);
-			}
+			this.clearCanvas();
+			this.drawBitmap(imageInfo);
 		}
 	}
 
@@ -293,9 +333,7 @@ class LayerDrawing {
 		}
 		layers.push(layerEntry);
 
-		if (info.slideHash === this.requestedSlideHash) {
-			this.drawMasterPageLayer(layerEntry, info.slideHash);
-		}
+		this.drawMasterPageLayer(layerEntry, info.slideHash);
 	}
 
 	private handleDrawPageLayerMsg(info: LayerInfo, img: any) {
@@ -324,9 +362,7 @@ class LayerDrawing {
 		}
 		layers.push(layerEntry);
 
-		if (info.slideHash === this.requestedSlideHash) {
-			this.drawDrawPageLayer(layerEntry);
-		}
+		this.drawDrawPageLayer(layerEntry);
 	}
 
 	private clearCanvas() {
@@ -335,6 +371,11 @@ class LayerDrawing {
 
 	private drawBackground(slideHash: string) {
 		this.clearCanvas();
+
+		// always draw a solid white rectangle behind the background
+		this.offscreenContext.fillStyle = '#FFFFFF';
+		this.offscreenContext.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
 		const slideInfo = this.getSlideInfo(slideHash);
 		if (!slideInfo.background) return true;
 
@@ -450,17 +491,31 @@ class LayerDrawing {
 	}
 
 	onSlideRenderingComplete() {
+		if (this.prefetchedSlideHash) {
+			this.prefetchedSlideHash = null;
+			return;
+		}
+		const reqSlideInfo = this.getSlideInfo(this.requestedSlideHash);
+
+		this.cacheAndNotify();
+		// fetch next slide and draw it on offscreen canvas
+		if (!this.renderedSlides.has(reqSlideInfo.next)) {
+			this.requestSlideImpl(reqSlideInfo.next, true);
+		}
+	}
+
+	private cacheAndNotify() {
 		if (!this.offscreenCanvas) {
 			window.app.console.log(
 				'LayerDrawing.onSlideRenderingComplete: no offscreen canvas available.',
 			);
 			return;
 		}
-
-		const renderedSlide = this.offscreenCanvas.transferToImageBitmap();
-		this.renderedSlides.set(this.requestedSlideHash, renderedSlide);
-
-		if (this.requestedSlideHash) this.requestedSlideHash = null;
+		if (!this.renderedSlides.has(this.requestedSlideHash)) {
+			const renderedSlide = this.offscreenCanvas.transferToImageBitmap();
+			this.renderedSlides.set(this.requestedSlideHash, renderedSlide);
+		}
+		this.requestedSlideHash = null;
 
 		const oldCallback = this.onSlideRenderingCompleteCallback;
 		this.onSlideRenderingCompleteCallback = null;

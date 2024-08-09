@@ -375,14 +375,14 @@ void SocketPoll::pollingThreadEntry()
 
         // Invoke the virtual implementation.
         pollingThread();
-
-        // Release sockets.
-        removeSockets();
     }
     catch (const std::exception& exc)
     {
         LOG_ERR("Exception in polling thread [" << _name << "]: " << exc.what());
     }
+
+    // Release sockets.
+    removeSockets();
 
     _threadFinished = true;
     LOG_INF("Finished polling thread [" << _name << "].");
@@ -912,7 +912,7 @@ void SocketDisposition::execute()
     }
 }
 
-void WebSocketHandler::dumpState(std::ostream& os) const
+void WebSocketHandler::dumpState(std::ostream& os, const std::string& /*indent*/) const
 {
     os << (_shuttingDown ? "shutd " : "alive ");
 #if !MOBILEAPP

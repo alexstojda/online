@@ -418,6 +418,7 @@ COOL_JS_LST =\
 	src/slideshow/SlideShowPresenter.ts \
 	src/slideshow/Transition2d.ts \
 	src/slideshow/PerformTransition.ts \
+	src/slideshow/SlideAnimations.ts \
 	src/slideshow/transition/FadeTransition.ts \
 	src/slideshow/transition/PlusTransition.ts \
 	src/slideshow/transition/CircleTransition.ts \
@@ -444,6 +445,7 @@ COOL_JS_LST =\
 	src/slideshow/transition/CombTransition.ts \
 	src/slideshow/transition/WipeTransition.ts \
 	src/slideshow/transition/NoTransition.ts \
+	src/slideshow/CanvasLoader.ts \
 	src/dom/PosAnimation.js \
 	src/map/anim/Map.PanAnimation.js \
 	src/dom/PosAnimation.Timer.js \
@@ -884,6 +886,7 @@ pot:
 		src/slideshow/SlideShowPresenter.ts \
 		src/slideshow/Transition2d.ts \
 		src/slideshow/PerformTransition.ts \
+		src/slideshow/SlideAnimations.ts \
 		src/slideshow/transition/FadeTransition.ts \
 		src/slideshow/transition/PlusTransition.ts \
 		src/slideshow/transition/CircleTransition.ts \
@@ -908,6 +911,7 @@ pot:
 		src/slideshow/transition/PushWipeTransition.ts \
 		src/slideshow/transition/CombTransition.ts \
 		src/slideshow/transition/BarWipeTransition.ts \
+		src/slideshow/CanvasLoader.ts \
 		src/core/Socket.js \
 		src/core/Debug.js \
 		src/docstate.js \

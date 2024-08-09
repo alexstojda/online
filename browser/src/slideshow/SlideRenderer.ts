@@ -1,3 +1,5 @@
+/** */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -20,7 +22,7 @@ class VideoRenderInfo {
 abstract class SlideRenderer {
 	public _context: RenderContext = null;
 	public _slideTexture: WebGLTexture | ImageBitmap;
-	protected _videos: VideoRenderInfo[];
+	protected _videos: VideoRenderInfo[] = [];
 	protected _canvas: HTMLCanvasElement;
 
 	constructor(canvas: HTMLCanvasElement) {
@@ -66,6 +68,12 @@ abstract class SlideRenderer {
 		requestAnimationFrame(this.render.bind(this));
 	}
 
+	public pauseVideos() {
+		for (var videoRenderInfo of this._videos) {
+			videoRenderInfo.videoElement.pause();
+		}
+	}
+
 	protected getDocumentPositions(
 		x: number,
 		y: number,
@@ -92,6 +100,10 @@ abstract class SlideRenderer {
 	): void;
 
 	protected abstract render(): void;
+
+	public createEmptyTexture(): WebGLTexture | ImageBitmap {
+		return null;
+	}
 }
 
 class SlideRenderer2d extends SlideRenderer {
@@ -109,8 +121,9 @@ class SlideRenderer2d extends SlideRenderer {
 		docWidth: number,
 		docHeight: number,
 	) {
+		this.pauseVideos();
 		this._videos = [];
-		if (slideInfo.videos !== undefined) {
+		if (slideInfo?.videos !== undefined) {
 			for (var videoInfo of slideInfo.videos) {
 				const video = new VideoRenderInfo();
 				video.videoElement = this.setupVideo(videoInfo.url);
@@ -129,12 +142,10 @@ class SlideRenderer2d extends SlideRenderer {
 
 	protected render() {
 		const gl = this._context.get2dGl();
+		gl.clearRect(0, 0, gl.canvas.width, gl.canvas.height);
+
 		const width = (this._slideTexture as ImageBitmap).width;
 		const height = (this._slideTexture as ImageBitmap).height;
-		const halfWidth = (1.0 * gl.canvas.width - width) / 2.0;
-		const halfHeight = (1.0 * gl.canvas.height - height) / 2.0;
-
-		gl.translate(halfWidth, halfHeight);
 
 		gl.drawImage(this._slideTexture as ImageBitmap, 0, 0);
 
@@ -268,6 +279,10 @@ class SlideRendererGl extends SlideRenderer {
 		return this._context.loadTexture(<any>image);
 	}
 
+	public createEmptyTexture(): WebGLTexture | ImageBitmap {
+		return this._context.createEmptySlide();
+	}
+
 	private initTexture() {
 		const gl = this._context.getGl();
 		const texture = gl.createTexture();
@@ -298,6 +313,7 @@ class SlideRendererGl extends SlideRenderer {
 		docWidth: number,
 		docHeight: number,
 	) {
+		this.pauseVideos();
 		this._videos = [];
 		if (slideInfo.videos !== undefined) {
 			for (var videoInfo of slideInfo.videos) {

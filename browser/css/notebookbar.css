@@ -347,6 +347,9 @@ html[data-theme='dark'] .savemodified.unotoolbutton .unobutton img {
 	height: 64px;
 	width: 530px;
 	overflow: auto;
+	display: inline-flex;
+	display: -ms-inline-flexbox;
+	flex-wrap: wrap;
 	padding: 0px;
 	border: 1px solid var(--color-stylesview-border);
 	border-radius: var(--border-radius);
@@ -355,6 +358,7 @@ html[data-theme='dark'] .savemodified.unotoolbutton .unobutton img {
 	background-color: var(--color-stylesview-background);
 	filter: brightness(var(--brightness-stylesview));
 }
+
 #stylesview:hover {
 	filter: none;
 }
@@ -365,9 +369,16 @@ html[data-theme='dark'] .savemodified.unotoolbutton .unobutton img {
 }
 
 #stylesview .ui-iconview-entry {
-	width: 30%;
 	box-sizing: border-box;
 	padding-top: 0px;
+}
+
+#stylesview .icon-view-item-container {
+	margin: unset;
+}
+
+#stylesview .ui-iconview-entry-title {
+	display: none;
 }
 
 #stylesview .ui-iconview-entry.selected {

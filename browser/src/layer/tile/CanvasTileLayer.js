@@ -780,7 +780,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		this._canvasOverlay = new CanvasOverlay(this._map, app.sectionContainer.getContext());
 		app.sectionContainer.addSection(this._canvasOverlay);
 
-		app.sectionContainer.addSection(L.getNewScrollSection(() => this._map._docLayer.isCalcRTL()));
+		app.sectionContainer.addSection(L.getNewScrollSection(() => this.isCalcRTL()));
 
 		// For mobile/tablet the hammerjs swipe handler already uses a requestAnimationFrame to fire move/drag events
 		// Using L.TileSectionManager's own requestAnimationFrame loop to do the updates in that case does not perform well.
@@ -967,7 +967,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		var newScrollPos = centerPixel.subtract(this._map.getSize().divideBy(2));
 		var x = Math.round(newScrollPos.x < 0 ? 0 : newScrollPos.x);
 		var y = Math.round(newScrollPos.y < 0 ? 0 : newScrollPos.y);
-		this._map.fire('updatescrolloffset', {x: x, y: y, updateHeaders: true});
+		requestAnimationFrame(() => this._map.fire('updatescrolloffset', {x: x, y: y, updateHeaders: true}));
 	},
 
 	_getTileSize: function () {
@@ -1986,14 +1986,18 @@ L.CanvasTileLayer = L.Layer.extend({
 	_onShapeSelectionContent: function (textMsg) {
 		textMsg = textMsg.substring('shapeselectioncontent:'.length + 1);
 
-		var extraInfo = this._graphicSelection.extraInfo;
-		if (extraInfo && extraInfo.id) {
-			this._map._cacheSVG[extraInfo.id] = textMsg;
+		var extraInfoId = null;
+		if (this._graphicSelection && this._graphicSelection.extraInfo)
+			extraInfoId = this._graphicSelection.extraInfo.id;
+		if (extraInfoId) {
+			this._map._cacheSVG[extraInfoId] = textMsg;
 		}
 
 		// video is handled in _onEmbeddedVideoContent
-		if (this._graphicMarker && this._graphicMarker.sectionProperties.hasVideo)
-			this._map._cacheSVG[extraInfo.id] = undefined;
+		if (this._graphicMarker && this._graphicMarker.sectionProperties.hasVideo) {
+			if (extraInfoId)
+				this._map._cacheSVG[extraInfoId] = undefined;
+		}
 		else if (this._graphicMarker)
 			this._graphicMarker.setSVG(textMsg);
 	},
@@ -2254,8 +2258,7 @@ L.CanvasTileLayer = L.Layer.extend({
 		var sameAddress = oldCursorAddress.equals(app.calc.cellAddress.toArray());
 
 		var isFollowingOwnCursor = parseInt(app.getFollowedViewId()) === parseInt(this._viewId);
-		var wasSearchRequested = this._searchRequested;
-		var notJump = !wasSearchRequested && (sameAddress || !isFollowingOwnCursor);
+		var notJump = sameAddress || !isFollowingOwnCursor;
 		var scrollToCursor = this._sheetSwitch.tryRestore(notJump, this._selectedPart);
 
 		this._onUpdateCellCursor(scrollToCursor, notJump);

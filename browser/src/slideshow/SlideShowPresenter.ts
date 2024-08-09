@@ -1,3 +1,5 @@
+/** */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -39,6 +41,7 @@ interface SlideInfo {
 		isCustom: boolean;
 		fillColor: string;
 	};
+	animations: any;
 	next: string;
 	prev: string;
 }
@@ -54,11 +57,15 @@ class SlideShowPresenter {
 	_presentationInfo: PresentationInfo = null;
 	_slideCompositor: SlideCompositor = null;
 	_fullscreen: Element = null;
+	_presenterContainer: HTMLDivElement = null;
 	_slideShowCanvas: HTMLCanvasElement = null;
 	_slideShowWindowProxy: ReturnType<typeof window.open> = null;
 	_windowCloseInterval: ReturnType<typeof setInterval> = null;
 	_currentSlide: number = 0;
 	_slideRenderer: SlideRenderer = null;
+	_animationsHandler: SlideAnimations = null;
+	_canvasLoader: CanvasLoader | null = null;
+	_isAnimationPlaying: boolean = false;
 
 	constructor(map: any) {
 		this._map = map;
@@ -68,12 +75,14 @@ class SlideShowPresenter {
 	addHooks() {
 		this._map.on('newfullscreen', this._onStart, this);
 		this._map.on('newpresentinwindow', this._onStartInWindow, this);
+		this._map.on('animationstatechanged', this._onAnimationStateChanged, this);
 		L.DomEvent.on(document, 'fullscreenchange', this._onFullScreenChange, this);
 	}
 
 	removeHooks() {
 		this._map.off('newfullscreen', this._onStart, this);
 		this._map.off('newpresentinwindow', this._onStartInWindow, this);
+		this._map.off('animationstatechanged', this._onAnimationStateChanged, this);
 		L.DomEvent.off(
 			document,
 			'fullscreenchange',
@@ -102,14 +111,24 @@ class SlideShowPresenter {
 
 	_onFullScreenChange() {
 		this._fullscreen = document.fullscreenElement;
-		if (!this._fullscreen) this._stopFullScreen();
+		if (this._fullscreen) {
+			window.addEventListener('keydown', this._onCanvasKeyDown.bind(this));
+			this.centerCanvas();
+		} else {
+			this._stopFullScreen();
+		}
 	}
 
 	_stopFullScreen() {
 		if (!this._slideShowCanvas) return;
 
+		window.removeEventListener('keydown', this._onCanvasKeyDown.bind(this));
 		L.DomUtil.remove(this._slideShowCanvas);
 		this._slideShowCanvas = null;
+		if (this._presenterContainer) {
+			L.DomUtil.remove(this._presenterContainer);
+			this._presenterContainer = null;
+		}
 		// #7102 on exit from fullscreen we don't get a 'focus' event
 		// in chome so a later second attempt at launching a presentation
 		// fails
@@ -117,6 +136,11 @@ class SlideShowPresenter {
 	}
 
 	_nextSlide() {
+		if (this._isAnimationPlaying) {
+			this._map.fire('skipanimation');
+			return;
+		}
+
 		if (this._currentSlide + 1 >= this._getSlidesCount()) {
 			this._stopFullScreen();
 			return;
@@ -124,17 +148,24 @@ class SlideShowPresenter {
 
 		this._slideCompositor.fetchAndRun(this._currentSlide, () => {
 			this._currentSlide++;
+			this.createAnimationsHandler();
 			this._doTransition(this._slideRenderer._slideTexture, this._currentSlide);
 		});
 	}
 
 	_previoustSlide() {
+		if (this._isAnimationPlaying) {
+			this._map.fire('skipanimation');
+			return;
+		}
+
 		if (this._currentSlide <= 0) {
 			return;
 		}
 
 		this._slideCompositor.fetchAndRun(this._currentSlide, () => {
 			this._currentSlide--;
+			this.createAnimationsHandler();
 			this._doPresentation();
 		});
 	}
@@ -144,19 +175,62 @@ class SlideShowPresenter {
 	}
 
 	_onCanvasKeyDown(event: KeyboardEvent) {
-		if (event.code === 'Space') this._nextSlide();
-		else if (event.code === 'Backspace') this._previoustSlide();
+		if (event.code === 'Space' || event.code === 'ArrowRight')
+			this._nextSlide();
+		else if (event.code === 'Backspace' || event.code === 'ArrowLeft')
+			this._previoustSlide();
+	}
+
+	private centerCanvas() {
+		if (!this._slideShowCanvas) return;
+		let winWidth = 0;
+		let winHeight = 0;
+		if (this._slideShowWindowProxy && !this._slideShowWindowProxy.closed) {
+			winWidth = this._slideShowWindowProxy.innerWidth;
+			winHeight = this._slideShowWindowProxy.innerHeight;
+		} else if (this.isFullscreen()) {
+			winWidth = window.screen.width;
+			winHeight = window.screen.height;
+		}
+		if (
+			winWidth * this._slideShowCanvas.height <
+			winHeight * this._slideShowCanvas.width
+		) {
+			this._slideShowCanvas.className =
+				'leaflet-slideshow2 slideshow-vertical-center';
+		} else {
+			this._slideShowCanvas.className =
+				'leaflet-slideshow2 slideshow-horizontal-center';
+		}
+	}
+
+	private _createPresenterHTML(parent: Element, width: number, height: number) {
+		const presenterContainer = L.DomUtil.create(
+			'div',
+			'leaflet-slideshow2',
+			parent,
+		);
+		presenterContainer.id = 'presenter-container';
+		const slideshowContainer = L.DomUtil.create(
+			'div',
+			'leaflet-slideshow2',
+			presenterContainer,
+		);
+		slideshowContainer.id = 'slideshow-container';
+		this._slideShowCanvas = this._createCanvas(
+			slideshowContainer,
+			width,
+			height,
+		);
+		return presenterContainer;
 	}
 
 	_createCanvas(parent: Element, width: number, height: number) {
 		const canvas = L.DomUtil.create('canvas', 'leaflet-slideshow2', parent);
 
-		canvas.id = 'fullscreen-canvas';
-		canvas.width = width;
-		canvas.height = height;
+		canvas.id = 'slideshow-canvas';
 
 		canvas.addEventListener('click', this._onCanvasClick.bind(this));
-		window.addEventListener('keydown', this._onCanvasKeyDown.bind(this));
 
 		try {
 			this._slideRenderer = new SlideRendererGl(canvas);
@@ -165,6 +239,26 @@ class SlideShowPresenter {
 		}
 
 		return canvas;
+	}
+
+	private startLoader(): void {
+		const transitionParameters = new TransitionParameters();
+		transitionParameters.context = this._slideRenderer._context;
+
+		try {
+			this._canvasLoader = new SlideShow.CanvasLoaderGl(transitionParameters);
+		} catch (error) {
+			this._canvasLoader = new SlideShow.CanvasLoader2d(transitionParameters);
+		}
+
+		this._canvasLoader.startLoader();
+	}
+
+	private stopLoader(): void {
+		if (!this._canvasLoader) return;
+
+		this._canvasLoader.stopLoader();
+		this._canvasLoader = null;
 	}
 
 	_doTransition(
@@ -180,6 +274,8 @@ class SlideShowPresenter {
 			) {
 				slideInfo.transitionType = 'NONE';
 			}
+
+			this.stopLoader();
 
 			const nextTexture = this._slideRenderer.createTexture(nextSlide);
 
@@ -226,10 +322,19 @@ class SlideShowPresenter {
 						height: 100%;
 						overflow: hidden; /* Prevent scrollbars */
 					}
-					canvas {
+					.slideshow-vertical-center {
+						margin: 0;
+						position: absolute;
 						width: 100%;
+						top: 50%;
+						transform: translateY(-50%);
+					}
+					.slideshow-horizontal-center {
+						margin: 0;
+						position: absolute;
 						height: 100%;
-						border: none;
+						left: 50%;
+						transform: translateX(-50%);
 					}
 				</style>
 			</head>
@@ -240,18 +345,34 @@ class SlideShowPresenter {
 			`;
 	}
 
-	_doPresentation() {
-		this._slideCompositor.fetchAndRun(this._currentSlide, () => {
-			const slideImage = this._slideCompositor.getSlide(this._currentSlide);
-			const currentTexture = this._slideRenderer.createTexture(slideImage);
-			const slideInfo = this.getSlideInfo(this._currentSlide);
-			this._slideRenderer.renderSlide(
-				currentTexture,
-				slideInfo,
-				this._presentationInfo.docWidth,
-				this._presentationInfo.docHeight,
-			);
-		});
+	_doPresentation(isStarting = false) {
+		this._slideRenderer.pauseVideos();
+		const slideInfo = this.getSlideInfo(this._currentSlide);
+		// To speed up the process, if we have transition info, then only render
+		// a black empty slide as the first slide. otherwise, directly render the first slide.
+		if (
+			isStarting &&
+			slideInfo?.transitionType != undefined &&
+			slideInfo.transitionType != 'NONE'
+		) {
+			// generate empty black slide
+			const blankTexture = this._slideRenderer.createEmptyTexture();
+
+			this._doTransition(blankTexture, this._currentSlide);
+		} else {
+			this._slideCompositor.fetchAndRun(this._currentSlide, () => {
+				const slideImage = this._slideCompositor.getSlide(this._currentSlide);
+				const currentTexture = this._slideRenderer.createTexture(slideImage);
+				const slideInfo = this.getSlideInfo(this._currentSlide);
+				this._slideRenderer.renderSlide(
+					currentTexture,
+					slideInfo,
+					this._presentationInfo.docWidth,
+					this._presentationInfo.docHeight,
+				);
+				this.stopLoader();
+			});
+		}
 	}
 
 	_doFallbackPresentation() {
@@ -278,6 +399,7 @@ class SlideShowPresenter {
 				null,
 				false,
 			);
+			return;
 		}
 
 		this._slideShowWindowProxy.document.documentElement.innerHTML = htmlContent;
@@ -286,12 +408,21 @@ class SlideShowPresenter {
 
 		const body =
 			this._slideShowWindowProxy.document.querySelector('#root-in-window');
-		this._slideShowCanvas = this._createCanvas(
+		this._presenterContainer = this._createPresenterHTML(
 			body,
 			window.screen.width,
 			window.screen.height,
 		);
 		this._slideShowCanvas.focus();
+
+		this._slideShowWindowProxy.addEventListener(
+			'resize',
+			this.onSlideWindowResize.bind(this),
+		);
+		this._slideShowWindowProxy.addEventListener(
+			'keydown',
+			this._onCanvasKeyDown.bind(this),
+		);
 
 		const slideShowWindow = this._slideShowWindowProxy;
 		this._map.uiManager.showSnackbar(
@@ -310,6 +441,8 @@ class SlideShowPresenter {
 				if (slideShowWindow.closed) {
 					clearInterval(this._windowCloseInterval);
 					this._map.uiManager.closeSnackbar();
+					this._slideShowCanvas = null;
+					this._presenterContainer = null;
 					this._slideShowWindowProxy = null;
 				}
 			}.bind(this),
@@ -348,13 +481,13 @@ class SlideShowPresenter {
 			}
 
 			// fullscreen
-			this._slideShowCanvas = this._createCanvas(
+			this._presenterContainer = this._createPresenterHTML(
 				this._map._container,
 				window.screen.width,
 				window.screen.height,
 			);
-			if (this._slideShowCanvas.requestFullscreen) {
-				this._slideShowCanvas
+			if (this._presenterContainer.requestFullscreen) {
+				this._presenterContainer
 					.requestFullscreen()
 					.then(() => {
 						// success
@@ -367,6 +500,10 @@ class SlideShowPresenter {
 		}
 
 		this._doFallbackPresentation();
+	}
+
+	onSlideWindowResize() {
+		this.centerCanvas();
 	}
 
 	_checkAlreadyPresenting() {
@@ -433,6 +570,10 @@ class SlideShowPresenter {
 		app.socket.sendMessage('getpresentationinfo');
 	}
 
+	_onAnimationStateChanged(e: any) {
+		this._isAnimationPlaying = !!e.isPlaying;
+	}
+
 	/// called as a response on getpresentationinfo
 	onSlideShowInfo(data: PresentationInfo) {
 		console.debug('SlideShow: received information about presentation');
@@ -445,15 +586,36 @@ class SlideShowPresenter {
 			this._slideCompositor = new SlideShow.LayersCompositor(
 				this,
 				this._presentationInfo,
-				this._slideShowCanvas.width,
-				this._slideShowCanvas.height,
 			);
 		}
 
+		this.createAnimationsHandler();
+
 		this._slideCompositor.updatePresentationInfo(this._presentationInfo);
+		const canvasSize = this._slideCompositor.getCanvasSize();
+		this._slideShowCanvas.width = canvasSize[0];
+		this._slideShowCanvas.height = canvasSize[1];
+		this.centerCanvas();
+
+		this.startLoader();
+
 		this._slideCompositor.fetchAndRun(0, () => {
-			this._doPresentation();
+			this._doPresentation(true);
 		});
+	}
+
+	createAnimationsHandler() {
+		const slideInfo = this.getSlideInfo(this._currentSlide);
+		if (slideInfo.animations) {
+			this._animationsHandler = new SlideAnimations();
+			this._animationsHandler.importAnimations(slideInfo.animations.root);
+			this._animationsHandler.parseInfo();
+			const animationTree = this._animationsHandler.getAnimationsTree();
+			if (animationTree) {
+				const info = animationTree.getInfo(true);
+				window.app.console.log('animations info: \n' + info);
+			}
+		}
 	}
 }
 
