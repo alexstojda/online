@@ -53,12 +53,17 @@ constexpr long READ_BUFFER_SIZE = 64 * 1024;
 /// or as intentionally flooding the server.
 constexpr int MAX_MESSAGE_SIZE = 2 * 1024 * READ_BUFFER_SIZE;
 
+/// Limits number of HTTP redirections to prevent endless redirection loops.
+static constexpr int HTTP_REDIRECTION_LIMIT = 21;
+
 constexpr const char JAILED_DOCUMENT_ROOT[] = "/tmp/user/docs/";
+constexpr const char JAILED_CONFIG_ROOT[] = "/tmp/user/user/";
 constexpr const char CHILD_URI[] = "/coolws/child?";
 constexpr const char NEW_CHILD_URI[] = "/coolws/newchild";
 constexpr const char FORKIT_URI[] = "/coolws/forkit";
 
 constexpr const char CAPABILITIES_END_POINT[] = "/hosting/capabilities";
+constexpr const char SETTING_IFRAME_END_POINT[] = "admin/adminIntegratorSettings.html";
 
 /// The file suffix used to mark the file slated for uploading.
 constexpr const char TO_UPLOAD_SUFFIX[] = ".upload";

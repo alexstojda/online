@@ -1,20 +1,21 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Map.FileInserter is handling the fileInserter action
+ * window.L.Map.FileInserter is handling the fileInserter action
  */
 
 /* global app _ Uint8Array errorMessages */
 
-L.Map.mergeOptions({
+window.L.Map.mergeOptions({
 	fileInserter: true
 });
 
-L.Map.FileInserter = L.Handler.extend({
+window.L.Map.FileInserter = window.L.Handler.extend({
 
 	initialize: function (map) {
 		this._map = map;
 		this._childId = null;
-		this._toInsert = {};
+		this._toInsertGraphic = {};
+		this._toInsertMultimedia = {};
 		this._toInsertURL = {};
 		this._toInsertBackground = {};
 		var parser = document.createElement('a');
@@ -26,36 +27,48 @@ L.Map.FileInserter = L.Handler.extend({
 	},
 
 	addHooks: function () {
-		this._map.on('insertfile', this._onInsertFile, this);
+		this._map.on('insertgraphic', this._onInsertGraphic, this);
+		this._map.on('insertmultimedia', this._onInsertMultimedia, this);
 		this._map.on('inserturl', this._onInsertURL, this);
 		this._map.on('childid', this._onChildIdMsg, this);
 		this._map.on('selectbackground', this._onSelectBackground, this);
 	},
 
 	removeHooks: function () {
-		this._map.off('insertfile', this._onInsertFile, this);
+		this._map.off('insertgraphic', this._onInsertGraphic, this);
+		this._map.off('insertmultimedia', this._onInsertMultimedia, this);
 		this._map.off('inserturl', this._onInsertURL, this);
 		this._map.off('childid', this._onChildIdMsg, this);
 		this._map.off('selectbackground', this._onSelectBackground, this);
 	},
 
-	_onInsertFile: function (e) {
+	_onInsertGraphic: function (e) {
 		if (!this._childId) {
 			app.socket.sendMessage('getchildid');
-			this._toInsert[Date.now()] = e.file;
+			this._toInsertGraphic[Date.now()] = e.file;
 		}
 		else {
 			this._sendFile(Date.now(), e.file, 'graphic');
 		}
 	},
 
+	_onInsertMultimedia: function (e) {
+		if (!this._childId) {
+			app.socket.sendMessage('getchildid');
+			this._toInsertMultimedia[Date.now()] = e.file;
+		}
+		else {
+			this._sendFile(Date.now(), e.file, 'multimedia');
+		}
+	},
+
 	_onInsertURL: function (e) {
 		if (!this._childId) {
 			app.socket.sendMessage('getchildid');
-			this._toInsertURL[Date.now()] = e.url;
+			this._toInsertURL[Date.now()] = e;
 		}
 		else {
-			this._sendURL(Date.now(), e.url);
+			this._sendURL(Date.now(), e);
 		}
 	},
 
@@ -71,14 +84,19 @@ L.Map.FileInserter = L.Handler.extend({
 
 	_onChildIdMsg: function (e) {
 		// When childId is not created (usually when we insert file/URL very first time), we send message to get child ID
-		// and store the file(s) into respective arrays (look at _onInsertFile, _onInsertURL, _onSelectBackground)
+		// and store the file(s) into respective arrays (look at _onInsertGraphic, _onInsertMultimedia, _onInsertURL, _onSelectBackground)
 		// When we receive the childId we empty all the array and insert respective file/URL from here
 
 		this._childId = e.id;
-		for (var name in this._toInsert) {
-			this._sendFile(name, this._toInsert[name], 'graphic');
+		for (var name in this._toInsertGraphic) {
+			this._sendFile(name, this._toInsertGraphic[name], 'graphic');
 		}
-		this._toInsert = {};
+		this._toInsertGraphic = {};
+
+		for (var name in this._toInsertMultimedia) {
+			this._sendFile(name, this._toInsertMultimedia[name], 'multimedia');
+		}
+		this._toInsertMultimedia = {};
 
 		for (name in this._toInsertURL) {
 			this._sendURL(name, this._toInsertURL[name]);
@@ -91,11 +109,62 @@ L.Map.FileInserter = L.Handler.extend({
 		this._toInsertBackground = {};
 	},
 
-	_sendFile: function (name, file, type) {
+	_sendFile: async function (name, file, type) {
 		var socket = app.socket;
 		var map = this._map;
 		var sectionContainer = app.sectionContainer;
 		var url = this.getWopiUrl(map);
+
+		var size;
+
+		if (type === 'multimedia') {
+			const videoElement = document.createElement('video');
+			const objectURL = window.URL.createObjectURL(file);
+			videoElement.src = objectURL;
+
+			const videoLoadPromise = new Promise((resolve, reject) => {
+				videoElement.addEventListener("loadedmetadata", resolve);
+				videoElement.addEventListener("error", reject);
+			});
+
+			videoElement.load();
+
+			let videoLoaded = false;
+
+			try {
+				await videoLoadPromise;
+				videoLoaded = true;
+			} catch (_error) {
+				size = {
+					width: 0,
+					height: 0,
+				}; // 0, 0 will make core pick the minimum size - which was the behavior before we checked size like this
+			}
+
+			if (videoLoaded) {
+				size = {
+					width: videoElement.videoWidth,
+					height: videoElement.videoHeight,
+				};
+
+				const maxSize = {
+					width: app.activeDocument.fileSize.cX * map.getZoomScale(10),
+					height: app.activeDocument.fileSize.cY * map.getZoomScale(10),
+				};
+
+				const shrinkToFitFactor = Math.min(
+					1,
+					maxSize.width / size.width,
+					maxSize.height / size.height
+				);
+
+				size.width *= shrinkToFitFactor;
+				size.height *= shrinkToFitFactor;
+			}
+
+			videoElement.src = undefined;
+			window.URL.revokeObjectURL(objectURL);
+		}
 
 		if ('processCoolUrl' in window) {
 			url = window.processCoolUrl({ url: url, type: 'insertfile' });
@@ -115,17 +184,22 @@ L.Map.FileInserter = L.Handler.extend({
 		if (window.ThisIsAMobileApp) {
 			// Pass the file contents as a base64-encoded parameter in an insertfile message
 			var reader = new FileReader();
-			reader.onload = (function(aFile) {
-				return function(e) {
-					var byteBuffer = new Uint8Array(e.target.result);
-					var strBytes = '';
-					for (var i = 0; i < byteBuffer.length; i++) {
-						strBytes += String.fromCharCode(byteBuffer[i]);
-					}
-					window.postMobileMessage('insertfile name=' + aFile.name + ' type=' + type +
+			reader.onload = function(e) {
+				var byteBuffer = new Uint8Array(e.target.result);
+				var strBytes = '';
+				for (var i = 0; i < byteBuffer.length; i++) {
+					strBytes += String.fromCharCode(byteBuffer[i]);
+				}
+
+				if (type === 'multimedia') {
+					window.postMobileMessage('insertfile name=' + name + ' type=' + type +
+										       ' data=' + window.btoa(strBytes) +
+										       ' width=' + size.width + ' height=' + size.height);
+				} else {
+					window.postMobileMessage('insertfile name=' + name + ' type=' + type +
 										       ' data=' + window.btoa(strBytes));
-				};
-			})(file);
+				}
+			};
 			reader.onerror = function(e) {
 				window.postMobileError('Error when reading file: ' + e);
 			};
@@ -140,13 +214,15 @@ L.Map.FileInserter = L.Handler.extend({
 				if (xmlHttp.readyState === 4) {
 					map.hideBusy();
 					if (xmlHttp.status === 200) {
-						var sectionName = L.CSections.ContentControl.name;
+						var sectionName = app.CSections.ContentControl.name;
 						var section;
 						if (sectionContainer.doesSectionExist(sectionName)) {
 							section = sectionContainer.getSectionWithName(sectionName);
 						}
 						if (section && section.sectionProperties.picturePicker && type === 'graphic') {
 							socket.sendMessage('contentcontrolevent type=picture' + ' name=' + name);
+						} else if (type === 'multimedia') {
+							socket.sendMessage('insertfile name=' + name + ' type=' + type + ' width=' + size.width + ' height=' + size.height);
 						} else {
 							socket.sendMessage('insertfile name=' + name + ' type=' + type);
 						}
@@ -184,19 +260,20 @@ L.Map.FileInserter = L.Handler.extend({
 		}
 	},
 
-	_sendURL: function (name, url) {
-		var sectionName = L.CSections.ContentControl.name;
+	_sendURL: function (name, e) {
+		var sectionName = app.CSections.ContentControl.name;
 		var section;
 		if (app.sectionContainer.doesSectionExist(sectionName)) {
 			section = app.sectionContainer.getSectionWithName(sectionName);
 		}
 
-		if (section && section.sectionProperties.picturePicker) {
-			app.socket.sendMessage('contentcontrolevent type=pictureurl' + ' name=' + encodeURIComponent(url));
+		if (e.urltype == "graphicurl" && section && section.sectionProperties.picturePicker) {
+			// The order argument is important
+			app.socket.sendMessage('contentcontrolevent type=pictureurl name=' + encodeURIComponent(e.url));
 		} else {
-			app.socket.sendMessage('insertfile name=' + encodeURIComponent(url) + ' type=graphicurl');
+			app.socket.sendMessage('insertfile name=' + encodeURIComponent(e.url) + ' type=' + e.urltype);
 		}
 	}
 });
 
-L.Map.addInitHook('addHandler', 'fileInserter', L.Map.FileInserter);
+window.L.Map.addInitHook('addHandler', 'fileInserter', window.L.Map.FileInserter);

@@ -12,8 +12,8 @@
  * Control.ContextMenu
  */
 
-/* global $ _ _UNO app */
-L.Control.ContextMenu = L.Control.extend({
+/* global $ _ _UNO app GraphicSelection */
+window.L.Control.ContextMenu = window.L.Control.extend({
 	options: {
 		SEPARATOR: '---------',
 		/*
@@ -32,26 +32,31 @@ L.Control.ContextMenu = L.Control.extend({
 			general: ['Cut', 'Copy', 'Paste', 'PasteSpecial', 'Delete',
 					  'FormatPaintbrush', 'ResetAttributes',
 					  'NumberingStart', 'ContinueNumbering', 'IncrementLevel', 'DecrementLevel',
-					  'OpenHyperlinkOnCursor', 'EditHyperlink', 'CopyHyperlinkLocation', 'RemoveHyperlink',
+					  'OpenHyperlinkOnCursor', 'InsertHyperlink', 'EditHyperlink', 'CopyHyperlinkLocation', 'RemoveHyperlink',
 					  'AnchorMenu', 'SetAnchorToPage', 'SetAnchorToPara', 'SetAnchorAtChar',
-					  'SetAnchorToChar', 'SetAnchorToFrame',
+					  'SetAnchorToChar', 'SetAnchorToFrame', 'Crop',
 					  'WrapMenu', 'WrapOff', 'WrapOn', 'WrapIdeal', 'WrapLeft', 'WrapRight', 'WrapThrough',
 					  'WrapThroughTransparencyToggle', 'WrapContour', 'WrapAnchorOnly',
 					  'ConvertMenu', 'ChangeBezier',
+					  'DistributeHorzCenter', 'DistributeHorzDistance','DistributeHorzLeft','DistributeHorzRight',
+					  'DistributeVertBottom', 'DistributeVertCenter', 'DistributeVertDistance', 'DistributeVertTop',
 					  'ArrangeFrameMenu', 'ArrangeMenu', 'BringToFront', 'ObjectForwardOne', 'ObjectBackOne', 'SendToBack',
 					  'RotateMenu', 'RotateLeft', 'RotateRight', 'TransformDialog', 'FormatLine', 'FormatArea',
 					  'FormatChartArea', 'InsertTitles', 'InsertRemoveAxes',
-					  'DeleteLegend', 'DiagramType', 'DataRanges', 'DiagramData', 'View3D',
+					  'DeleteLegend', 'DiagramType', 'DataRanges', 'DiagramData', 'View3D', 'ManageThemes',
 					  'FormatWall', 'FormatFloor', 'FormatLegend', 'FormatTitle', 'FormatDataSeries',
 					  'FormatAxis', 'FormatMajorGrid', 'FormatMinorGrid', 'FormatDataLabels',
 					  'FormatDataLabel', 'FormatDataPoint', 'FormatMeanValue', 'FormatXErrorBars', 'FormatYErrorBars',
 					  'FormatTrendline', 'FormatTrendlineEquation', 'FormatSelection', 'FormatStockLoss',
-					  'FormatStockGain', 'InsertDataLabel' , 'DeleteDataLabel', 'ResetDataPoint',
+					  'FormatStockGain', 'InsertDataLabel', 'InsertDataLabels' , 'DeleteDataLabel', 'DeleteDataLabels', 'ResetDataPoint',
 					  'InsertTrendline', 'InsertMeanValue', 'InsertXErrorBars' , 'InsertYErrorBars', 'ResetAllDataPoints' , 'DeleteAxis',
 					  'InsertAxisTitle', 'InsertMinorGrid', 'InsertMajorGrid' , 'InsertAxis', 'DeleteMajorGrid' , 'DeleteMinorGrid',
 					  'SpellCheckIgnoreAll', 'LanguageStatus', 'SpellCheckApplySuggestion', 'PageDialog',
 					  'CompressGraphic', 'GraphicDialog', 'InsertCaptionDialog',
-					  'NextTrackedChange', 'PreviousTrackedChange', 'RejectTrackedChange', 'AcceptTrackedChange', 'InsertAnnotation'],
+					  'AnimationEffects', 'ExecuteAnimationEffect',
+					  'InsertAnnotation', 'FormatGroup', 'FormatUngroup'],
+
+			tracking: ['NextTrackedChange', 'PreviousTrackedChange', 'RejectTrackedChange', 'AcceptTrackedChange', 'ReinstateTrackedChange'],
 
 			text: ['TableInsertMenu',
 				   'InsertRowsBefore', 'InsertRowsAfter', 'InsertColumnsBefore', 'InsertColumnsAfter',
@@ -61,13 +66,14 @@ L.Control.ContextMenu = L.Control.extend({
 				   'UpdateCurIndex','RemoveTableOf',
 				   'ReplyComment', 'DeleteComment', 'DeleteAuthor', 'DeleteAllNotes',
 				   'SpellingAndGrammarDialog', 'FontDialog', 'FontDialogForParagraph', 'TableDialog',
-				   'SpellCheckIgnore', 'FrameDialog', 'UnfloatFrame'],
+				   'SpellCheckIgnore', 'FrameDialog', 'UnfloatFrame', 'ContentControlProperties', 'DeleteContentControl',
+				   'AddToWordbook'],
 
 			spreadsheet: ['MergeCells', 'SplitCell', 'InsertCell', 'DeleteCell',
-				      'RecalcPivotTable', 'DataDataPilotRun', 'DeletePivotTable',
-				      'FormatCellDialog', 'DeleteNote', 'SetAnchorToCell', 'SetAnchorToCellResize',
-				      'FormatSparklineMenu', 'InsertSparkline', 'DeleteSparkline', 'DeleteSparklineGroup',
-				      'EditSparklineGroup', 'EditSparkline', 'GroupSparklines', 'UngroupSparklines', 'AutoFill'],
+					  'RecalcPivotTable', 'DataDataPilotRun', 'DeletePivotTable', 'InsertCalcTable', 'RemoveCalcTable',
+					  'DatabaseSettings', 'FormatCellDialog', 'DeleteNote', 'SetAnchorToCell', 'SetAnchorToCellResize',
+					  'FormatSparklineMenu', 'InsertSparkline', 'DeleteSparkline', 'DeleteSparklineGroup',
+					  'EditSparklineGroup', 'EditSparkline', 'GroupSparklines', 'UngroupSparklines', 'AutoFill'],
 
 			presentation: ['SetDefault'],
 			drawing: []
@@ -97,15 +103,17 @@ L.Control.ContextMenu = L.Control.extend({
 			// text
 			'SpellingAndGrammarDialog', 'FontDialog', 'FontDialogForParagraph',
 			// spreadsheet
-			'FormatCellDialog', 'DataDataPilotRun',
+			'FormatCellDialog', 'DataDataPilotRun', 'InsertCalcTable',
 			'GroupSparklines', 'UngroupSparklines', 'AutoFill'
-		]
+		],
+
 	},
 
 
 
 	onAdd: function (map) {
 		this._prevMousePos = null;
+		this._autoFillContextMenu = false;
 
 		map._contextMenu = this;
 		map.on('locontextmenu', this._onContextMenu, this);
@@ -116,23 +124,32 @@ L.Control.ContextMenu = L.Control.extend({
 	},
 
 	_onClosePopup: function () {
-		$.contextMenu('destroy', '.leaflet-layer');
+
+		if (this._autoFillContextMenu) {
+			this._autoFillContextMenu = false;
+			app.map._docLayer._resetReferencesMarks();
+		}
+
+		$.contextMenu('destroy', '#canvas-container');
 		this.hasContextMenu = false;
 	},
 
-	_onMouseDown: function(e) {
-		this._prevMousePos = {x: e.originalEvent.pageX, y: e.originalEvent.pageY};
+	_onMouseDown: function() {
+		if (app.activeDocument && app.activeDocument.mouseControl)
+			this._prevMousePos = app.activeDocument.mouseControl.getMousePagePosition();
 
 		this._onClosePopup();
 	},
 
-	_onMouseUp: function (e) {
-		this._currMousePos = { x: e.originalEvent.pageX, y: e.originalEvent.pageY };
+	_onMouseUp: function () {
+		if (app.activeDocument && app.activeDocument.mouseControl)
+			this._currMousePos = app.activeDocument.mouseControl.getMousePagePosition();
 	},
 
 	_onKeyDown: function(e) {
 		if (e.originalEvent.keyCode === 27 /* ESC */) {
 			$.contextMenu('destroy', '.leaflet-layer');
+			this.hasContextMenu = false;
 		}
 	},
 
@@ -149,6 +166,12 @@ L.Control.ContextMenu = L.Control.extend({
 		this._amendContextMenuData(obj);
 
 		var contextMenu = this._createContextMenuStructure(obj);
+
+		if (Object.keys(contextMenu).length == 0) {
+			// We can sometimes end up filtering out everything in the menu ... in this case, there's nothing to display
+			return;
+		}
+
 		var spellingContextMenu = false;
 		var autoFillContextMenu = false;
 		for (var menuItem in contextMenu) {
@@ -156,18 +179,20 @@ L.Control.ContextMenu = L.Control.extend({
 				spellingContextMenu = true;
 				break;
 			} else if (menuItem.indexOf('.uno:AutoFill') !== -1) {
-				autoFillContextMenu = true;
+				// we should close the autofill preview popup before open autofill context menu
+				map.fire('closeautofillpreviewpopup');
+				this._autoFillContextMenu = autoFillContextMenu = true;
 				break;
 			}
 		}
 		if (window.mode.isMobile()) {
 			window.contextMenuWizard = true;
-			var menuData = L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(contextMenu, true, '');
+			var menuData = window.L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(contextMenu, true, '');
 			map.fire('mobilewizard', {data: menuData});
 		} else {
-			L.installContextMenu({
-				selector: '.leaflet-layer',
-				className: 'cool-font',
+			window.L.installContextMenu({
+				selector: '#canvas-container',
+				className: 'cool-font on-the-fly-context-menu',
 				trigger: 'none',
 				zIndex: 1500,
 				build: function() {
@@ -186,20 +211,36 @@ L.Control.ContextMenu = L.Control.extend({
 						},
 						items: contextMenu
 					};
+				},
+				events: {
+					show: function (opt) {
+						var $menu = opt.$menu;
+						$menu.attr('tabindex', 0); // Make the context menu focusable
+					},
+					activated: function (opt) {
+						if (autoFillContextMenu) {
+							var $layer = opt.$layer;
+							$layer.css('pointer-events', 'none'); // disable mouse clicks for the layer
+						}
+					},
+					hide: function() {
+						if(autoFillContextMenu)
+							app.map._docLayer._resetReferencesMarks();
+						map.focus();
+					}
 				}
 			});
 
-			if (autoFillContextMenu)
-				$('.leaflet-layer').contextMenu(this._currMousePos);
-			else
-				$('.leaflet-layer').contextMenu(this._prevMousePos);
+			const position = app.activeDocument.mouseControl.getMousePagePosition();
+			$('#canvas-container').contextMenu(position);
+			$('.context-menu-root').focus();
 			this.hasContextMenu = true;
 		}
 	},
 
 	_amendContextMenuData: function(obj) {
 		// Add a 'delete' entry  for graphic selection on desktop and mobile device (in browser or app).
-		if (this._map._docLayer.hasGraphicSelection()) {
+		if (GraphicSelection.hasActiveSelection()) {
 			var insertIndex = -1;
 			obj.menu.forEach(function(item, index) {
 				if (item.command === '.uno:Paste') {
@@ -226,8 +267,13 @@ L.Control.ContextMenu = L.Control.extend({
 				continue;
 			}
 
+			// If the command was hidden with the Hide_Command postmessage...
+			if (this._map.uiManager.hiddenCommands[item.command]) {
+				continue;
+			}
+
 			// reduce Paste Special submenu
-			if (item.type === 'menu' && item.text.replace('~', '') === 'Paste Special'
+			if (item.type === 'menu' && item.text && item.text.replace('~', '') === 'Paste Special'
 				&& item.menu && item.menu.length) {
 				item.text = _('Paste Special');
 				item.command = '.uno:PasteSpecial';
@@ -235,20 +281,14 @@ L.Control.ContextMenu = L.Control.extend({
 				item.menu = undefined;
 			}
 
-			if (item.type === 'command' && item.text.replace('~', '') === 'Copy Cells'
-				&& item.menu && item.menu.length) {
+			if (item.type === 'command' && item.text && item.text.replace('~', '') === 'Copy Cells') {
 				item.text = _('Copy Cells');
 				item.command = '.uno:AutoFill?Copy:bool=true';
-				item.type = item.menu[0].type;
-				item.menu = undefined;
 			}
 
-			if (item.type === 'command' && item.text.replace('~', '') === 'Fill Series'
-				&& item.menu && item.menu.length) {
+			if (item.type === 'command' && item.text && item.text.replace('~', '') === 'Fill Series') {
 				item.text = _('Fill Series');
 				item.command = '.uno:AutoFill?Copy:bool=false';
-				item.type = item.menu[0].type;
-				item.menu = undefined;
 			}
 
 			if (item.type === 'separator') {
@@ -275,6 +315,7 @@ L.Control.ContextMenu = L.Control.extend({
 
 				if (commandName !== 'None' &&
 					this.options.whitelist.general.indexOf(commandName) === -1 &&
+					(this._map['wopi'].HideChangeTrackingControls || this.options.whitelist.tracking.indexOf(commandName) === -1) &&
 					!(docType === 'text' && this.options.whitelist.text.indexOf(commandName) !== -1) &&
 					!(docType === 'spreadsheet' && this.options.whitelist.spreadsheet.indexOf(commandName) !== -1) &&
 					!(docType === 'presentation' && this.options.whitelist.presentation.indexOf(commandName) !== -1) &&
@@ -288,7 +329,9 @@ L.Control.ContextMenu = L.Control.extend({
 				if (commandName == 'None' && !item.text)
 					continue;
 
-				if (hasParam || commandName === 'None' || commandName === 'FontDialogForParagraph' || commandName === 'Delete') {
+				if (hasParam || commandName === 'None' || commandName === 'FontDialogForParagraph' || commandName === 'Delete' || commandName == 'PasteSpecial') {
+					// These commands have a custom item.text, don't overwrite
+					// that with a label based on 'item.command'.
 					itemName = window.removeAccessKey(item.text);
 					itemName = itemName.replace(' ', '\u00a0');
 				} else {
@@ -298,7 +341,7 @@ L.Control.ContextMenu = L.Control.extend({
 
 				contextMenu[item.command] = {
 					// Using 'click' and <a href='#' is vital for copy/paste security context.
-					name: (window.mode.isMobile() ? _(itemName) : '<a href="#" class="context-menu-link">' +  _(itemName) + '</a'),
+					name: (window.mode.isMobile() ? _(itemName) : app.IconUtil.createMenuItemLink(itemName, commandName)),
 					isHtmlName: true,
 				};
 
@@ -352,12 +395,12 @@ L.Control.ContextMenu = L.Control.extend({
     }
 });
 
-L.control.contextMenu = function (options) {
-	return new L.Control.ContextMenu(options);
+window.L.control.contextMenu = function (options) {
+	return new window.L.Control.ContextMenu(options);
 };
 
 // Using 'click' and <a href='#' is vital for copy/paste security context.
-L.installContextMenu = function(options) {
+window.L.installContextMenu = function(options) {
 	var rewrite = function(items) {
 		if (items === undefined)
 			return;
@@ -387,6 +430,5 @@ L.installContextMenu = function(options) {
 			$menu.css('right', $menu.css('left'));
 		};
 	}
-
 	$.contextMenu(options);
 };

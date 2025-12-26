@@ -16,11 +16,11 @@
 
 #include <cassert>
 #include <cstddef>
-#include <set>
 #include <string>
 #include <vector>
 
 #include <Poco/Dynamic/Var.h>
+#include <Poco/JSON/JSONException.h>
 #include <Poco/JSON/Object.h>
 #include <Poco/JSON/Parser.h>
 
@@ -54,8 +54,7 @@ inline bool parseJSON(const std::string& json, Poco::JSON::Object::Ptr& object)
 inline
 int getLevenshteinDist(const std::string& string1, const std::string& string2)
 {
-    int matrix[string1.size() + 1][string2.size() + 1];
-    std::memset(matrix, 0, sizeof(matrix[0][0]) * (string1.size() + 1) * (string2.size() + 1));
+    std::vector<std::vector<int>> matrix(string1.size() + 1, std::vector<int>(string2.size() + 1));
 
     for (std::size_t i = 0; i < string1.size() + 1; i++)
     {
@@ -178,7 +177,7 @@ static char getEscapementChar(char ch)
     }
 }
 
-static void writeEscapedSequence(uint32_t ch, std::vector<char>& buf)
+inline void writeEscapedSequence(uint32_t ch, std::string& buf)
 {
     switch (ch)
     {
@@ -209,10 +208,10 @@ static void writeEscapedSequence(uint32_t ch, std::vector<char>& buf)
     }
 }
 
-inline std::string escapeJSONValue(std::string val)
+inline std::string escapeJSONValue(const std::string_view val)
 {
-    std::vector<char> buf;
-    buf.reserve(val.size() + 10); // some small initial extra space for escaping
+    std::string buf;
+    buf.reserve(val.size() + 64); // some small initial extra space for escaping
     for (size_t i = 0; i < val.size(); ++i)
     {
         const char ch = val[i];
@@ -242,10 +241,48 @@ inline std::string escapeJSONValue(std::string val)
                 break;
         }
     }
-    return std::string(buf.data(), buf.size());
+
+    return buf;
+}
+
+/// Extract all json entries into a map.
+inline std::map<std::string, std::string> jsonToMap(const std::string& jsonString)
+{
+    std::map<std::string, std::string> map;
+    if (jsonString.empty())
+        return map;
+
+    Poco::JSON::Parser parser;
+    const Poco::Dynamic::Var result = parser.parse(jsonString);
+    const auto& json = result.extract<Poco::JSON::Object::Ptr>();
+
+    std::vector<std::string> names;
+    json->getNames(names);
+
+    for (const auto& name : names)
+    {
+        map[name] = json->get(name).toString();
+    }
+
+    return map;
+}
+
+template <typename T>
+Poco::JSON::Object::Ptr makePropertyValue(const std::string& type, const T& val)
+{
+    Poco::JSON::Object::Ptr obj = new Poco::JSON::Object();
+    obj->set("type", type);
+    obj->set("value", val);
+    return obj;
+}
+
+inline std::string jsonToString(const Poco::JSON::Object::Ptr& json)
+{
+    std::ostringstream jsonStream;
+    json->stringify(jsonStream);
+    return jsonStream.str();
 }
 
 } // end namespace JsonUtil
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
-

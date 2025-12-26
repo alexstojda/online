@@ -104,7 +104,6 @@ function closeHamburgerMenu() {
 function openMobileWizard() {
 	cy.log('>> openMobileWizard - start');
 
-	helper.waitUntilIdle('#toolbar-up #mobile_wizard');
 	// Open mobile wizard
 	cy.cGet('#toolbar-up #mobile_wizard')
 		.should('not.have.class', 'disabled')
@@ -134,28 +133,6 @@ function closeMobileWizard() {
 		.should('not.have.class', 'selected');
 
 	cy.log('<< closeMobileWizard - end');
-}
-
-function executeCopyFromContextMenu(XPos, YPos) {
-	cy.log('>> executeCopyFromContextMenu - start');
-	cy.log('Param - XPos: ' + XPos);
-	cy.log('Param - YPos: ' + YPos);
-
-	longPressOnDocument(XPos, YPos);
-
-	// Execute copy
-	cy.cGet('body').contains('.menu-entry-with-icon', 'Copy')
-		.click();
-
-	// Close warning about clipboard operations
-	cy.cGet('.vex-dialog-buttons .button-primary')
-		.click();
-
-	// Wait until it's closed
-	cy.cGet('.vex-overlay')
-		.should('not.exist');
-
-	cy.log('<< executeCopyFromContextMenu - end');
 }
 
 function openInsertionWizard() {
@@ -251,9 +228,9 @@ function openTextPropertiesPanel() {
 
 	openMobileWizard();
 
-	cy.cGet('#TextPropertyPanel').click();
+	cy.cGet('#TextPropertyPanel, .TextPropertyPanel').click();
 
-	cy.cGet('#Bold').should('be.visible');
+	cy.cGet('.unoBold').should('be.visible');
 
 	cy.log('<< openTextPropertiesPanel - end');
 }
@@ -325,7 +302,7 @@ function selectListBoxItem2(listboxSelector, item) {
 
 	cy.log('<< selectListBoxItem2 - end');
 }
-function insertComment() {
+function insertComment(skipCommentCheck = false) {
 	cy.log('>> insertComment - start');
 
 	openInsertionWizard();
@@ -333,8 +310,13 @@ function insertComment() {
 	cy.cGet('.cool-annotation-table').should('exist');
 	cy.cGet('#input-modal-input').type('some text');
 	cy.cGet('#response-ok').click();
-	cy.cGet('#comment-container-1').should('exist').wait(300);
-	cy.cGet('#annotation-content-area-1').should('have.text', 'some text');
+	cy.wait(2000); // FIXME: skip DocModified message
+
+	if (!skipCommentCheck) {
+		cy.cGet('[id^=comment-container-]').should('exist').wait(300);
+		cy.cGet('[id^=annotation-content-area-]').should('be.visible');
+		cy.cGet('[id^=annotation-content-area-]').should('have.text', 'some text');
+	}
 
 	cy.log('<< insertComment - end');
 }
@@ -360,17 +342,12 @@ function insertImage() {
 function deleteImage() {
 	cy.log('>> deleteImage - start');
 
-	insertImage();
-	var eventOptions = {
-		force: true,
-		button: 0,
-		pointerType: 'mouse'
-	};
-
-	cy.cGet('.leaflet-layer')
-		.trigger('pointerdown', eventOptions)
-		.wait(500) // Wait for long press
-		.trigger('pointerup', eventOptions);
+	cy.cGet('#document-container').then(function(items) {
+		const boundingRect = items[0].getBoundingClientRect();
+		const x = boundingRect.left + boundingRect.width / 2;
+		const y = boundingRect.top + boundingRect.height / 2;
+		cy.cGet('#document-container').rightclick(x, y);
+	});
 
 	cy.cGet('body').contains('.menu-entry-with-icon', 'Delete')
 		.should('be.visible').click();
@@ -389,6 +366,10 @@ function pressPushButtonOfDialog(name) {
 	cy.log('<< pressPushButtonOfDialog - end');
 }
 
+function getCompactIcon(unoCommand) {
+	return cy.cGet('#toolbar-down .uno' + unoCommand + ':visible');
+}
+
 module.exports.enableEditingMobile = enableEditingMobile;
 module.exports.longPressOnDocument = longPressOnDocument;
 module.exports.openHamburgerMenu = openHamburgerMenu;
@@ -397,7 +378,6 @@ module.exports.selectAnnotationMenuItem = selectAnnotationMenuItem;
 module.exports.closeHamburgerMenu = closeHamburgerMenu;
 module.exports.openMobileWizard = openMobileWizard;
 module.exports.closeMobileWizard = closeMobileWizard;
-module.exports.executeCopyFromContextMenu = executeCopyFromContextMenu;
 module.exports.openInsertionWizard = openInsertionWizard;
 module.exports.closeInsertionWizard = closeInsertionWizard;
 module.exports.selectFromColorPalette = selectFromColorPalette;
@@ -410,3 +390,4 @@ module.exports.insertImage = insertImage;
 module.exports.deleteImage = deleteImage;
 module.exports.insertComment = insertComment;
 module.exports.pressPushButtonOfDialog = pressPushButtonOfDialog;
+module.exports.getCompactIcon = getCompactIcon;

@@ -11,27 +11,42 @@
 
 #pragma once
 
-#include <stdexcept>
-#include <algorithm>
-#include <functional>
-#include <map>
+#include <wsd/TileDesc.hpp>
+
 #include <string>
 #include <vector>
 
-#include "Log.hpp"
-#include "TileDesc.hpp"
-#include "Protocol.hpp"
+class TilePrioritizer
+{
+public:
+    virtual ~TilePrioritizer() = default;
+
+    enum class Priority : std::int8_t {
+        NONE = -1,  // an error
+        LOWEST,
+        LOW,
+        NORMAL,
+        HIGH,
+        VERYHIGH,
+        ULTRAHIGH
+    };
+    virtual Priority getTilePriority(const TileDesc &) const { return Priority::NORMAL; }
+
+    using ViewIdInactivity = std::pair<CanonicalViewId, float>;
+    virtual std::vector<ViewIdInactivity> getViewIdsByInactivity() const { return {}; }
+};
 
 /// Queue for handling the Kit's messaging needs
 class KitQueue
 {
     friend class KitQueueTests;
 
+    const TilePrioritizer &_prio;
 public:
-    typedef std::vector<char> Payload;
+    using Payload = std::vector<char>;
 
-    KitQueue() { }
-    ~KitQueue() { }
+    KitQueue(const TilePrioritizer &prio) : _prio(prio) { }
+    ~KitQueue() = default;
 
     KitQueue(const KitQueue&) = delete;
     KitQueue& operator=(const KitQueue&) = delete;
@@ -49,10 +64,18 @@ public:
         std::string _payload;
 
         Callback() : _view(-1), _type(-1) { }
-        Callback(int view, int type, const std::string payload) :
-            _view(view), _type(type), _payload(payload) { }
+        Callback(const Callback&) = default;
+        Callback(Callback&&) = default;
+        Callback& operator=(const Callback&) = default;
+        Callback& operator=(Callback&&) = default;
+        Callback(int view, int type, std::string payload)
+            : _view(view)
+            , _type(type)
+            , _payload(std::move(payload))
+        {
+        }
 
-        static std::string toString(int view, int type, const std::string payload);
+        static std::string toString(int view, int type, const std::string& payload);
     };
 
     /// Queue a LibreOfficeKit callback for later emission
@@ -67,19 +90,21 @@ public:
     Payload pop();
     Payload get() { return pop(); }
 
-    /// Tiles are special manage a separate queue of them
-    void clearTileQueue() { _tileQueue.clear(); }
+    /// Tiles are special manage separate queues of them
+    void clearTileQueue() { _tileQueues.clear(); }
     void pushTileQueue(const Payload &value);
     void pushTileCombineRequest(const Payload &value);
-    TileCombined popTileQueue();
-    std::vector<TileCombined> popWholeTileQueue();
-    size_t getTileQueueSize() const { return _tileQueue.size(); }
+    /// Pops the highest priority TileCombined from the
+    /// render queue, with it's priority.
+    TileCombined popTileQueue(TilePrioritizer::Priority& priority);
+    size_t getTileQueueSize() const;
+    bool isTileQueueEmpty() const;
 
     /// Obtain the next callback
     Callback getCallback()
     {
         assert(_callbacks.size() > 0);
-        const Callback front = _callbacks.front();
+        Callback front = _callbacks.front();
         _callbacks.erase(_callbacks.begin());
         return front;
     }
@@ -136,41 +161,6 @@ protected:
     std::string combineRemoveText(const StringVector& tokens);
 
 private:
-    class CursorPosition
-    {
-    public:
-        CursorPosition() {}
-        CursorPosition(int part, int x, int y, int width, int height)
-            : _part(part)
-            , _x(x)
-            , _y(y)
-            , _width(width)
-            , _height(height)
-        {
-        }
-
-        int getPart() const { return _part; }
-        int getX() const { return _x; }
-        int getY() const { return _y; }
-        int getWidth() const { return _width; }
-        int getHeight() const { return _height; }
-
-    private:
-        int _part = 0;
-        int _x = 0;
-        int _y = 0;
-        int _width = 0;
-        int _height = 0;
-    };
-
-public:
-    void updateCursorPosition(int viewId, int part, int x, int y, int width, int height);
-    void removeCursorPosition(int viewId);
-
-private:
-    /// Search the queue for a duplicate tile and remove it (if present).
-    void removeTileDuplicate(const TileDesc &desc);
-
     /// Search the queue for a duplicate callback and remove it (if present).
     ///
     /// This removes also callbacks that are made invalid by the current
@@ -179,30 +169,20 @@ private:
     /// @return New message to put into the queue.  If empty, use what was in callbackMsg.
     std::string removeCallbackDuplicate(const std::string& callbackMsg);
 
-    /// De-prioritize the previews (tiles with 'id') - move them to the end of
-    /// the queue.
-    void deprioritizePreviews();
-
-    /// Priority of the given tile message.
-    /// -1 means the lowest prio (the tile does not intersect any of the cursors),
-    /// the higher the number, the bigger is priority [up to _viewOrder.size()-1].
-    int priority(const TileDesc &desc);
+    std::vector<TileDesc>* getTileQueue(CanonicalViewId viewid);
+    std::vector<TileDesc>& ensureTileQueue(CanonicalViewId viewid);
+    TileCombined popTileQueue(std::vector<TileDesc>& tileQueue, TilePrioritizer::Priority &priority);
 
 private:
-    /// The incoming underlying queue
+    /// Queue of incoming messages from coolwsd
     std::vector<Payload> _queue;
 
-    /// Incoming tile request queue
-    std::vector<TileDesc> _tileQueue;
+    /// Queues of incoming tile requests from coolwsd
+    using viewTileQueue = std::pair<CanonicalViewId, std::vector<TileDesc>>;
+    std::vector<viewTileQueue> _tileQueues;
 
-    /// Outgoing queued callbacks
+    /// Queue of callbacks from Kit to send out to coolwsd
     std::vector<Callback> _callbacks;
-
-    std::map<int, CursorPosition> _cursorPositions;
-
-    /// Check the views in the order of how the editing (cursor movement) has
-    /// been happening (0 == oldest, size() - 1 == newest).
-    std::vector<int> _viewOrder;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const KitQueue::Callback &c)

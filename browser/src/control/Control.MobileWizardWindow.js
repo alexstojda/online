@@ -10,11 +10,11 @@
  */
 
 /*
- * L.Control.MobileWizardWindow - contains one unique window instance inside mobile-wizard
+ * window.L.Control.MobileWizardWindow - contains one unique window instance inside mobile-wizard
  */
 
 /* global app $ */
-L.Control.MobileWizardWindow = L.Control.extend({
+window.L.Control.MobileWizardWindow = window.L.Control.extend({
 	options: {
 		maxHeight: '45vh',
 		snackbarTimeout: 6000
@@ -33,7 +33,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 	_currentScrollPosition: 0,
 
 	initialize: function (mobileWizard, id) {
-		L.setOptions(this, this.options);
+		window.L.setOptions(this, this.options);
 		this.id = id; // unique id of this window "mobile-wizard-content-N"
 		this.parent = mobileWizard; // reference to the parent mobile-wizard
 		this.tabs = null; // tabs we can later restore if dialog was hidden
@@ -53,7 +53,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		this.titleNode = $('#mobile-wizard-title'); // title content
 		this.tabsContainer = $('#mobile-wizard-tabs'); // can be shown instead of titlebar
 		var parentNode = document.getElementById('mobile-wizard-content');
-		this.content = L.DomUtil.create('div', 'mobile-wizard mobile-wizard-content', parentNode);
+		this.content = window.L.DomUtil.create('div', 'mobile-wizard mobile-wizard-content', parentNode);
 		this.content.id = this.id;
 
 		this.scrollPositions = [];
@@ -66,12 +66,12 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		if (!window.mode.isMobile())
 			return;
 
-		this.content.innerHTML = '';
+		this.content.replaceChildren();
 		this._setupBackButton();
 	},
 
 	onRemove: function() {
-		L.DomUtil.remove(this.content);
+		window.L.DomUtil.remove(this.content);
 		this.content = undefined;
 	},
 
@@ -93,12 +93,12 @@ L.Control.MobileWizardWindow = L.Control.extend({
 			this.mobileWizard.addClass('menuwizard');
 		if (this.isFunctionMenu)
 			this.mobileWizard.addClass('funcwizard');
-		if (this.isPopup)
+		if (this.isPopup && !this.isAutoCompletePopup && !this.isPopupPartialScreen)
 			this.mobileWizard.addClass('popup');
 		if (this.isSnackBar)
 			this.mobileWizard.addClass('snackbar');
 		if (this.isBusyPopUp)
-			this.mobileWizard.addClass('busypopup'); 
+			this.mobileWizard.addClass('busypopup');
 	},
 
 	/// resets all classes which can modify the look to the original values
@@ -108,7 +108,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		this.tabsContainer.hide();
 		this.titleBar.css('top', '0px');
 		this.titleBar.show();
-		this.titleNode.innerHTML = '';
+		this.titleNode[0].replaceChildren();
 		this._removeSpecialClasses();
 	},
 
@@ -117,7 +117,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		this._softReset();
 		this._currentDepth = 0;
 		this._inMainMenu = true;
-		this.content.innerHTML = '';
+		this.content.replaceChildren();
 		this._isTabMode = false;
 		this._currentPath = [];
 		this.tabs = null;
@@ -148,14 +148,27 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		this._applySpecialClasses();
 	},
 
+	_createScrollIndicator() {
+		const container = document.createElement('div');
+		container.className = 'mobile-wizard-scroll-indicator';
+		container.id = 'mobile-wizard-scroll-indicator-' + this.id;
+		container.style.width = '100%';
+		container.style.height = '0px';
+		container.style.position = 'fixed';
+		container.style.zIndex = 2;
+		container.style.bottom = '-7px';
+		container.style.boxShadow = '0 -8px 20px 4px #0b87e770, 0 1px 10px 6px #0b87e7';
+		return container;
+	},
+
 	_showWizard: function() {
 		if (this.snackBarTimout)
 			clearTimeout(this.snackBarTimout);
 
 		this.isVisible = true;
 
-		this.scrollIndicator = $('<div class="mobile-wizard-scroll-indicator" id="mobile-wizard-scroll-indicator-' + this.id + '" style="width: 100%;height: 0px;position: fixed;z-index: 2;bottom: -7px;box-shadow: 0 -8px 20px 4px #0b87e770, 0 1px 10px 6px #0b87e7;"></div>');
-		$(this.content).append(this.scrollIndicator);
+		this.scrollIndicator = this._createScrollIndicator();
+		this.content.appendChild(this.scrollIndicator);
 
 		var wizard = $('#mobile-wizard');
 		wizard.show();
@@ -165,8 +178,8 @@ L.Control.MobileWizardWindow = L.Control.extend({
 			var height = wizard.prop('scrollHeight');
 			var contentHeight = wizard.prop('clientHeight');
 			var scrollLeft = height - mWizardContentScroll;
-			if (scrollLeft < contentHeight + 1 || !that.isVisible) { that.scrollIndicator.css('display','none'); }
-			else { that.scrollIndicator.css('display','block'); }
+			if (scrollLeft < contentHeight + 1 || !that.isVisible) { that.scrollIndicator.style.display = 'none'; }
+			else { that.scrollIndicator.style.display = 'block'; }
 		});
 		$('#toolbar-down').hide();
 		if (window.ThisIsTheAndroidApp)
@@ -341,7 +354,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 				}
 			}
 			if (window.commentWizard === true) {
-				app.sectionContainer.getSectionWithName(L.CSections.CommentList.name).removeHighlighters();
+				app.sectionContainer.getSectionWithName(app.CSections.CommentList.name).removeHighlighters();
 			}
 		}
 	},
@@ -478,7 +491,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 						this.backButton.hide();
 						popupContainer.empty();
 						if (!this._builder) {
-							this._builder = L.control.mobileWizardBuilder(
+							this._builder = window.L.control.mobileWizardBuilder(
 								{
 									windowId: data.id,
 									mobileWizard: this,
@@ -497,7 +510,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 					return;
 				} else {
 					// normal popup - continue to open mobile wizard
-					var overlay = L.DomUtil.create('div', 'mobile-wizard jsdialog-overlay ' + (data.cancellable ? 'cancellable' : ''), document.body);
+					var overlay = window.L.DomUtil.create('div', 'mobile-wizard jsdialog-overlay ' + (data.cancellable ? 'cancellable' : ''), document.body);
 					var that = this;
 					if (data.cancellable) {
 						overlay.onclick = function () {
@@ -510,9 +523,12 @@ L.Control.MobileWizardWindow = L.Control.extend({
 
 			this._reset();
 			this.isPopup = isPopupJson;
+			this.isAutoCompletePopup = data.isAutoCompletePopup;
+			this.isPopupPartialScreen = data.isPopupPartialScreen;
+			this.persistKeyboard = data.persistKeyboard;
 
 			this._showWizard();
-			if (this.map._docLayer && !this.map._docLayer.isCalc()) {
+			if (this.map._docLayer && !this.map._docLayer.isCalc() && !this.persistKeyboard) {
 				// In Calc, the wizard is used for the formulas,
 				// and it's easier to allow the user to search
 				// for a formula by typing the first few characters.
@@ -530,7 +546,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 			}
 
 			if (!this._builder) {
-				this._builder = L.control.mobileWizardBuilder(
+				this._builder = window.L.control.mobileWizardBuilder(
 					{
 						windowId: data.id,
 						mobileWizard: this,
@@ -574,7 +590,7 @@ L.Control.MobileWizardWindow = L.Control.extend({
 				// since it does not hide it, instead it goes back in this case
 				this.backButton.removeClass('close-button');
 			}
-			if (this._isActive && currentPath.length) {
+			if (this._isActive && currentPath && currentPath.length) {
 				this._goToPath(currentPath);
 				this._scrollToPosition(lastScrollPosition);
 			}
@@ -602,13 +618,13 @@ L.Control.MobileWizardWindow = L.Control.extend({
 	},
 
 	_isSlidePropertyPanel: function(data) {
-		var backgroundPanel = L.LOUtil.findItemWithAttributeRecursive(data, 'id', 'SlideBackgroundPanel');
-		var layoutPanel = L.LOUtil.findItemWithAttributeRecursive(data, 'id', 'SdLayoutsPanel');
+		var backgroundPanel = app.LOUtil.findItemWithAttributeRecursive(data, 'id', 'SlideBackgroundPanel');
+		var layoutPanel = app.LOUtil.findItemWithAttributeRecursive(data, 'id', 'SdLayoutsPanel');
 		return backgroundPanel && layoutPanel;
 	},
 
 	_insertCalcBorders: function(deck) {
-		var replaceMe = L.LOUtil.findItemWithAttributeRecursive(deck, 'id', 'cellbordertype');
+		var replaceMe = app.LOUtil.findItemWithAttributeRecursive(deck, 'id', 'cellbordertype');
 		if (replaceMe) {
 			replaceMe.id = 'borderstyle';
 			replaceMe.type = 'borderstyle';
@@ -622,12 +638,12 @@ L.Control.MobileWizardWindow = L.Control.extend({
 		if (data.children && data.children.length && data.children[0].type !== 'deck')
 			data.children.splice(0, 1);
 
-		var deck = L.LOUtil.findItemWithAttributeRecursive(data, 'type', 'deck');
+		var deck = app.LOUtil.findItemWithAttributeRecursive(data, 'type', 'deck');
 		if (deck)
 		{
 			// merge styles into text-panel for elegance
-			var stylesIdx = L.LOUtil.findIndexInParentByAttribute(deck, 'id', 'StylesPropertyPanel');
-			var textIdx = L.LOUtil.findIndexInParentByAttribute(deck, 'id', 'TextPropertyPanel');
+			var stylesIdx = app.LOUtil.findIndexInParentByAttribute(deck, 'name', 'StylesPropertyPanel');
+			var textIdx = app.LOUtil.findIndexInParentByAttribute(deck, 'name', 'TextPropertyPanel');
 
 			if (stylesIdx >= 0 && this.map.getDocType() === 'spreadsheet')
 			{       // remove rather useless calc styles panel
@@ -717,11 +733,11 @@ L.Control.MobileWizardWindow = L.Control.extend({
 			this._builder._currentDepth = currentLevel;
 		}
 
-		var temporaryParent = L.DomUtil.create('div');
+		var temporaryParent = window.L.DomUtil.create('div');
 		this._builder.build(temporaryParent, [data.control], false);
 		parent.insertBefore(temporaryParent.firstChild, control.nextSibling);
 		var backupGridSpan = control.style.gridColumn;
-		L.DomUtil.remove(control);
+		window.L.DomUtil.remove(control);
 
 		// reset _builder._currentDepth
 		this._builder._currentDepth = 0;
@@ -779,6 +795,6 @@ L.Control.MobileWizardWindow = L.Control.extend({
 	},
 });
 
-L.control.mobileWizardWindow = function (mobileWizard, id) {
-	return new L.Control.MobileWizardWindow(mobileWizard, id);
+window.L.control.mobileWizardWindow = function (mobileWizard, id) {
+	return new window.L.Control.MobileWizardWindow(mobileWizard, id);
 };

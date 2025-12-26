@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -15,18 +16,24 @@
 /* global _ _UNO */
 class MobileSearchBar extends Toolbar {
 	constructor(map: any) {
-		super(map, 'toolbar-search');
+		super(map, 'MobileSearchBar', 'toolbar-search');
 	}
 
-	getToolItems(): Array<ToolbarItem> {
+	getToolItems(): Array<ToolItemWidgetJSON> {
 		return [
 			{
 				type: 'customtoolitem',
 				id: 'hidesearchbar',
-				w2icon: 'unfold',
+				w2icon: 'prevrecord',
 				text: _('Hide the search bar'),
 			},
-			{ type: 'edit', id: 'search', placeholder: _('Search'), text: '' },
+			{ type: 'searchedit', id: 'search', placeholder: _('Search'), text: '' },
+			{
+				type: 'customtoolitem',
+				id: 'cancelsearch',
+				text: _('Clear the search field'),
+				enabled: false,
+			},
 			{
 				type: 'customtoolitem',
 				id: 'searchprev',
@@ -41,20 +48,13 @@ class MobileSearchBar extends Toolbar {
 				enabled: false,
 				pressAndHold: true,
 			},
-			{
-				type: 'customtoolitem',
-				id: 'cancelsearch',
-				text: _('Clear the search field'),
-				visible: false,
-			},
 			{ type: 'spacer', id: 'left' },
 		];
 	}
 
 	create() {
-		var items = this.getToolItems();
-		this.builder.build(this.parentContainer, items);
-		(window as any).setupSearchInput();
+		const items = this.getToolItems();
+		this.builder.build(this.parentContainer, items, undefined);
 	}
 }
 

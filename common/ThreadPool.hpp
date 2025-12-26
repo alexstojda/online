@@ -20,6 +20,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <Util.hpp>
+
 class ThreadPool
 {
     friend class WhiteBoxTests;
@@ -47,7 +49,7 @@ public:
 #elif MOBILEAPP && !defined(GTKAPP)
         _maxConcurrency = std::max<int>(std::thread::hardware_concurrency(), 2);
 #else
-        // coverity[tainted_return_value] - we trust the contents of this variable
+        // coverity[tainted_data_return] - we trust the contents of this variable
         const char* max = getenv("MAX_CONCURRENCY");
         if (max)
             _maxConcurrency = atoi(max);
@@ -57,6 +59,8 @@ public:
     }
 
     ~ThreadPool() { stop(); }
+
+    int getThreadCount() { return _maxConcurrency; }
 
     void start()
     {
@@ -146,6 +150,7 @@ public:
 
     void work()
     {
+        Util::setThreadName("ThreadPool::work");
         std::unique_lock<std::mutex> lock(_mutex);
         while (!_shutdown)
         {
@@ -157,8 +162,12 @@ public:
 
     void dumpState(std::ostream& oss)
     {
+        THREAD_UNSAFE_DUMP_BEGIN
         oss << "\tthreadPool:"
             << "\n\t\tshutdown: " << _shutdown << "\n\t\tworking: " << _working
             << "\n\t\twork count: " << count() << "\n\t\tthread count " << _threads.size() << "\n";
+        THREAD_UNSAFE_DUMP_END
     }
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

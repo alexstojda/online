@@ -35,7 +35,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		helper.setDummyClipboardForCopy();
 		openTablePanel();
 		cy.cGet('.unoInsertRowsBefore').click();
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should('have.length', 4);
+		cy.cGet('.table-row-resize-marker').should('have.length', 4);
 		selectFullTable();
 		// Check rows / columns
 		cy.cGet('#copy-paste-container tr')
@@ -53,7 +53,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		helper.setDummyClipboardForCopy();
 		openTablePanel();
 		cy.cGet('.unoInsertRowsAfter').click();
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should('have.length', 4);
+		cy.cGet('.table-row-resize-marker').should('have.length', 4);
 		selectFullTable();
 		// Check rows / columns
 		cy.cGet('#copy-paste-container tr')
@@ -71,7 +71,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		helper.setDummyClipboardForCopy();
 		openTablePanel();
 		cy.cGet('.unoInsertColumnsBefore').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('have.length', 4);
+		cy.cGet('.table-column-resize-marker').should('have.length', 4);
 		selectFullTable();
 		// Check rows / columns
 		cy.cGet('#copy-paste-container tr').should('have.length', 3);
@@ -88,7 +88,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		helper.setDummyClipboardForCopy();
 		openTablePanel();
 		cy.cGet('.unoInsertColumnsAfter').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('have.length', 4);
+		cy.cGet('.table-column-resize-marker').should('have.length', 4);
 		selectFullTable();
 		// Check rows / columns
 		cy.cGet('#copy-paste-container tr').should('have.length', 3);
@@ -105,7 +105,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		helper.setDummyClipboardForCopy();
 		openTablePanel();
 		cy.cGet('.unoDeleteRows').click();
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should('have.length', 2);
+		cy.cGet('.table-row-resize-marker').should('have.length', 2);
 
 		selectFullTable();
 
@@ -124,25 +124,28 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Change table properties / l
 		// Insert column first
 		openTablePanel();
 		cy.cGet('.unoInsertColumnsBefore').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('have.length', 4);
+		cy.cGet('.table-column-resize-marker').should('have.length', 4);
 		// Then delete it
 		mobileHelper.closeMobileWizard();
 		openTablePanel();
 		cy.cGet('.unoDeleteColumns').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('have.length', 3);
+		cy.cGet('.table-column-resize-marker').should('have.length', 3);
 	});
 
 	it('Delete table.', function() {
 		before('writer/table_properties.odt');
 		openTablePanel();
 		cy.cGet('.unoDeleteTable').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('not.exist');
+		cy.cGet('.table-column-resize-marker').should('not.exist');
 		mobileHelper.closeMobileWizard();
 		writerHelper.selectAllTextOfDoc();
 		// Check markers are in the same row (we have text selection only)
-		cy.cGet('.html-object-section').should(function(markers) {
-				expect(markers).to.have.lengthOf(2);
-				expect(markers[0].getBoundingClientRect().top).to.equal(markers[1].getBoundingClientRect().top);
+		cy.cGet('.text-selection-handle-start').then(function(startHandle) {
+				expect(startHandle).to.have.lengthOf(1);
+				cy.cGet('.text-selection-handle-end').should(function(endHandle) {
+					expect(endHandle).to.have.lengthOf(1);
+					expect(startHandle[0].getBoundingClientRect().top).to.equal(endHandle[0].getBoundingClientRect().top);
+				});
 			});
 	});
 

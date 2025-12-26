@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -12,89 +13,97 @@
  * Control.ColumnHeader
  */
 
-/* global _UNO app UNOModifier */
+/* global _UNO app */
 namespace cool {
 
 export class ColumnHeader extends Header {
-	name: string = L.CSections.ColumnHeader.name;
-	anchor: Array<Array<string>> = [[L.CSections.ColumnGroup.name, 'bottom', 'top'], [L.CSections.CornerHeader.name, 'right', 'left']];
+	anchor: Array<Array<string>> = [[app.CSections.ColumnGroup.name, 'bottom', 'top'], [app.CSections.CornerHeader.name, 'right', 'left']];
 	position: number[] = [0, 0]; // This section's myTopLeft is placed according to corner header and column group sections.
 	size: number[] = [0, 19 * app.dpiScale]; // No initial width is necessary.
 	expand: Array<string> = ['right']; // Expand horizontally.
-	processingOrder: number = L.CSections.ColumnHeader.processingOrder;
-	drawingOrder: number = L.CSections.ColumnHeader.drawingOrder;
-	zIndex: number = L.CSections.ColumnHeader.zIndex;
+	processingOrder: number = app.CSections.ColumnHeader.processingOrder;
+	drawingOrder: number = app.CSections.ColumnHeader.drawingOrder;
+	zIndex: number = app.CSections.ColumnHeader.zIndex;
 	cursor: string = 'col-resize';
 
 	_current: number;
-	_resizeHandleSize: number;
 	_selection: SelectionRange;
 
 	constructor(cursor?: string) {
-		super();
+		super(app.CSections.ColumnHeader.name);
 
 		if (cursor)
 			this.cursor = cursor;
 	}
 
 	onInitialize(): void {
-		this._map = L.Map.THIS;
+		this._map = window.L.Map.THIS;
 		this._isColumn = true;
 		this._current = -1;
-		this._resizeHandleSize = 15 * app.dpiScale;
+		this.resizeHandleSize = 15 * app.dpiScale;
 		this._selection = {start: -1, end: -1};
 		this._mouseOverEntry = null;
 		this._lastMouseOverIndex = undefined;
 		this._hitResizeArea = false;
 		this.sectionProperties.docLayer = this._map._docLayer;
 
-		this._selectionBackgroundGradient = [ '#3465A4', '#729FCF', '#004586' ];
-
-		this._map.on('move zoomchanged sheetgeometrychanged splitposchanged', this._updateCanvas, this);
-		this._map.on('darkmodechanged', this._reInitRowColumnHeaderStylesAfterModeChange, this);
-
-		this._initHeaderEntryStyles('spreadsheet-header-column');
-		this._initHeaderEntryHoverStyles('spreadsheet-header-column-hover');
-		this._initHeaderEntrySelectedStyles('spreadsheet-header-column-selected');
-		this._initHeaderEntryResizeStyles('spreadsheet-header-column-resize');
+		super.onInitialize();
 
 		this._menuItem = {
 			'.uno:InsertColumnsBefore': {
-				name: _UNO('.uno:InsertColumnsBefore', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:InsertColumnsBefore', 'spreadsheet', true), 'InsertColumnsBefore'),
+				isHtmlName: true,
 				callback: (this._insertColBefore).bind(this)
 			},
 			'.uno:InsertColumnsAfter': {
-				name: _UNO('.uno:InsertColumnsAfter', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:InsertColumnsAfter', 'spreadsheet', true), 'InsertColumnsAfter'),
+				isHtmlName: true,
 				callback: (this._insertColAfter).bind(this)
 			},
 			'.uno:DeleteColumns': {
-				name: _UNO('.uno:DeleteColumns', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:DeleteColumns', 'spreadsheet', true), 'DeleteColumns'),
+				isHtmlName: true,
 				callback: (this._deleteSelectedCol).bind(this)
 			},
 			'.uno:ColumnWidth': {
-				name: _UNO('.uno:ColumnWidth', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:ColumnWidth', 'spreadsheet', true), 'ColumnWidth'),
+				isHtmlName: true,
 				callback: (this._columnWidth).bind(this)
 			},
 			'.uno:SetOptimalColumnWidth': {
-				name: _UNO('.uno:SetOptimalColumnWidth', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:SetOptimalColumnWidth', 'spreadsheet', true), 'SetOptimalColumnWidth'),
+				isHtmlName: true,
 				callback: (this._optimalWidth).bind(this)
 			},
 			'.uno:HideColumn': {
-				name: _UNO('.uno:HideColumn', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:HideColumn', 'spreadsheet', true), 'HideColumn'),
+				isHtmlName: true,
 				callback: (this._hideColumn).bind(this)
 			},
 			'.uno:ShowColumn': {
-				name: _UNO('.uno:ShowColumn', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:ShowColumn', 'spreadsheet', true), 'ShowColumn'),
+				isHtmlName: true,
 				callback: (this._showColumn).bind(this)
 			},
 			'.uno:FreezePanes': {
-				name: _UNO('.uno:FreezePanes', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:FreezePanes', 'spreadsheet', true), 'FreezePanes'),
+				isHtmlName: true,
 				callback: (this._freezePanes).bind(this)
 			}
 		};
 
-		this._menuData = L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(this._menuItem, true, '');
+		this._menuData = window.L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(this._menuItem, true, '');
 		this._headerInfo = new cool.HeaderInfo(this._map, true /* isCol */);
+	}
+
+	isMouseOverResizeArea(start: number, end:number, position: number, entryIsCurrent: boolean) : boolean {
+		const isRTL = this.isCalcRTL();
+		// NOTE: From a geometric perspective resizeAreaStart is really "resizeAreaEnd" in RTL case.
+		let resizeAreaStart = isRTL ? Math.min(start + this.borderResizeHandle * app.dpiScale, end) : Math.max(start, end - this.borderResizeHandle * app.dpiScale);
+		if (entryIsCurrent || (window as any).mode.isMobile()) {
+			resizeAreaStart = isRTL ? start + this.resizeHandleSize : end - this.resizeHandleSize;
+		}
+		return isRTL ? (position < resizeAreaStart) : (position > resizeAreaStart);
 	}
 
 	drawHeaderEntry (entry: HeaderEntryData): void {
@@ -125,7 +134,7 @@ export class ColumnHeader extends Header {
 		this.context.fillRect(startX, 0, entry.size, this.size[1]);
 
 		// draw resize handle
-		const handleSize = this._resizeHandleSize;
+		const handleSize = this.resizeHandleSize;
 		if (entry.isCurrent && entry.size > 2 * handleSize && !this.inResize()) {
 			const center = isRTL ? startX + handleSize / 2 : startX + entry.size - handleSize / 2;
 			const y = 2 * app.dpiScale;
@@ -182,16 +191,7 @@ export class ColumnHeader extends Header {
 		return {left: left, right: right, top: top, bottom: bottom};
 	}
 
-	onDraw(): void {
-		this._headerInfo.forEachElement(function(elemData: HeaderEntryData): boolean {
-			this.drawHeaderEntry(elemData);
-			return false; // continue till last.
-		}.bind(this));
-
-		this.drawResizeLineIfNeeded();
-	}
-
-	onClick(point: number[], e: MouseEvent): void {
+	onClick(point: cool.SimplePoint, e: MouseEvent): void {
 		if (!this._mouseOverEntry)
 			return;
 
@@ -202,10 +202,10 @@ export class ColumnHeader extends Header {
 
 		let modifier = 0;
 		if (e.shiftKey) {
-			modifier += UNOModifier.SHIFT;
+			modifier += app.UNOModifier.SHIFT;
 		}
 		if (e.ctrlKey) {
-			modifier += UNOModifier.CTRL;
+			modifier += app.UNOModifier.CTRL;
 		}
 
 		this._selectColumn(col, modifier);
@@ -276,29 +276,18 @@ export class ColumnHeader extends Header {
 
 	setOptimalWidthAuto(): void {
 		if (this._mouseOverEntry) {
-			const column = this._mouseOverEntry.index;
-			if (!this._hitResizeArea) {
-				const command = {
-					Column: {
-						type: 'long',
-						value: column
-					},
-					Modifier: {
-						type: 'unsigned short',
-						value: 0
-					}
-				};
-				this._map.sendUnoCommand('.uno:SelectColumn', command);
-			}
-
 			const extra = {
-				aExtraHeight: {
+				aExtraWidth: {
 					type: 'unsigned short',
-					value: 0
+					value: 200
+				},
+				Column: {
+					type: 'unsigned short',
+					value: this._mouseOverEntry.index + 1 // 1-based
 				}
 			};
 
-			this._map.sendUnoCommand('.uno:SetOptimalColumnWidthDirect', extra);
+			this._map.sendUnoCommand('.uno:SetOptimalColumnWidth', extra);
 		}
 	}
 

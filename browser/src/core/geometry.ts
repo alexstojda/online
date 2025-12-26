@@ -41,6 +41,8 @@
 			* x => to get and set x.
 			* pX => to get and set x using core / canvas units. Internally, it is converted into twips.
 			* cX => to get and set x using CSS units. Internally, it is converted into twips.
+			* vX1, vX.., vY.. => to get the screen coordinates of the points. These properties can not be set, because they depend on the view.
+				-> Though sometimes we need to go from view to document. For that, we use canvasToDocumentX and canvasToDocumentY functions of the current view layout.
 		* Every type has its own sub functions:
 			* toArray (native-twips), cToArray (CSS), pToArray (core / canvas), containsPoint (takes number array as input), pContainsPoint, cContainsPoint and the like.
 		* twips is an integer unit. We also prefer integer types here, since other types are pixels.
@@ -61,11 +63,13 @@ namespace cool {
 export class SimplePoint {
 	private _x: number;
 	private _y: number;
+	public part: number; // Affects nothing. To be used in view layouts that redesign coordinate space.
 
 	// Constructor uses twips.
-	constructor(x: number, y: number) {
+	constructor(x: number, y: number, part = -1) {
 		this._x = Math.round(x);
 		this._y = Math.round(y);
+		this.part = part;
 	}
 
 	// twips.
@@ -101,7 +105,15 @@ export class SimplePoint {
 	public cToArray(): number[] { return [this.cX, this.cY]; }
 	public cDistanceTo(point: number[]): number { return Math.sqrt(Math.pow(this.cX - point[0], 2) + Math.pow(this.cY - point[1], 2)); }
 
-	public clone(): SimplePoint { return new SimplePoint(this._x, this._y); }
+	public clone(): SimplePoint { return new SimplePoint(this._x, this._y, this.part); }
+
+	public static fromCorePixels(point: Array<number>, part = -1): SimplePoint {
+		return new SimplePoint(Math.round(point[0] * app.pixelsToTwips), Math.round(point[1] * app.pixelsToTwips), part);
+	}
+
+	// View pixel.
+	public get vX(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewX(this) : this.pX; }
+	public get vY(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewY(this) : this.pY; }
 }
 
 /**
@@ -114,13 +126,15 @@ export class SimpleRectangle {
 	private _y1: number;
 	private _width: number;
 	private _height: number;
+	public part: number;
 
 	// Constructor uses twips.
-	constructor (x: number, y: number, width: number, height: number) {
+	constructor (x: number, y: number, width: number, height: number, part = -1) {
 		this._x1 = Math.round(x);
 		this._y1 = Math.round(y);
 		this._width = Math.round(width);
 		this._height = Math.round(height);
+		this.part = part;
 	}
 
 	// twips.
@@ -128,7 +142,7 @@ export class SimpleRectangle {
 	public set x1 (x1: number) { this._x1 = Math.round(x1); }
 
 	public get y1(): number { return this._y1; }
-	public set y1 (y1: number) { this._y1 += Math.round(y1); }
+	public set y1 (y1: number) { this._y1 = Math.round(y1); }
 
 	public get x2(): number { return (this._x1 + this._width); }
 	public set x2 (x2: number) { this._width = Math.round(x2) - this._x1; }
@@ -152,7 +166,9 @@ export class SimpleRectangle {
 	public containsX (x: number): boolean { return (Math.round(x) >= this.x1 && Math.round(x) <= this.x2); }
 	public containsY (y: number): boolean { return (Math.round(y) >= this.y1 && Math.round(y) <= this.y2); }
 	public containsRectangle(rectangle: number[]): boolean { return this.containsPoint([rectangle[0], rectangle[1]]) && this.containsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
-	public intersectsRectangle(rectangle: number[]): boolean { return this.containsPoint([rectangle[0], rectangle[1]]) || this.containsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
+	public intersectsRectangle(rectangle: number[]): boolean {
+		return app.LOUtil._doRectanglesIntersect(this.toArray(), rectangle);
+	}
 	public equals(rectangle: Array<number>): boolean { return this.x1 === Math.round(rectangle[0]) && this.y1 === Math.round(rectangle[1]) && this.width === Math.round(rectangle[2]) && this.height === Math.round(rectangle[3]); }
 
 	public moveTo (point: number[]): void { this._x1 = Math.round(point[0]); this._y1 = Math.round(point[1]); }
@@ -187,7 +203,9 @@ export class SimpleRectangle {
 	public pContainsX (x: number): boolean { return (Math.round(x) >= this.pX1 && Math.round(x) <= this.pX2); }
 	public pContainsY (y: number): boolean { return (Math.round(y) >= this.pY1 && Math.round(y) <= this.pY2); }
 	public pContainsRectangle(rectangle: number[]): boolean { return this.pContainsPoint([rectangle[0], rectangle[1]]) && this.pContainsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
-	public pIntersectsRectangle(rectangle: number[]): boolean { return this.pContainsPoint([rectangle[0], rectangle[1]]) || this.pContainsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
+	public pIntersectsRectangle(rectangle: number[]): boolean {
+		return app.LOUtil._doRectanglesIntersect(this.pToArray(), rectangle);
+	}
 	public pEquals(rectangle: Array<number>): boolean { return this.pX1 === Math.round(rectangle[0]) && this.pY1 === Math.round(rectangle[1]) && this.pWidth === Math.round(rectangle[2]) && this.pHeight === Math.round(rectangle[3]); }
 
 	public pMoveTo (point: number[]): void { this._x1 = Math.round(point[0] * app.pixelsToTwips); this._y1 = Math.round(point[1] * app.pixelsToTwips); }
@@ -222,16 +240,168 @@ export class SimpleRectangle {
 	public cContainsX (x: number): boolean { return (Math.round(x) >= this.cX1 && Math.round(x) <= this.cX2); }
 	public cContainsY (y: number): boolean { return (Math.round(y) >= this.cY1 && Math.round(y) <= this.cY2); }
 	public cContainsRectangle(rectangle: number[]): boolean { return this.cContainsPoint([rectangle[0], rectangle[1]]) && this.cContainsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
-	public cIntersectsRectangle(rectangle: number[]): boolean { return this.cContainsPoint([rectangle[0], rectangle[1]]) || this.cContainsPoint([rectangle[0] + rectangle[2], rectangle[1] + rectangle[3]]); }
+	public cIntersectsRectangle(rectangle: number[]): boolean {
+		return app.LOUtil._doRectanglesIntersect(this.cToArray(), rectangle);
+	}
 	public cEquals(rectangle: Array<number>): boolean { return this.cX1 === Math.round(rectangle[0]) && this.cY1 === Math.round(rectangle[this.y1]) && this.cWidth === Math.round(rectangle[2]) && this.cHeight === Math.round(rectangle[3]); }
 
 	public cMoveTo (point: number[]): void { this._x1 = Math.round(point[0] * app.dpiScale * app.pixelsToTwips); this._y1 = Math.round(point[1] * app.dpiScale * app.pixelsToTwips); }
 	public cMoveBy (point: number[]): void { this._x1 += Math.round(point[0] * app.dpiScale * app.pixelsToTwips); this._y1 += Math.round(point[1] * app.dpiScale * app.pixelsToTwips); }
 
-	public clone(): SimpleRectangle { return new SimpleRectangle(this.x1, this.y1, this.width, this.height); }
+	public clone(): SimpleRectangle { return new SimpleRectangle(this.x1, this.y1, this.width, this.height, this.part); }
+
+	public static fromCorePixels(rectangle: Array<number>, part = -1): SimpleRectangle {
+		return new SimpleRectangle(Math.round(rectangle[0] * app.pixelsToTwips), Math.round(rectangle[1] * app.pixelsToTwips), Math.round(rectangle[2] * app.pixelsToTwips), Math.round(rectangle[3] * app.pixelsToTwips), part);
+	}
+
+	// View pixel. 1..4 represents the 4 corners of the rectangle: TopLeft, TopRight, BottomLeft, BottomRight respectively.
+	public get v1X(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewX(new cool.SimplePoint(this.x1, this.y1)) : this.pX1; }
+	public get v1Y(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewY(new cool.SimplePoint(this.x1, this.y1)) : this.pY1; }
+	public get v2X(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewX(new cool.SimplePoint(this.x2, this.y1)) : this.pX2; }
+	public get v2Y(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewY(new cool.SimplePoint(this.x2, this.y1)) : this.pY1; }
+	public get v3X(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewX(new cool.SimplePoint(this.x1, this.y2)) : this.pX1; }
+	public get v3Y(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewY(new cool.SimplePoint(this.x1, this.y2)) : this.pY2; }
+	public get v4X(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewX(new cool.SimplePoint(this.x2, this.y2)) : this.pX2; }
+	public get v4Y(): number { return app.activeDocument.activeLayout ? app.activeDocument.activeLayout.documentToViewY(new cool.SimplePoint(this.x2, this.y2)) : this.pY2; }
+}
+
+/*
+	We have rectangle arrays in some places. We mostly combine these arrays in order to shape the border of a selection.
+	The merged result is a polygon. See ASCII art below for an example.
+
+	Rectangles (2):
+	___________________
+	|_________________|______
+	|________________________|
+
+	^ Combined result of above rectangles is (a polygon):
+	________________
+	|              |_______
+	|_____________________|
+
+	Give rectangles as array of rectangle arrays (x, y, width, height).
+	Converter constant is used to convert the result into CSS pixels/ Core pixels or twips.
+	Tolerance is used to determine if the rectangles are in the same row.
+*/
+export function rectanglesToPolygon(rectangles: Array<number[]>, converterConstant: number = 1, tolerance: number = 5): number[] {
+	/*
+		Here we can create a geometric function that handles all the edge cases.
+		But we don't need to.
+		Conditions:
+			* If the rectangles are in the same row:
+				* They should have same height.
+				* They can't have spaces between them.
+			* This code doesn't take holes in the polygon into account.
+		These conditions will ease our work.
+		In the future, we can expand our approach if we need to.
+	*/
+
+	/*
+		First, determine the rows.
+		Array of array of rectangles.
+	*/
+	const rowArray: Array<Array<number[]>> = [];
+	for (let i = 0; i < rectangles.length; i++) {
+		const rectangle = rectangles[i];
+		let found = false;
+		for (let j = 0; j < rowArray.length; j++) {
+			const row = rowArray[j];
+			if (Math.abs(row[0][1] - rectangle[1]) <= tolerance) {
+				row.push(rectangle);
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			rowArray.push([rectangle]);
+		}
+	}
+
+	const finalRows: Array<number[]> = [];
+	// Now we have rows. We will find the leftmost and rightmost points of each row and push them as rectangles.
+	for (let i = 0; i < rowArray.length; i++) {
+		let leftmost: number = rowArray[i][0][0];
+		let rightmost: number = rowArray[i][0][0] + rowArray[i][0][2];
+
+		for (let j = 1; j < rowArray[i].length; j++) {
+			const rectangle = rowArray[i][j];
+			if (rectangle[0] < leftmost) {
+				leftmost = rectangle[0];
+			}
+
+			if (rectangle[0] + rectangle[2] > rightmost) {
+				rightmost = rectangle[0] + rectangle[2];
+			}
+		}
+
+		finalRows.push([leftmost, rowArray[i][0][1], rightmost - leftmost, rowArray[i][0][3]]);
+	}
+
+	// Now we need to sort the rows by y.
+	for (let i = 0; i < finalRows.length; i++) {
+		for (let j = i + 1; j < finalRows.length; j++) {
+			if (finalRows[i][1] > finalRows[j][1]) {
+				const temp = finalRows[i];
+				finalRows[i] = finalRows[j];
+				finalRows[j] = temp;
+			}
+		}
+	}
+
+	// Now we need to merge the rows (the polygon).
+	const polygon: number[] = [];
+	for (let i = 0; i < finalRows.length; i++) { // From leftmost to bottom.
+		if (i === 0) {
+			// Draw top line, then continue from left to bottom.
+			polygon.push(finalRows[i][0] + finalRows[i][2]);
+			polygon.push(finalRows[i][1]);
+
+			polygon.push(finalRows[i][0]);
+			polygon.push(finalRows[i][1]);
+
+			polygon.push(finalRows[i][0]);
+			polygon.push(finalRows[i][1] + finalRows[i][3]);
+		}
+		else {
+			if (finalRows[i][0] !== polygon[polygon.length - 2] || finalRows[i][1] !== polygon[polygon.length - 1]) {
+				polygon.push(finalRows[i][0]);
+				polygon.push(finalRows[i][1]);
+			}
+
+			polygon.push(finalRows[i][0]);
+			polygon.push(finalRows[i][1] + finalRows[i][3]);
+		}
+
+		if (i === finalRows.length - 1) {
+			// Draw bottom line.
+			polygon.push(finalRows[i][0] + finalRows[i][2]);
+			polygon.push(finalRows[i][1] + finalRows[i][3]);
+		}
+	}
+
+	// Now we will draw from rightmost bottom to top.
+	for (let i = finalRows.length - 1; i >= 0; i--) {
+		if (finalRows[i][0] + finalRows[i][2] !== polygon[polygon.length - 2] || finalRows[i][1] + finalRows[i][3] !== polygon[polygon.length - 1]) {
+			polygon.push(finalRows[i][0] + finalRows[i][2]);
+			polygon.push(finalRows[i][1] + finalRows[i][3]);
+		}
+
+		polygon.push(finalRows[i][0] + finalRows[i][2]);
+		polygon.push(finalRows[i][1]);
+	}
+
+	// That's it. We should have drawn the polygon.
+
+	if (converterConstant !== 1) {
+		for (let i = 0; i < polygon.length; i++) {
+			polygon[i] = Math.round(converterConstant * polygon[i]);
+		}
+	}
+
+	//return [100, 100, 200, 100, 200, 200, 100, 200]; // Test polygon (to see if caller function draws it correctly).;
+
+	return polygon;
 }
 
 }
-
-app.definitions.simpleRectangle = cool.SimpleRectangle;
-app.definitions.simplePoint = cool.SimplePoint;

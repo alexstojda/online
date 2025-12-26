@@ -88,7 +88,7 @@ var AdminClusterOverview = AdminSocketBase.extend({
         if (server.podname) {
             cardTitle.textContent = server.podname;
         } else {
-            console.warn('podname doesnot exist, using serverId instead of podname on card title');
+            console.warn('podname does not exist, using serverId instead of podname on card title');
             cardTitle.textContent = server.serverId;
         }
         cardHeader.appendChild(cardTitle);
@@ -103,7 +103,7 @@ var AdminClusterOverview = AdminSocketBase.extend({
         var cpuSubTitle = document.createElement('p');
         cpuSubTitle.className = 'tile is-fullwidth subtitle';
         cpuSubTitle.textContent = _('CPU History');
-        cpuSubTitle.setAttribute('style', 'margin-bottom: 0rem !important');
+        cpuSubTitle.style.marginBottom = '0rem !important';
 
         mainTile.appendChild(cpuSubTitle);
 
@@ -114,7 +114,8 @@ var AdminClusterOverview = AdminSocketBase.extend({
         var memorySubTitle = document.createElement('p');
         memorySubTitle.className = 'tile is-fullwidth subtitle';
         memorySubTitle.textContent = _('Memory History');
-        memorySubTitle.setAttribute('style', 'margin-bottom: 0rem !important; margin-top:1.5rem');
+        memorySubTitle.style.marginBottom = '0rem !important';
+        memorySubTitle.style.marginTop = '1.5rem';
 
         mainTile.appendChild(memorySubTitle);
 
@@ -123,10 +124,10 @@ var AdminClusterOverview = AdminSocketBase.extend({
 
         var horizontalTile = document.createElement('div');
         horizontalTile.className = 'tile is-fullwidth';
-        var routeTokenTile = this.createTile(_('RouteToken'), server.routeToken, 'route');
+        var routeTokenTile = this.createTile('RouteToken', server.routeToken, 'route');
         horizontalTile.appendChild(routeTokenTile);
 
-        var serverIdTile = this.createTile(_('ServerId'), server.serverId, 'serverId');
+        var serverIdTile = this.createTile('ServerId', server.serverId, 'serverId');
         horizontalTile.appendChild(serverIdTile);
 
         cardContent.appendChild(mainTile);
@@ -214,7 +215,7 @@ var AdminClusterOverview = AdminSocketBase.extend({
             cpuStat.appendChild(spanforBullet);
             cpuStat.appendChild(spanforText);
             tileParent.appendChild(cpuStat);
-        } else if (graphName == 'mem') {
+        } else { // 'mem'
             var memStat = document.createElement('p');
             memStat.className = 'pb-1 has-text-right';
             spanforBullet.style = 'color:green';
@@ -244,7 +245,7 @@ var AdminClusterOverview = AdminSocketBase.extend({
                     return d + '%';
                 });
             yAxisGenerator.ticks(3);
-        } else if (graphName == 'mem') {
+        } else { // 'mem'
             yAxisGenerator = d3.axisLeft(obj.yScale)
                 .tickFormat(function (d) {
                     return Util.humanizeMem(d);
@@ -405,7 +406,7 @@ var AdminClusterOverview = AdminSocketBase.extend({
         if (server.podname) {
             anchor.textContent = server.podname;
         } else {
-            console.warn('podname doesnot exist, using serverId instead of podname on anchor tag');
+            console.warn('podname does not exist, using serverId instead of podname on anchor tag');
             anchor.textContent = server.serverId;
         }
         return anchor;

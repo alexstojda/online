@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -23,7 +24,7 @@ export interface SelectionRange {
 	end: number,
 }
 
-export class Header extends app.definitions.canvasSectionObject {
+export class Header extends CanvasSectionObject {
 	_map: any;
 	_textColor: string;
 	_backgroundColor: string;
@@ -47,28 +48,46 @@ export class Header extends app.definitions.canvasSectionObject {
 	_dragDistance: number[];
 	_isColumn: boolean;
 	cursor: string;
+	resizeHandleSize: number;
+	borderResizeHandle = 3;
 
 	getFont: () => string;
 
-	constructor () {
-		super();
+	constructor (name: string) {
+		super(name);
 	}
+
+	onInitialize(): void {
+		this._selectionBackgroundGradient = [ '#3465A4', '#729FCF', '#004586' ];
+
+		this._map.on('move zoomchanged sheetgeometrychanged splitposchanged', this._updateCanvas, this);
+		this._map.on('darkmodechanged', this._reInitRowColumnHeaderStylesAfterModeChange, this);
+		this._map.on('statusupdated', this._handleStatusUpdated, this);
+
+		this._reInitRowColumnHeaderStylesAfterModeChange();
+	}
+
+	_handleStatusUpdated(): void {
+		this._reInitRowColumnHeaderStylesAfterModeChange();
+	}
+
+	isMouseOverResizeArea(start: number, end:number, position: number, entryIsCurrent: boolean): boolean {return false;}
 
 	_initHeaderEntryStyles (className: string): void {
 		const baseElem = document.getElementsByTagName('body')[0];
-		const elem = L.DomUtil.create('div', className, baseElem);
-		this._textColor = L.DomUtil.getStyle(elem, 'color');
-		this._backgroundColor = getComputedStyle(document.body).getPropertyValue('--color-background-darker');
-		const fontFamily = L.DomUtil.getStyle(elem, 'font-family');
+		const elem = window.L.DomUtil.create('div', className, baseElem);
+		this._textColor = window.L.DomUtil.getStyle(elem, 'color');
+		this._backgroundColor = window.L.DomUtil.getStyle(elem, 'background-color');
+		const fontFamily = window.L.DomUtil.getStyle(elem, 'font-family');
 		this.getFont = function() {
 			const selectedSize = this._getFontSize();
 			return selectedSize + 'px ' + fontFamily;
 		}.bind(this);
-		this._borderColor = L.DomUtil.getStyle(elem, 'border-top-color');
-		const borderWidth = L.DomUtil.getStyle(elem, 'border-top-width');
+		this._borderColor = window.L.DomUtil.getStyle(elem, 'border-top-color');
+		const borderWidth = window.L.DomUtil.getStyle(elem, 'border-top-width');
 		this._borderWidth = Math.round(parseFloat(borderWidth));
-		this._cursor = L.DomUtil.getStyle(elem, 'cursor');
-		L.DomUtil.remove(elem);
+		this._cursor = window.L.DomUtil.getStyle(elem, 'cursor');
+		window.L.DomUtil.remove(elem);
 	}
 
 	_getFontSize(): number {
@@ -84,18 +103,18 @@ export class Header extends app.definitions.canvasSectionObject {
 
 	_initHeaderEntryHoverStyles (className: string): void {
 		const baseElem = document.getElementsByTagName('body')[0];
-		const elem = L.DomUtil.create('div', className, baseElem);
-		this._hoverColor = getComputedStyle(document.body).getPropertyValue('--color-background-lighter');
-		L.DomUtil.remove(elem);
+		const elem = window.L.DomUtil.create('div', className, baseElem);
+		this._hoverColor = window.L.DomUtil.getStyle(elem, 'background-color');
+		window.L.DomUtil.remove(elem);
 	}
 
 	_initHeaderEntrySelectedStyles(className: string): void {
 		const baseElem = document.getElementsByTagName('body')[0];
-		const elem = L.DomUtil.create('div', className, baseElem);
-		this._selectionTextColor = L.DomUtil.getStyle(elem, 'color');
+		const elem = window.L.DomUtil.create('div', className, baseElem);
+		this._selectionTextColor = window.L.DomUtil.getStyle(elem, 'color');
 
 		const selectionBackgroundGradient: string[] = [];
-		let gradientColors: string = L.DomUtil.getStyle(elem, 'background-image');
+		let gradientColors: string = window.L.DomUtil.getStyle(elem, 'background-image');
 		gradientColors = gradientColors.slice('linear-gradient('.length, -1);
 		while (gradientColors) {
 			const color = gradientColors.split(',', 3);
@@ -108,7 +127,7 @@ export class Header extends app.definitions.canvasSectionObject {
 		if (selectionBackgroundGradient.length) {
 			this._selectionBackgroundGradient = selectionBackgroundGradient;
 		}
-		L.DomUtil.remove(elem);
+		window.L.DomUtil.remove(elem);
 	}
 
 	_initHeaderEntryResizeStyles (className: string): void {
@@ -117,17 +136,17 @@ export class Header extends app.definitions.canvasSectionObject {
 		}
 		else {
 			const baseElem = document.getElementsByTagName('body')[0];
-			const elem = L.DomUtil.create('div', className, baseElem);
-			this._resizeCursor = L.DomUtil.getStyle(elem, 'cursor');
-			L.DomUtil.remove(elem);
+			const elem = window.L.DomUtil.create('div', className, baseElem);
+			this._resizeCursor = window.L.DomUtil.getStyle(elem, 'cursor');
+			window.L.DomUtil.remove(elem);
 		}
 	}
 
 	_isRowColumnInSelectedRange (index: number): boolean {
-		return (!!this._headerInfo.getElementData(index).isCurrent) || (!!this._headerInfo.getElementData(index).isHighlighted);
+		return (!!this._headerInfo.getElementData(index)?.isCurrent) || (!!this._headerInfo.getElementData(index)?.isHighlighted);
 	}
 
-	onContextMenu(evt: MouseEvent): void {
+	onContextMenu(point: cool.SimplePoint, evt: MouseEvent): void {
 		if ((window as any).mode.isMobile() && this._map.isEditMode()) {
 			(window as any).contextMenuWizard = true;
 			this._map.fire('mobilewizard', {data: this._menuData});
@@ -147,18 +166,45 @@ export class Header extends app.definitions.canvasSectionObject {
 
 	_reInitRowColumnHeaderStylesAfterModeChange(): void {
 		// add a separation to update row/column DOM element info
+		var isSheetView = app.calc.isSelectedPartSheetView();
+		var isSheetViewSynced = app.calc.isSelectedPartSheetViewSynced();
+
 		if (this._isColumn) {
 			// update column DOM element info
-			this._initHeaderEntryStyles('spreadsheet-header-column');
-			this._initHeaderEntryHoverStyles('spreadsheet-header-column-hover');
-			this._initHeaderEntrySelectedStyles('spreadsheet-header-column-selected');
+			if (isSheetView && !isSheetViewSynced) {
+				this._initHeaderEntryStyles('spreadsheet-header-sheetview-unsynced-column');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-sheetview-column-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-sheetview-column-selected');
+			}
+			else if (isSheetView) {
+				this._initHeaderEntryStyles('spreadsheet-header-sheetview-column');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-sheetview-column-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-sheetview-column-selected');
+			}
+			else {
+				this._initHeaderEntryStyles('spreadsheet-header-column');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-column-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-column-selected');
+			}
 			this._initHeaderEntryResizeStyles('spreadsheet-header-column-resize');
 		}
 		else {
 			// update row DOM element info
-			this._initHeaderEntryStyles('spreadsheet-header-row');
-			this._initHeaderEntryHoverStyles('spreadsheet-header-row-hover');
-			this._initHeaderEntrySelectedStyles('spreadsheet-header-row-selected');
+			if (isSheetView && !isSheetViewSynced) {
+				this._initHeaderEntryStyles('spreadsheet-header-sheetview-unsynced-row');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-sheetview-row-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-sheetview-row-selected');
+			}
+			else if (isSheetView) {
+				this._initHeaderEntryStyles('spreadsheet-header-sheetview-row');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-sheetview-row-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-sheetview-row-selected');
+			}
+			else {
+				this._initHeaderEntryStyles('spreadsheet-header-row');
+				this._initHeaderEntryHoverStyles('spreadsheet-header-row-hover');
+				this._initHeaderEntrySelectedStyles('spreadsheet-header-row-selected');
+			}
 			this._initHeaderEntryResizeStyles('spreadsheet-header-row-resize');
 		}
 	}
@@ -235,6 +281,8 @@ export class Header extends app.definitions.canvasSectionObject {
 
 		this._map.wholeRowSelected = true; // This variable is set early, state change will set this again.
 		this._map.sendUnoCommand('.uno:SelectRow ', command);
+		// Ensures the focus is returned to the map area after the row is selected
+		this._map.focus();
 	}
 
 	_insertRowAbove(): void {
@@ -378,6 +426,8 @@ export class Header extends app.definitions.canvasSectionObject {
 
 		this._map.wholeColumnSelected = true; // This variable is set early, state change will set this again.
 		this._map.sendUnoCommand('.uno:SelectColumn ', command);
+		// Ensures the focus is returned to the map area after the column is selected
+		this._map.focus();
 	}
 
 	_insertColBefore(): void {
@@ -430,12 +480,12 @@ export class Header extends app.definitions.canvasSectionObject {
 		this._map.sendUnoCommand('.uno:FreezePanes');
 	}
 
-	_entryAtPoint(point: number[]): PointEntryQueryResult {
+	_entryAtPoint(point: cool.SimplePoint): PointEntryQueryResult {
 		if (!this._headerInfo)
 			return undefined;
 
 		const isColumn = this._headerInfo._isColumn;
-		const position = isColumn ? point[0]: point[1];
+		const position = isColumn ? point.pX: point.pY;
 
 		let result:PointEntryQueryResult  = null;
 		const isRTL = isColumn && this.isCalcRTL();
@@ -443,13 +493,7 @@ export class Header extends app.definitions.canvasSectionObject {
 			const end = isRTL ? this.size[0] - entry.pos + entry.size : entry.pos;
 			const start = end - entry.size;
 			if (position >= start && position < end) {
-				// NOTE: From a geometric perspective resizeAreaStart is really "resizeAreaEnd" in RTL case.
-				let resizeAreaStart = isRTL ? Math.min(start + 3 * app.dpiScale, end) : Math.max(start, end - 3 * app.dpiScale);
-				if (entry.isCurrent || (window as any).mode.isMobile()) {
-					resizeAreaStart = isRTL ? start + this._resizeHandleSize : end - this._resizeHandleSize;
-				}
-				const isMouseOverResizeArea = isRTL ? (position < resizeAreaStart) : (position > resizeAreaStart);
-				result = {entry: entry, hit: isMouseOverResizeArea};
+				result = {entry: entry, hit: this.isMouseOverResizeArea(start, end, position, entry.isCurrent)};
 				return true;
 			}
 		}.bind(this));
@@ -460,16 +504,25 @@ export class Header extends app.definitions.canvasSectionObject {
 		return;
 	}
 
+	onDraw(): void {
+		this._headerInfo.forEachElement(function(elemData: HeaderEntryData): boolean {
+			this.drawHeaderEntry(elemData);
+			return false; // continue till last.
+		}.bind(this));
+
+		this.drawResizeLineIfNeeded();
+	}
+
 	onDragEnd (dragDistance: number[]): void {
 		return;
 	}
 
 	onMouseEnter(): void {
-		this.containerObject.getCanvasStyle().cursor = this._cursor;
+		this.context.canvas.style.cursor = this._cursor;
 		this._bindContextMenu();
 	}
 
-	onMouseLeave (point: number[]): void {
+	onMouseLeave (point: cool.SimplePoint): void {
 		if (point === null) { // This means that the mouse pointer is outside the canvas.
 			if (this.containerObject.isDraggingSomething() && this._dragEntry) { // Were we resizing a row / column before mouse left.
 				this.onDragEnd(this.containerObject.getDragDistance());
@@ -483,15 +536,19 @@ export class Header extends app.definitions.canvasSectionObject {
 			this._mouseOverEntry = null;
 		}
 		this._hitResizeArea = false;
-		this.containerObject.getCanvasStyle().cursor = 'default';
 	}
 
 	_bindContextMenu(): void {
+		if ((window as any).mode.isMobile() || this._map.isReadOnlyMode()) {
+			// On mobile, we use the mobile wizard rather than the context menu
+			return;
+		}
+
 		this._unBindContextMenu();
 		$.contextMenu({
 			selector: '#canvas-container',
 			className: 'cool-font',
-			zIndex: 10,
+			zIndex: 1500,
 			items: this._menuItem,
 			callback: function() { return; }
 		});
@@ -520,16 +577,17 @@ export class Header extends app.definitions.canvasSectionObject {
 		this.context.strokeStyle = 'darkblue';
 		this.context.beginPath();
 		this.context.moveTo(x, y);
-		this.context.lineTo(this._isColumn ? x: (isRTL ? -this.myTopLeft[0]: this.containerObject.getCanvasRight()), this._isColumn ? this.containerObject.getCanvasBottom(): y);
+		this.context.lineTo(this._isColumn ? x: (isRTL ? -this.myTopLeft[0]: this.containerObject.getWidth()), this._isColumn ? this.containerObject.getHeight(): y);
 		this.context.stroke();
 	}
 
-	onMouseMove (point: number[], dragDistance?: number[]): void {
+	onMouseMove (point: cool.SimplePoint, dragDistance?: number[]): void {
 		const result = this._entryAtPoint(point); // Data related to current entry that the mouse is over now.
 		if (result) { // Is mouse over an entry.
 			this._prevMouseOverEntry = this._mouseOverEntry;
 			this._mouseOverEntry = result.entry;
 		}
+		else return;
 
 		if (!this.containerObject.isDraggingSomething()) { // If we are not dragging anything.
 			this._dragDistance = null;
@@ -550,12 +608,12 @@ export class Header extends app.definitions.canvasSectionObject {
 			isMouseOverResizeArea = result.hit;
 
 			// cypress mobile emulation sometimes triggers resizing unintentionally.
-			if (L.Browser.cypressTest)
+			if (window.L.Browser.cypressTest)
 				return;
 
 			if (isMouseOverResizeArea !== this._hitResizeArea) { // Do we need to change cursor (to resize or pointer).
 				const cursor = isMouseOverResizeArea ? this._resizeCursor : this._cursor;
-				this.containerObject.getCanvasStyle().cursor = cursor;
+				this.context.canvas.style.cursor = cursor;
 				this._hitResizeArea = isMouseOverResizeArea;
 			}
 		}
@@ -567,7 +625,7 @@ export class Header extends app.definitions.canvasSectionObject {
 				return;
 			if (this._dragEntry)
 				return;
-			const modifier = typeof this._lastSelectedIndex === 'number' && this._lastSelectedIndex >= 0 ? UNOModifier.SHIFT : 0;
+			const modifier = typeof this._lastSelectedIndex === 'number' && this._lastSelectedIndex >= 0 ? app.UNOModifier.SHIFT : 0;
 			this._lastSelectedIndex = this._mouseOverEntry.index;
 			this.selectIndex(this._mouseOverEntry.index, modifier);
 		}
@@ -589,12 +647,12 @@ export class Header extends app.definitions.canvasSectionObject {
 		this._isColumn ? this.setOptimalWidthAuto(): this.setOptimalHeightAuto();
 	}
 
-	onMouseDown (point: number[]): void {
+	onMouseDown (point: cool.SimplePoint): void {
 		this.onMouseMove(point);
 
 		if (this._hitResizeArea) {
-			L.DomUtil.disableImageDrag();
-			L.DomUtil.disableTextSelection();
+			window.L.DomUtil.disableImageDrag();
+			window.L.DomUtil.disableTextSelection();
 
 			// When code is here, this._mouseOverEntry should never be null.
 
@@ -614,17 +672,15 @@ export class Header extends app.definitions.canvasSectionObject {
 	}
 
 	onMouseUp(): void {
-		L.DomUtil.enableImageDrag();
-		L.DomUtil.enableTextSelection();
+		window.L.DomUtil.enableImageDrag();
+		window.L.DomUtil.enableTextSelection();
+
+		this._map.fire('closepopups'); // close all popups if a row/column header is selected
 
 		if (this.containerObject.isDraggingSomething() && this._dragEntry) {
 			this.onDragEnd(this.containerObject.getDragDistance());
 			this._dragEntry = null;
 		}
-	}
-
-	onNewDocumentTopLeft(): void {
-		return;
 	}
 }
 
@@ -717,7 +773,7 @@ export class HeaderInfo {
 		let scale: number;
 		if (tsManager._inZoomAnim) {
 			const viewBounds = ctx.viewBounds;
-			const freePaneBounds = new L.Bounds(viewBounds.min.add(ctx.splitPos), viewBounds.max);
+			const freePaneBounds = new cool.Bounds(viewBounds.min.add(ctx.splitPos), viewBounds.max);
 
 			scale = tsManager._zoomFrameScale;
 
@@ -736,8 +792,8 @@ export class HeaderInfo {
 				: zoomPos.topLeft.y;
 		} else {
 			startPx = this._isColumn ?
-				section.documentTopLeft[0] + splitPos
-				: section.documentTopLeft[1] + splitPos;
+				app.activeDocument.activeLayout.viewedRectangle.pX1 + splitPos
+				: app.activeDocument.activeLayout.viewedRectangle.pY1 + splitPos;
 			scale = 1;
 		}
 
@@ -747,7 +803,8 @@ export class HeaderInfo {
 
 		this._docVisStart = startPx;
 		let startIdx = this._dimGeom.getIndexFromPos(startPx, 'corepixels');
-		const endIdx = Math.min(this._dimGeom.getIndexFromPos(endPx - 1, 'corepixels'), 1048576 - 1);
+		const maxIndex = this._isColumn ? this._map._docLayer.sheetGeometry.maxVisibleColumnIndex : this._map._docLayer.sheetGeometry.maxVisibleRowIndex;
+		const endIdx = Math.min(this._dimGeom.getIndexFromPos(endPx - 1, 'corepixels'), 1048576 - 1, maxIndex);
 		this._elements = [];
 
 		this._hasSplits = false;
@@ -914,6 +971,3 @@ export class HeaderInfo {
 }
 
 }
-
-L.Control.Header = cool.Header;
-L.Control.Header.HeaderInfo = cool.HeaderInfo;

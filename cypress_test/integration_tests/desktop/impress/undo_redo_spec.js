@@ -1,4 +1,4 @@
-/* global describe it beforeEach require */
+/* global describe it beforeEach require cy */
 
 var helper = require('../../common/helper');
 var impressHelper = require('../../common/impress_helper');
@@ -7,21 +7,45 @@ var repairHelper = require('../../common/repair_document_helper');
 
 describe(['tagdesktop'], 'Editing Operations', function() {
 
+	function expectInitialText() {
+		impressHelper.triggerNewSVGForShapeInTheCenter();
+		impressHelper.dblclickOnSelectedShape();
+		helper.typeIntoDocument('{ctrl+a}');
+		helper.copy();
+		helper.clipboardTextShouldBeDifferentThan('Hello World');
+	}
+
+	function expectTypedText() {
+		cy.log('expectTypedText - START');
+
+		impressHelper.triggerNewSVGForShapeInTheCenter();
+		impressHelper.dblclickOnSelectedShape();
+		helper.typeIntoDocument('{ctrl+a}');
+		helper.copy();
+
+		impressHelper.dblclickOnSelectedShape();
+		helper.expectTextForClipboard('Hello World');
+
+		cy.log('expectTypedText - END');
+	}
+
 	beforeEach(function() {
 		helper.setupAndLoadDocument('impress/undo_redo.odp');
-		desktopHelper.switchUIToCompact();
-		desktopHelper.selectZoomLevel('30');
+		// close the default slide-sorter navigation sidebar
+		desktopHelper.closeNavigatorSidebar();
+		desktopHelper.selectZoomLevel('30', false);
+
 		impressHelper.selectTextShapeInTheCenter();
+		cy.wait(500); // Wait a little for server response.
 		impressHelper.dblclickOnSelectedShape();
 	});
 
 	function undo() {
+		cy.wait(500); // Same, wait for server response.
 		helper.typeIntoDocument('Hello World');
-		impressHelper.dblclickOnSelectedShape();
-		helper.typeIntoDocument('{ctrl}z');
-		impressHelper.dblclickOnSelectedShape();
-		helper.copy();
-		helper.clipboardTextShouldBeDifferentThan('Hello World');
+		expectTypedText();
+		helper.typeIntoDocument('{ctrl+z}');
+		expectInitialText();
 	}
 
 	it('Undo', function() {
@@ -32,23 +56,20 @@ describe(['tagdesktop'], 'Editing Operations', function() {
 	it('Redo', function() {
 		helper.setDummyClipboardForCopy();
 		undo();
-		helper.typeIntoDocument('{ctrl}y');
-		impressHelper.selectTextOfShape();
-		helper.copy();
-		helper.expectTextForClipboard('Hello World');
+		helper.typeIntoDocument('{ctrl+y}');
+		cy.wait(500); // Wait a little for server response.
+		expectTypedText();
 	});
 
 	it('Repair Document', function() {
 		helper.setDummyClipboardForCopy();
 		helper.typeIntoDocument('Hello World');
 		impressHelper.triggerNewSVGForShapeInTheCenter();
-		impressHelper.selectTextOfShape();
+		impressHelper.dblclickOnSelectedShape();
 		helper.typeIntoDocument('Overwrite Text');
 		impressHelper.triggerNewSVGForShapeInTheCenter();
-		repairHelper.rollbackPastChange('Undo');
+		repairHelper.rollbackPastChange('Undo', false, true);
 		impressHelper.triggerNewSVGForShapeInTheCenter();
-		impressHelper.selectTextOfShape();
-		helper.copy();
-		helper.expectTextForClipboard('Hello World');
+		expectTypedText();
 	});
 });

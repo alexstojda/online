@@ -13,7 +13,18 @@
 
 #include <config.h>
 
-#include <unistd.h>
+#include <common/HexUtil.hpp>
+#include <common/Log.hpp>
+#include <common/Util.hpp>
+#include <common/Protocol.hpp>
+#include <net/ServerSocket.hpp>
+#include <net/WebSocketHandler.hpp>
+#if !MOBILEAPP
+#include <net/HttpHelper.hpp>
+#endif
+#if ENABLE_SSL
+#include <net/SslSocket.hpp>
+#endif
 
 #include <Poco/URI.h>
 #include <Poco/MemoryStream.h>
@@ -21,19 +32,7 @@
 #include <Poco/Net/HTTPResponse.h>
 #include <Poco/Util/XMLConfiguration.h>
 
-#include <Log.hpp>
-#include <Util.hpp>
-#include <Protocol.hpp>
-#include <ServerSocket.hpp>
-#include <WebSocketHandler.hpp>
-#if !MOBILEAPP
-#include <net/HttpHelper.hpp>
-#endif
-#if ENABLE_SSL
-#  include <SslSocket.hpp>
-#endif
-
-SocketPoll DumpSocketPoll("websocket");
+#include <unistd.h>
 
 // Dumps incoming websocket messages and doesn't respond.
 class DumpSocketHandler : public WebSocketHandler
@@ -41,7 +40,7 @@ class DumpSocketHandler : public WebSocketHandler
 public:
     DumpSocketHandler(const std::weak_ptr<StreamSocket>& socket,
                       const Poco::Net::HTTPRequest& request)
-        : WebSocketHandler(socket.lock(), request)
+        : WebSocketHandler(socket.lock(), request, true)
     {
     }
 
@@ -50,7 +49,7 @@ private:
     void handleMessage(const std::vector<char> &data) override
     {
         std::cout << "WebSocket message data:\n";
-        Util::dumpHex(std::cout, data, "", "    ", false);
+        HexUtil::dumpHex(std::cout, data, "", "    ", false);
     }
 };
 
@@ -71,6 +70,17 @@ private:
         LOG_TRC('#' << socket->getFD() << " Connected to ClientRequestDispatcher.");
     }
 
+    void onDisconnect() override
+    {
+        LOG_TRC("ClientRequestDispatcher disconnected");
+        std::shared_ptr<StreamSocket> socket = _socket.lock();
+        if (socket)
+        {
+            socket->asyncShutdown(); // Flag for shutdown for housekeeping in SocketPoll.
+            socket->shutdownConnection(); // Immediately disconnect.
+        }
+    }
+
     /// Called after successful socket reads.
     void handleIncomingMessage(SocketDisposition &disposition) override
     {
@@ -85,7 +95,7 @@ private:
         LOG_TRC('#' << socket->getFD() << " handling incoming " << in.size() << " bytes.");
 
         // Find the end of the header, if any.
-        static const std::string marker("\r\n\r\n");
+        constexpr std::string_view marker("\r\n\r\n");
         auto itBody = std::search(in.begin(), in.end(),
                                   marker.begin(), marker.end());
         if (itBody == in.end())
@@ -97,7 +107,7 @@ private:
         // Skip the marker.
         itBody += marker.size();
 
-        Poco::MemoryInputStream message(&in[0], in.size());
+        Poco::MemoryInputStream message(in.data(), in.size());
         Poco::Net::HTTPRequest request;
         try
         {
@@ -193,13 +203,13 @@ public:
 #if ENABLE_SSL
         if (_isSSL)
             return StreamSocket::create<SslStreamSocket>(
-                std::string(), physicalFd, type, false,
+                std::string(), physicalFd, type, false, HostType::Other,
                 std::make_shared<ClientRequestDispatcher>());
 #else
         (void)_isSSL;
 #endif
         return StreamSocket::create<StreamSocket>(
-            std::string(), physicalFd, type, false,
+            std::string(), physicalFd, type, false, HostType::Other,
             std::make_shared<ClientRequestDispatcher>());
     }
 };
@@ -224,12 +234,15 @@ int main (int argc, char **argv)
 {
     (void) argc; (void) argv;
 
+    std::shared_ptr<SocketPoll> DumpSocketPoll = std::make_shared<SocketPoll>("websocket");
+
     if (!UnitWSD::init(UnitWSD::UnitType::Wsd, ""))
     {
         throw std::runtime_error("Failed to load wsd unit test library.");
     }
 
     Log::initialize("WebSocketDump", "trace", true, false,
+                    std::map<std::string, std::string>(), false,
                     std::map<std::string, std::string>());
 
     CoolConfig config;
@@ -260,11 +273,13 @@ int main (int argc, char **argv)
                                               ssl::CertificateVerification::Disabled);
 #endif
 
-    SocketPoll acceptPoll("accept");
+    std::shared_ptr<SocketPoll> acceptPoll = std::make_shared<SocketPoll>("accept");
 
     // Setup listening socket with a factory for connected sockets.
     auto serverSocket = std::make_shared<ServerSocket>(
-        Socket::Type::All, DumpSocketPoll,
+        Socket::Type::All,
+        std::chrono::steady_clock::now(),
+        *DumpSocketPoll,
         std::make_shared<DumpSocketFactory>(isSSL));
 
     if (!serverSocket->bind(ServerSocket::Type::Public, port))
@@ -279,12 +294,12 @@ int main (int argc, char **argv)
         return -1;
     }
 
-    acceptPoll.startThread();
-    acceptPoll.insertNewSocket(serverSocket);
+    acceptPoll->startThread();
+    acceptPoll->insertNewSocket(serverSocket);
 
     while (true)
     {
-        DumpSocketPoll.poll(std::chrono::seconds(100));
+        DumpSocketPoll->poll(std::chrono::seconds(100));
     }
 }
 

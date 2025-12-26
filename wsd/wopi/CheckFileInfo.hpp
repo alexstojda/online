@@ -11,8 +11,6 @@
 
 #pragma once
 
-#include <chrono>
-#include <condition_variable>
 #if MOBILEAPP
 #error This file should be excluded from Mobile App builds
 #endif // MOBILEAPP
@@ -31,21 +29,21 @@
 #include <memory>
 #include <string>
 
-class CheckFileInfo
+class CheckFileInfo : public std::enable_shared_from_this<CheckFileInfo>
 {
 public:
     /// The CheckFileInfo State.
-    STATE_ENUM(State, None, Active, Timedout, Fail, Pass);
+    STATE_ENUM(State, None, Active, Timedout, Unauthorized, Fail, Pass);
 
     /// Create an instance with a SocketPoll and a RequestDetails instance.
     CheckFileInfo(const std::shared_ptr<TerminatingPoll>& poll, const Poco::URI& url,
                   std::function<void(CheckFileInfo&)> onFinishCallback)
-        : _poll(poll)
-        , _url(url)
+        : _url(url)
+        , _profileZone("WopiStorage::getWOPIFileInfo", { { "url", url.toString() } })
+        , _poll(poll)
         , _docKey(RequestDetails::getDocKey(url))
         , _onFinishCallback(std::move(onFinishCallback))
         , _state(State::None)
-        , _profileZone("WopiStorage::getWOPIFileInfo", { { "url", url.toString() } })
     {
         assert(_url == RequestDetails::sanitizeURI(url.toString()) && "Expected sanitized URL");
 
@@ -69,6 +67,7 @@ public:
     std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo(const Poco::URI& uriPublic) const;
 
     /// Start the actual request.
+    /// Return false if we couldn't start it.
     bool checkFileInfo(int redirectionLimit);
 
     /// Start the request and wait for the response.
@@ -91,12 +90,17 @@ private:
         }
     }
 
-    std::shared_ptr<TerminatingPoll> _poll;
-    Poco::URI _url; //< Sanitized URL to the document. Can change through redirection.
-    const std::string _docKey; //< Unique DocKey.
-    std::function<void(CheckFileInfo&)> _onFinishCallback;
-    std::shared_ptr<http::Session> _httpSession;
-    std::atomic<State> _state;
-    Poco::JSON::Object::Ptr _wopiInfo;
+    /// Parses the CheckFileInfo response and validates it.
+    bool parseResponseAndValidate(const std::string& response);
+
+    Poco::URI _url; ///< Sanitized URL to the document. Can change through redirection.
     ProfileZone _profileZone;
+    std::shared_ptr<http::Session> _httpSession;
+    std::shared_ptr<TerminatingPoll> _poll;
+    const std::string _docKey; ///< Unique DocKey.
+    std::function<void(CheckFileInfo&)> _onFinishCallback;
+    Poco::JSON::Object::Ptr _wopiInfo;
+    std::atomic<State> _state;
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

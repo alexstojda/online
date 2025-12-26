@@ -25,6 +25,7 @@ import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Insets;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Build;
@@ -42,6 +43,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -62,6 +64,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.BufferedWriter;
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
@@ -69,17 +72,24 @@ import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.charset.Charset;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.core.view.WindowCompat;
 
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.libreoffice.androidlib.lok.LokClipboardData;
 import org.libreoffice.androidlib.lok.LokClipboardEntry;
 
@@ -113,6 +123,7 @@ public class LOActivity extends AppCompatActivity {
 
     private String urlToLoad;
     private COWebView mWebView = null;
+    private MobileSocket mMobileSocket = null;
     private SharedPreferences sPrefs;
     private Handler mMainHandler = null;
     private RateAppController rateAppController;
@@ -245,6 +256,28 @@ public class LOActivity extends AppCompatActivity {
         else
             this.rateAppController = null;
         this.mActivity = this;
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (!documentLoaded) {
+                    finishAndRemoveTask();
+                    return;
+                }
+
+                if (mMobileWizardVisible) {
+                    // just return one level up in the mobile-wizard (or close it)
+                    callFakeWebsocketOnMessage("mobile: mobilewizardback");
+                    return;
+                } else if (mIsEditModeActive) {
+                    callFakeWebsocketOnMessage("mobile: readonlymode");
+                    return;
+                }
+
+                finishWithProgress();
+            }
+        });
+
         init();
     }
 
@@ -348,6 +381,27 @@ public class LOActivity extends AppCompatActivity {
         {
             mWebView = (COWebView) findViewById(R.id.browser);
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                mWebView.setOnApplyWindowInsetsListener((v, windowInsets) -> {
+                    Insets insets = windowInsets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime() | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ? WindowInsets.Type.systemOverlays() : 0));
+
+                    ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) v.getLayoutParams();
+                    mlp.leftMargin = insets.left;
+                    mlp.topMargin = insets.top;
+                    mlp.rightMargin = insets.right;
+                    mlp.bottomMargin = insets.bottom;
+                    v.setLayoutParams(mlp);
+
+                    return WindowInsets.CONSUMED;
+                });
+
+                boolean lightMode = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_YES) == 0;
+                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView()).setAppearanceLightStatusBars(lightMode);
+                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView()).setAppearanceLightNavigationBars(lightMode);
+            }
+
+            mMobileSocket = mWebView.getWebViewClient().getMobileSocket();
+
             WebSettings webSettings = mWebView.getSettings();
             webSettings.setJavaScriptEnabled(true);
             mWebView.addJavascriptInterface(this, "COOLMessageHandler");
@@ -415,7 +469,7 @@ public class LOActivity extends AppCompatActivity {
         Log.i(TAG, "onNewIntent");
 
         if (documentLoaded) {
-            postMobileMessageNative("save dontTerminateEdit=true dontSaveIfUnmodified=true");
+            postMobileMessageNative("save dontTerminateEdit=1 dontSaveIfUnmodified=1");
         }
 
         final Intent finalIntent = intent;
@@ -480,7 +534,7 @@ public class LOActivity extends AppCompatActivity {
                 OutputStream outputStream = null;
                 // CSV files need a .csv suffix to be opened in Calc.
                 String suffix = null;
-                String intentType = mActivity.getIntent().getType();
+                @Nullable String intentType = mActivity.getIntent().getType();
                 if (mActivity.getIntent().getType() == null) {
                     intentType = getMimeType();
                 }
@@ -607,7 +661,7 @@ public class LOActivity extends AppCompatActivity {
     protected void onPause() {
         // A Save similar to an autosave
         if (documentLoaded)
-            postMobileMessageNative("save dontTerminateEdit=true dontSaveIfUnmodified=true");
+            postMobileMessageNative("save dontTerminateEdit=1 dontSaveIfUnmodified=1");
 
         super.onPause();
         Log.d(TAG, "onPause() - hinting to save, we might need to return to the doc");
@@ -627,6 +681,7 @@ public class LOActivity extends AppCompatActivity {
             viewGroup.removeView(mWebView);
         mWebView.destroy();
         mWebView = null;
+        mMobileSocket = null;
 
         // Most probably the native part has already got a 'BYE' from
         // finishWithProgress(), but it is actually better to send it twice
@@ -659,11 +714,11 @@ public class LOActivity extends AppCompatActivity {
         boolean requestCopy = false;
         if (requestCode == REQUEST_COPY) {
             requestCopy = true;
-            if (getMimeType().equals("text/plain")) {
+            if (Objects.equals(getMimeType(), "text/plain")) {
                 requestCode = REQUEST_SAVEAS_ODT;
-            } else if (getMimeType().equals("text/comma-separated-values")) {
+            } else if (Objects.equals(getMimeType(), "text/comma-separated-values")) {
                 requestCode = REQUEST_SAVEAS_ODS;
-            } else if (getMimeType().equals("application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
+            } else if (Objects.equals(getMimeType(), "application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
                 requestCode = REQUEST_SAVEAS_ODS;
             } else {
                 String filename = getFileName(true);
@@ -739,7 +794,7 @@ public class LOActivity extends AppCompatActivity {
                         // This will actually change the doc permission to write
                         // It's a toggle for blue edit button, but also changes permission
                         // Toggle is achieved by calling setPermission('edit') in javascript
-                        callFakeWebsocketOnMessage("'mobile: readonlymode'");
+                        callFakeWebsocketOnMessage("mobile: readonlymode");
                         isDocEditable = true;
                     }
                     return;
@@ -801,25 +856,6 @@ public class LOActivity extends AppCompatActivity {
                 finishAndRemoveTask();
             }
         });
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (!documentLoaded) {
-            finishAndRemoveTask();
-            return;
-        }
-
-        if (mMobileWizardVisible) {
-            // just return one level up in the mobile-wizard (or close it)
-            callFakeWebsocketOnMessage("'mobile: mobilewizardback'");
-            return;
-        } else if (mIsEditModeActive) {
-            callFakeWebsocketOnMessage("'mobile: readonlymode'");
-            return;
-        }
-
-        finishWithProgress();
     }
 
     private void loadDocument() {
@@ -959,57 +995,85 @@ public class LOActivity extends AppCompatActivity {
      * Passing message the other way around - from Java to the FakeWebSocket in JS.
      */
     void callFakeWebsocketOnMessage(final String message) {
-        // call from the UI thread
-        if (mWebView != null)
-            mWebView.post(new Runnable() {
-                public void run() {
-                    if (mWebView == null) {
-                        Log.i(TAG, "Skipped forwarding to the WebView: " + message);
-                        return;
-                    }
+        rawCallFakeWebsocketOnMessage(message.getBytes());
+    }
 
-                    Log.i(TAG, "Forwarding to the WebView: " + message);
-
-                    /* Debug only: in case the message is too long, truncated in the logcat, and you need to see it.
-                    final int size = 80;
-                    for (int start = 0; start < message.length(); start += size) {
-                        Log.i(TAG, "split: " + message.substring(start, Math.min(message.length(), start + size)));
-                    }
-                    */
-
-                    mWebView.loadUrl("javascript:window.TheFakeWebSocket.onmessage({'data':" + message + "});");
-                }
+    /**
+     * Similar to callFakeWebsocketOnMessage but 'message' is instead any expression evaluable as
+     * JavaScript. For example, you should use this to pass Base64ToArrayBuffer invocations to
+     * the fake websocket
+     */
+    void rawCallFakeWebsocketOnMessage(final byte[] message) {
+        try {
+            mMobileSocket.queueSend(message, () -> {
+                mWebView.post(() -> {
+                    mWebView.loadUrl("javascript:window.socket.doSend();");
+                });
             });
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
 
         // update progress bar when loading
-        if (message.startsWith("'progress") || message.startsWith("'error:")) {
-            runOnUiThread(new Runnable() {
-                public void run() {
-                    // FIXME: parse properly with JSONObject if starts progress:
-
-                    // update progress bar if it exists
-                    final String statusIndicatorSetValue = "'progress: { \"id\":\"setvalue\", \"value\":";
-                    if (message.startsWith(statusIndicatorSetValue)) {
-                        int start = statusIndicatorSetValue.length();
-                        int end = message.indexOf("}", start);
-
-                        int progress = 0;
-                        try {
-                            progress = Integer.parseInt(message.substring(start, end));
-                        } catch (Exception e) {
-                        }
-
-                        mProgressDialog.determinateProgress(progress);
-                    }
-                    else if (message.startsWith("'progress: { \"id\":\"finish\"") ||
-                             message.startsWith("'error:")) {
-                        mProgressDialog.dismiss();
-                        if (BuildConfig.GOOGLE_PLAY_ENABLED && rateAppController != null)
-                            rateAppController.askUserForRating();
-                    }
+        if (messageStartsWith(message, "progress")) {
+            runOnUiThread(() -> {
+                JSONObject messageJSON;
+                String messageID;
+                String messageString;
+                try {
+                    messageString = new String(message, "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                    throw new RuntimeException(e);
                 }
+
+                int jsonStart = messageString.indexOf("{");
+                if (jsonStart == -1) {
+                    return;
+                }
+
+                try {
+                    messageJSON = new JSONObject(messageString.substring(jsonStart));
+                    messageID = messageJSON.getString("id");
+                } catch (JSONException e) {
+                    return;
+                }
+
+                if (messageID.equals("finish")) {
+                    mProgressDialog.dismiss();
+                    if (BuildConfig.GOOGLE_PLAY_ENABLED && rateAppController != null)
+                        rateAppController.askUserForRating();
+                    return;
+                }
+
+                try {
+                    String text = messageJSON.getString("text");
+                    mProgressDialog.mTextView.setText(text);
+                } catch (JSONException ignored) {}
+
+                try {
+                    int progress = messageJSON.getInt("value");
+                    mProgressDialog.determinateProgress(progress);
+                } catch (JSONException ignored) {}
             });
+        } else if (messageStartsWith(message, "error:")) {
+            runOnUiThread(() -> mProgressDialog.dismiss());
         }
+    }
+
+    /**
+     * @param message The message to test for the prefix
+     * @param prefix The prefix to test for
+     * @return true if the decoded message starts with the prefix, else false
+     */
+    private static boolean messageStartsWith(byte[] message, String prefix) {
+        byte[] prefixBytes = prefix.getBytes();
+        for (int i = 0; i < prefixBytes.length; i++) {
+            if (message[i] != prefixBytes[i]) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -1027,9 +1091,6 @@ public class LOActivity extends AppCompatActivity {
                         LOActivity.this.initiatePrint();
                     }
                 });
-                return false;
-            case "SLIDESHOW":
-                initiateSlideShow();
                 return false;
             case "SAVE":
                 copyTempBackToIntent();
@@ -1111,7 +1172,7 @@ public class LOActivity extends AppCompatActivity {
         return true;
     }
 
-    public static void createNewFileInputDialog(Activity activity, final String defaultFileName, final String mimeType, final int requestCode) {
+    public static void createNewFileInputDialog(Activity activity, final String defaultFileName, final @Nullable String mimeType, final int requestCode) {
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
 
         // The mime type and category must be set
@@ -1138,9 +1199,13 @@ public class LOActivity extends AppCompatActivity {
         return builder;
     }
 
-    private String getMimeType() {
+    private @Nullable String getMimeType() {
         ContentResolver cR = getContentResolver();
-        return cR.getType(getIntent().getData());
+
+        Uri data = getIntent().getData();
+        if (data == null) return null;
+
+        return cR.getType(data);
     }
 
     private String getFileName(boolean withExtension) {
@@ -1176,21 +1241,20 @@ public class LOActivity extends AppCompatActivity {
 
     // readonly formats here
     private boolean canDocumentBeExported() {
-        if (getMimeType().equals("application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
+        if (Objects.equals(getMimeType(), "application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
             return false;
         }
         return true;
     }
 
-    private String getOdfExtensionForDocType(String mimeType)
+    private String getOdfExtensionForDocType(@Nullable String mimeType)
     {
         String extTemp = null;
-        if (mimeType.equals("text/plain")) {
+        if (Objects.equals(mimeType, "text/plain")) {
             extTemp = "odt";
-        }
-        else if (mimeType.equals("text/comma-separated-values")) {
+        } else if (Objects.equals(mimeType, "text/comma-separated-values")) {
             extTemp = "ods";
-        } else if (mimeType.equals("application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
+        } else if (Objects.equals(mimeType, "application/vnd.ms-excel.sheet.binary.macroenabled.12")) {
             extTemp = "ods";
         }
         return extTemp;
@@ -1296,34 +1360,11 @@ public class LOActivity extends AppCompatActivity {
         printManager.print("Document", printAdapter, new PrintAttributes.Builder().build());
     }
 
-    private void initiateSlideShow() {
-        mProgressDialog.indeterminate(R.string.loading);
-
-        nativeHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                Log.v(TAG, "saving svg for slideshow by " + Thread.currentThread().getName());
-                final String slideShowFileUri = new File(LOActivity.this.getCacheDir(), "slideShow.svg").toURI().toString();
-                LOActivity.this.saveAs(slideShowFileUri, "svg", null);
-                LOActivity.this.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        mProgressDialog.dismiss();
-                        Intent slideShowActIntent = new Intent(LOActivity.this, SlideShowActivity.class);
-                        slideShowActIntent.putExtra(SlideShowActivity.SVG_URI_KEY, slideShowFileUri);
-                        LOActivity.this.startActivity(slideShowActIntent);
-                    }
-                });
-            }
-        });
-    }
-
     /** Send message back to the shell (for example for the cloud save). */
     public void sendBroadcast(String event, String data) {
         Intent intent = new Intent(LO_ACTIVITY_BROADCAST);
         intent.putExtra(LO_ACTION_EVENT, event);
         intent.putExtra(LO_ACTION_DATA, data);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
 
     public native void saveAs(String fileUri, String format, String options);

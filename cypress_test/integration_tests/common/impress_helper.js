@@ -64,6 +64,18 @@ function assertNumberOfSlidePreviews(slides) {
 	cy.log('<< assertNumberOfSlidePreviews - end');
 }
 
+// Trigger mouse click on center of the screen
+// Does no checking as to what is or isn't found there
+function clickCenterOfSlide(modifiers) {
+	cy.cGet('#document-container')
+		.then(function(items) {
+			expect(items).to.have.length(1);
+			var XPos = (items[0].getBoundingClientRect().left + items[0].getBoundingClientRect().right) / 2;
+			var YPos = (items[0].getBoundingClientRect().top + items[0].getBoundingClientRect().bottom) / 2;
+			cy.cGet('body').click(XPos, YPos, modifiers);
+		});
+}
+
 // Select a text shape at the center of the slide / view.
 // This method triggers mouse click in the center to achive
 // a shape selection. It fails, if there is no shape there.
@@ -71,13 +83,7 @@ function selectTextShapeInTheCenter() {
 	cy.log('>> selectTextShapeInTheCenter - start');
 
 	// Click on the center of the slide to select the text shape there
-	cy.cGet('#document-container')
-		.then(function(items) {
-			expect(items).to.have.length(1);
-			var XPos = (items[0].getBoundingClientRect().left + items[0].getBoundingClientRect().right) / 2;
-			var YPos = (items[0].getBoundingClientRect().top + items[0].getBoundingClientRect().bottom) / 2;
-			cy.cGet('body').click(XPos, YPos);
-		});
+	clickCenterOfSlide( { } );
 
 	cy.cGet('#test-div-shape-handle-rotation').should('exist');
 	cy.cGet('#document-container svg g.Page g').should('exist');
@@ -102,7 +108,7 @@ function selectTableInTheCenter() {
 		return cy.cGet('.leaflet-cursor-container').should('be.visible');
 	});
 
-	cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should($el => { expect(Cypress.dom.isDetached($el)).to.eq(false); }).should('be.visible');
+	cy.cGet('.table-row-resize-marker').should($el => { expect(Cypress.dom.isDetached($el)).to.eq(false); }).should('be.visible');
 	cy.cGet('#document-container svg g.Page g').should('exist');
 
 	cy.log('<< selectTableInTheCenter - end');
@@ -113,21 +119,19 @@ function removeShapeSelection() {
 	cy.log('>> removeShapeSelection - start');
 
 	// Remove selection with clicking on the top-left corner of the slide
-	cy.waitUntil(function() {
-		cy.cGet('.leaflet-canvas-container canvas')
-			.then(function(items) {
-				var XPos = items[0].getBoundingClientRect().left + 10;
-				var YPos = items[0].getBoundingClientRect().top + 10;
-				cy.cGet('body').click(XPos, YPos);
-				cy.cGet('body').type('{esc}');
-				cy.cGet('body').type('{esc}');
-			});
+	cy.cGet('.leaflet-canvas-container canvas')
+		.then(function(items) {
+			var XPos = items[0].getBoundingClientRect().left + 10;
+			var YPos = items[0].getBoundingClientRect().top + 10;
+			cy.cGet('body').click(XPos, YPos);
+			cy.cGet('body').type('{esc}');
+			cy.cGet('body').type('{esc}');
+		});
 
-		return cy.cGet('#document-container')
-			.then(function(overlay) {
-				return overlay.children('svg').length === 0;
-			});
-	});
+	cy.cGet('#document-container')
+		.should(function(overlay) {
+			expect(overlay.children('svg').length).to.equal(0);
+		});
 
 	cy.cGet('.leaflet-drag-transform-marker').should('not.exist');
 
@@ -164,33 +168,15 @@ function selectTextOfShape() {
 	// Double click onto the selected shape
 	// Retry until the cursor appears and the text is selected
 	cy.waitUntil(function() {
-		cy.cGet('#canvas-container > svg').then(function(element) {
-			const x = parseInt(element[0].style.left.replace('px', '')) + parseInt(element[0].style.width.replace('px', '')) / 2;
-			const y = parseInt(element[0].style.top.replace('px', '')) + parseInt(element[0].style.height.replace('px', '')) / 2;
-			cy.cGet('.leaflet-layer').dblclick(x, y, { force: true });
-		});
+		dblclickOnSelectedShape();
 		helper.typeIntoDocument('{ctrl}a');
-		return cy.cGet('.text-selection-handle-start').should('be.visible');
+		return cy.cGet('.text-selection-handle-start, .text-selection-handle-end').should('exist');
 	});
+
+	cy.cGet('.leaflet-cursor-container, .text-selection-handle-start')
+		.should('exist');
 
 	cy.log('<< selectTextOfShape - end');
-}
-
-// Double click on the shape to edit the text
-// and wait for the cursor to appear
-function editTextInShape() {
-	cy.log('>> editTextInShape - start');
-
-	cy.waitUntil(function() {
-		cy.cGet('#document-container svg g').dblclick({force: true});
-		return cy.cGet('.cursor-overlay')
-			.then(function(overlay) {
-				return overlay.children('.leaflet-cursor-container').length !== 0;
-			});
-	});
-	cy.cGet('.leaflet-cursor.blinking-cursor').should('exist');
-
-	cy.log('<< editTextInShape - end');
 }
 
 // Step into text editing of the preselected shape. So we assume
@@ -199,16 +185,16 @@ function editTextInShape() {
 function dblclickOnSelectedShape() {
 	cy.log('>> dblclickOnSelectedShape - start');
 
-	cy.cGet('#test-div-shape-handle-rotation')
-		.then(function(items) {
-			expect(items).to.have.length(1);
-			var XPos = (items[0].getBoundingClientRect().left + items[0].getBoundingClientRect().right) / 2;
-			var YPos = items[0].getBoundingClientRect().bottom + 50;
-			cy.cGet('body')
-				.dblclick(XPos, YPos);
+	cy.cGet('#canvas-container > svg')
+		.then(function(element) {
+			expect(element).to.have.length(1);
+			const x = parseInt(element[0].style.left.replace('px', '')) + parseInt(element[0].style.width.replace('px', '')) / 2;
+			const y = parseInt(element[0].style.top.replace('px', '')) + parseInt(element[0].style.height.replace('px', '')) / 2;
+			cy.cGet('#document-canvas').dblclick(x, y, { force: true });
 		});
 
-	cy.cGet('.leaflet-cursor.blinking-cursor')
+	// check if any of text input markers exist
+	cy.cGet('.leaflet-cursor-container, .text-selection-handle-start, .leaflet-cursor.blinking-cursor')
 		.should('exist');
 
 	cy.log('<< dblclickOnSelectedShape - end');
@@ -255,11 +241,11 @@ module.exports.assertNotInTextEditMode = assertNotInTextEditMode;
 module.exports.assertInTextEditMode = assertInTextEditMode;
 module.exports.typeTextAndVerify = typeTextAndVerify;
 module.exports.assertNumberOfSlidePreviews = assertNumberOfSlidePreviews;
+module.exports.clickCenterOfSlide = clickCenterOfSlide;
 module.exports.selectTextShapeInTheCenter = selectTextShapeInTheCenter;
 module.exports.triggerNewSVGForShapeInTheCenter = triggerNewSVGForShapeInTheCenter;
 module.exports.removeShapeSelection = removeShapeSelection;
 module.exports.selectTextOfShape = selectTextOfShape;
-module.exports.editTextInShape =editTextInShape;
 module.exports.dblclickOnSelectedShape = dblclickOnSelectedShape;
 module.exports.addSlide = addSlide;
 module.exports.changeSlide = changeSlide;

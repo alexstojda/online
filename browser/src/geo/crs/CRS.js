@@ -1,11 +1,13 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.CRS is the base object for all defined CRS (Coordinate Reference Systems) in Leaflet.
+ * window.L.CRS is the base object for all defined CRS (Coordinate Reference Systems) in Leaflet.
  */
 
-L.CRS = {
-	projection: L.Projection.LonLat,
-	transformation: new L.Transformation(1, 0, -1, 0),
+/* global cool */
+
+window.L.CRS = {
+	projection: window.L.Projection.LonLat,
+	transformation: new cool.Transformation(1, 0, -1, 0),
 
 	// converts geo coords to pixel ones
 	latLngToPoint: function (latlng, zoom) {
@@ -36,6 +38,16 @@ L.CRS = {
 	// defines how the world scales with zoom
 	scale: function (zoom) {
 		return Math.pow(1.2, zoom);
+	},
+
+	// equivalent to doing an unproject with oldZoom then a project with newZoom
+	// except that unproject is technically invalid (so possibly confusing) for any non-css-pixel
+	// but this function will work with any scaling (including twips or core pixels)
+	rescale: function (point, oldZoom, newZoom) {
+		return cool.Point.toPoint(
+			point.x * this.scale(newZoom - oldZoom),
+			point.y * this.scale(newZoom - oldZoom),
+		);
 	},
 
 	distance: function (latlng1, latlng2) {

@@ -1,7 +1,5 @@
-/* JSDialog */
+/* Overlay for popups and dropdowns allowing to handle click outside */
 .jsdialog-overlay {
-	-webkit-animation: vex-fadein .5s;
-	animation: vex-fadein .5s;
 	position: absolute;
 	background: transparent;
 	top: 0;
@@ -23,6 +21,8 @@
 .jsdialog-overlay.dimmed {
 	background: #1c5fa814;
 }
+
+/* JSDialog windows */
 
 .lokdialog_container.ui-dialog.ui-widget-content.modalpopup,
 .jsdialog-window.modalpopup {
@@ -47,19 +47,99 @@
 	padding-right: 5px;
 }
 
+div.ui-treeview-icon-column {
+	height: 100%;
+	text-align: right;
+}
+
 #AcceptRejectChangesDialog {
 	width: max-content;
 	max-width: 1000px;
 }
-.jsdialog.one-child-popup {
+
+#AcceptRejectChangesDialog #writerchanges {
+	padding-top: 0;
+}
+
+#AcceptRejectChangesDialog #RedlineViewPage.jsdialog.ui-grid-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+#AcceptRejectChangesDialog #RedlineFilterPage .ui-timefield {
+	margin: 5px;
+}
+
+#AcceptRejectChangesDialog .ui-treeview-headers { 
+	grid-template-columns: 120px 120px 150px 130px;
+	position: sticky;
+	top: 0;
+	background-color: var(--color-background-lighter) !important;
+	z-index: 1;
+}
+
+#AcceptRejectChangesDialog .jsdialog.ui-treeview-entry { 
+	padding: 0 !important;
+	height: 26px;
+}
+
+/* treeview that has an expander column */
+#AcceptRejectChangesDialog .jsdialog.ui-treeview-entry:has(> .ui-treeview-expander-column) {
+	grid-template-columns: 20px 100px 120px 150px 130px;
+}
+
+/* treeview that does not have an expander column */
+#AcceptRejectChangesDialog .jsdialog.ui-treeview-entry:not(:has(> .ui-treeview-expander-column)) {
+	grid-template-columns: 120px 120px 150px 130px;
+}
+
+#AcceptRejectChangesDialog .jsdialog.ui-treeview-entry .ui-treeview-icon-column + div,
+#AcceptRejectChangesDialog .ui-treeview-headers .ui-treeview-icon-column {
+	display: none;
+}
+
+#AcceptRejectChangesDialog #writerchanges.ui-treeview {
+	max-height: 300px;
+}
+
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='2'] .ui-treeview-expander-column,
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='2'] .ui-treeview-icon-column {
+	padding-left: 2.5ch;
+}
+
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='3'] .ui-treeview-expander-column,
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='3'] .ui-treeview-icon-column {
+	padding-left: 4.5ch;
+}
+
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='4'] .ui-treeview-expander-column,
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='4'] .ui-treeview-icon-column {
+	padding-left: 6.5ch;
+}
+
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='5'] .ui-treeview-expander-column,
+#writerchanges.ui-treeview .jsdialog.ui-treeview-entry[aria-level='5'] .ui-treeview-icon-column {
+	padding-left: 8.5ch;
+}
+
+.jsdialog.one-child-popup:not(.ui-iconview) {
 	border: 0;
 	margin: 0 !important;
+	padding: 0 !important;
+}
+
+div#autoFillPreviewTooltip {
+	min-width: fit-content;
+	max-width: fit-content;
+}
+
+div#autoFillPreviewTooltip .lokdialog.ui-dialog-content.ui-widget-content {
+	padding: 0em 0.2em;
 }
 
 .jsdialog-window.modalpopup:not(.snackbar),
 .hyperlink-pop-up-container {
 	min-width: 198px;
-	max-width: 498px;
 	border: 1px solid var(--color-border-darker) !important;
 	border-radius: var(--border-radius);
 	box-shadow: 0 0 3px var(--color-box-shadow);
@@ -89,8 +169,13 @@
 	background-color: var(--color-background-lighter) !important;
 	font-family: var(--jquery-ui-font);
 	line-height: 1.5;
+	scrollbar-color: var(--scrollbar-color);
+	scrollbar-width: var(--scrollbar-width);
 }
-
+[data-docType='spreadsheet'] .jsdialog-container .ui-dialog-content,
+[data-docType='text'] .jsdialog-container .ui-dialog-content {
+	max-height: calc( 90vh - 98px);
+}
 #SortKeyWindow {
 	/* As used in .jsdialog-container .ui-dialog-content 90 % of the viewport
 	   minus 352px:
@@ -112,7 +197,7 @@
 	overflow: hidden;
 }
 
-.jsdialog.vertical label, .ui-frame-label {
+.jsdialog.vertical label, .ui-frame-label, #ui-color-picker-recent-label {
 	margin: auto 0px;
 	color: var(--color-main-text);
 	font-size: var(--default-font-size);
@@ -175,7 +260,7 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	display: block;
 }
 
-.jsdialog.ui-grid {
+.ui-grid {
 	border-spacing: 0px;
 	width: 100%;
 	display: grid;
@@ -205,8 +290,11 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	/* don't occupy space showing empty area */
 	width: 0px !important;
 	height: 0px !important;
+	min-width: 0px !important;
+	min-height: 0px !important;
 	margin: 0px !important;
 	padding: 0px !important;
+	flex-grow: initial !important;
 }
 
 /* Page number dialog placed under Insert menu */
@@ -221,7 +309,9 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 .jsdialog.ui-scrollwindow:not(.formulabar) {
 	overflow: auto;
 	max-height: 500px;
-	max-width: 700px;
+	max-width: 650px;
+	scrollbar-width: var(--scrollbar-width);
+	scrollbar-color: var(--scrollbar-color);
 }
 /* - Also used in SpellingDialog where suggestion come in form
      of an image*/
@@ -241,12 +331,15 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 .jsdialog.ui-separator.vertical {
 	margin: 5px 0px;
-	padding-right: 1px;
 	background-color: var(--color-background-darker);
 }
 
 .ui-toolbar .ui-separator.vertical {
 	height: 14px;
+	width: 1px;
+	padding: 0px; /* Set padding to 0px, as the padding in `browser/css/toolbar.css` overrides it for the separator. */
+	align-self: center;
+	margin: 0 3px;
 }
 
 .jsdialog.ui-separator.horizontal {
@@ -259,8 +352,8 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 /* Badge */
 .ui-badge {
 	padding: 5px !important;
-	color: var(--color-main-text);
 	background-color: var(--color-background-darker);
+	color: var(--color-text-darker);
 	border-width: 0px;
 	border-radius: var(--border-radius);
 	font-family: var(--cool-font);
@@ -268,6 +361,30 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	font-weight: normal;
 }
 
+#toolbar-down .ui-separator.vertical {
+	background-color: var(--color-status-badge);
+	opacity: 0.2;
+}
+
+#toolbar-down .ui-badge,
+#toolbar-down .unolabel {
+	font-family: var(--cool-font);
+	font-size: var(--default-font-size) !important;
+	color: var(--color-status-badge) !important;
+}
+
+#toolbar-down .ui-badge:hover,
+#toolbar-down .menubutton:hover .unolabel {
+	color: var(--color-main-text) !important;
+}
+
+#toolbar-down .unoarrow {
+	border-top-color: var(--color-status-badge);
+}
+
+#toolbar-down .menubutton:hover .unoarrow {
+	border-top-color: var(--color-main-text);
+}
 /* Tabs */
 
 .ui-tabs-content.jsdialog {
@@ -292,6 +409,54 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	height: 100%;
 }
 
+.ui-overflow-manager > .notebookbar:not(.ui-separator),
+.ui-overflow-manager:not(:has(.ui-overflow-group)) {
+	box-sizing: border-box;
+	/* same height as .hasnotebookbar > #toolbar-row */
+	height: 82px;
+}
+
+/* ATTENTION the following declaration is targetting containers and childreen
+ that have .horizontal.notebookbar. Ideally we would instead use:
+.ui-overflow-manager > .horizontal.notebookbar so,
+ buttons inside of grid are still center aligned but the sub container would be
+algned to the bottom */
+.ui-overflow-manager .horizontal.notebookbar {
+	align-items: center;
+}
+.notebookbar.ui-overflow-group:not(.ui-overflow-group-container-with-label) {
+	align-content: center;
+	height: var(--notebookbar-element-height) !important;
+	margin-bottom: 14px;
+}
+
+.ui-overflow-manager > .notebookbar.ui-iconview,
+.ui-overflow-manager > .notebookbar.ui-treeview {
+	/* fixes scrolling range, for example in #stylesview or Animations tab */
+	align-content: initial;
+}
+
+.ui-overflow-manager > .notebookbar:not(.ui-separator):not(.ui-overflow-group):not(:has(.ui-overflow-group-container-with-label)) {
+	height: var(--notebookbar-element-height);
+	/* 14px extra margin for containers without label */
+	margin-bottom: 14px;
+}
+
+.ui-overflow-manager > .notebookbar.vertical:not(.ui-separator) {
+	height: var(--notebookbar-element-height) !important;
+	margin-bottom: 14px !important;
+}
+
+.unotoolbutton.notebookbar.ui-content.has-label > *:not(.arrowbackground) {
+	height: var(--notebookbar-element-height) !important;
+	align-content: center;
+}
+
+.ui-overflow-manager .notebookbar.ui-overflow-group-container-with-label {
+	justify-content: center;
+}
+
+.ui-toggle button,
 .ui-tab.jsdialog {
 	float: left !important;
 	font-size: var(--default-font-size) !important;
@@ -302,6 +467,7 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	height: 24px !important;
 	display: flex !important;
 	align-items: center !important;
+	justify-content: center;
 	padding: 0px 1em !important;
 	border: solid 1px transparent !important;
 	border-radius: var(--border-radius) !important;
@@ -314,6 +480,7 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	visibility: hidden !important;
 }
 
+.ui-toggle.checked button,
 .ui-tab.selected.jsdialog {
 	background-color: var(--color-background-lighter) !important;
 	color: var(--color-text-darker) !important;
@@ -326,10 +493,26 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	color: var(--color-text-darker) !important;
 }
 
+/* Sub Tabs: example Format Cells: Font */
+
+.ui-tabs-content .ui-tabs.jsdialog.ui-widget {
+	border-block-start: 1px solid var(--color-border-lighter);
+	padding-block-start: 24px
+}
+
 /* Expander */
 
 .jsdialog.ui-expander {
 	box-shadow: 0 1px 0px 0 var(--color-border-lighter);
+	background-color: transparent;
+	border: none;
+}
+
+.ui-expander.jsdialog:not(.sidebar) {
+	width: 100%;
+	text-align: left;
+	font-size: 14px;
+	padding-bottom: 4px;
 }
 
 #options.ui-expander {
@@ -340,9 +523,13 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	color: #666;
 }
 
+.ui-expander-label.jsdialog {
+	font-family: var(--jquery-ui-font);
+}
+
 .ui-expander-label::before,
-.ui-treeview-expandable.collapsed > .ui-treeview-expander::before,
-.ui-treeview tr[aria-expanded='false'] > td > .ui-treeview-expander::before {
+.ui-treeview-expandable.collapsed > div > .ui-treeview-expander::before,
+.ui-treeview div[aria-expanded='false'] > div > .ui-treeview-expander::before {
 	display: inline-block;
 	content: 'V';
 	color: transparent;
@@ -352,8 +539,8 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 
 .ui-expander-label.expanded::before,
-.ui-treeview-expandable:not(.collapsed) > .ui-treeview-expander::before,
-.ui-treeview tr[aria-expanded='true'] > td > .ui-treeview-expander::before  {
+.ui-treeview-expandable:not(.collapsed) > div > .ui-treeview-expander::before,
+.ui-treeview div[aria-expanded='true'] > div > .ui-treeview-expander::before {
 	content: 'V';
 	color: transparent;
 	margin-inline-end: 7px;
@@ -363,13 +550,13 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 }
 
 [data-theme='dark'] .ui-expander-label::before,
-[data-theme='dark'] .ui-treeview-expandable > .ui-treeview-expander::before,
-[data-theme='dark'] .ui-treeview tr[aria-expanded] > td > .ui-treeview-expander::before  {
+[data-theme='dark'] .ui-treeview-expandable > div > .ui-treeview-expander::before,
+[data-theme='dark'] .ui-treeview div[aria-expanded] > div > .ui-treeview-expander::before {
 	filter: brightness(1);
 }
 
-.ui-treeview-expandable > .ui-treeview-expander::before,
-.ui-treeview tr[aria-expanded] > td > .ui-treeview-expander::before {
+.ui-treeview-expandable > div > .ui-treeview-expander::before,
+.ui-treeview div[aria-expanded] > div > .ui-treeview-expander::before {
 	margin-inline-end: 7px !important;
 	display: inline-block;
 	position: relative !important;
@@ -391,9 +578,9 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	display: inline-block;
 }
 
-.ui-listview-icon {
-	height: var(--btn-size-s);
-	width: var(--btn-size-s);
+.ui-treeview-icon {
+	height: var(--btn-img-size-s);
+	width: var(--btn-img-size-s);
 	margin-inline-end: 8px;
 	vertical-align: middle;
 }
@@ -433,35 +620,50 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 /* TreeView */
 
 .ui-treeview {
-	display: block;
+	display: grid;
+	grid-template-columns: repeat(1, auto);
 	border: 1px solid var(--color-border);
 	border-radius: var(--border-radius);
 	overflow-y: auto;
 	overflow-x: hidden;
 	max-width: 1000px;
 	min-width: 150px;
+	min-height: 100px;
 	padding: 1px;
 	padding-inline-end: 3px;
+	color: var(--color-main-text);
+	font-size: var(--default-font-size);
+	line-height: var(--default-height);
+	align-content: start;
+	justify-content: stretch;
+	scrollbar-width: var(--scrollbar-width);
+	scrollbar-color: var(--scrollbar-color);
 }
 
-.ui-treeview.disabled {
+#__MENU__.ui-treeview {
+	min-height: min-content;
+}
+
+.ui-treeview * {
+	border-radius: initial;
+}
+
+.jsdialog:not(.sidebar).ui-treeview {
+	max-height: 150px; /* only in dialogs */
+}
+
+.ui-treeview.disabled,
+.ui-treeview-entry div.disabled {
 	background-color: var(--color-background-dark) !important;
 	color: var(--color-text-lighter) !important;
 }
 
-.ui-treeview-body,
 #custom_animation_label_parent {
-	color: var(--color-main-text);
-	font-size: var(--default-font-size);
-	line-height: var(--default-height);
 	display: block;
-	min-height: 100px;
-	min-width: 100px;
-	max-height: 150px;
 	width: inherit;
 }
 
-.ui-treeview.empty .ui-treeview-body {
+.ui-treeview.empty {
 	color: var(--color-text-lighter);
 }
 
@@ -469,31 +671,121 @@ td.jsdialog > [id^='table-box']:not(.sidebar) {
 	cursor: context-menu;
 }
 
-.ui-treeview-expandable.collapsed + ul {
-	display: none;
+.ui-treeview-expandable.collapsed + .ui-treeview-expanded-content {
+	display: none !important;
 }
 
-.ui-treeview-body > ul {
-	margin: 0;
-	padding: 0;
+/* real tree requires spacing - inline-flex, headers require synchronized grid */
+.ui-treeview:not(.ui-treeview-tree) .ui-treeview-entry {
+	display: grid;
+	grid-template-columns: subgrid;
 }
 
-.ui-treeview-body ul {
-	list-style-type: none;
-}
-
-.ui-treeview-entry {
-	display: flex;
+.ui-treeview.ui-treeview-tree .ui-treeview-entry {
+	display: inline-flex;
 	width: 100%;
 }
 
-.ui-treeview-entry:not(.autofilter) {
-	padding-inline-start: 2px;
-	margin-inline-end: 2px;
-	background-color: var(--color-background-lighter);
+.ui-treeview-entry,
+.ui-treeview-expanded-content {
+	grid-auto-flow: column;
+	/* grid-column: '1 / ' + (this._columns + 1) - set inside JS */
+	justify-content: stretch;
+	align-items: start;
+	white-space: nowrap;
 }
 
-.ui-treeview.disabled .ui-treeview-entry:not(.autofilter) {
+.ui-treeview-image {
+	outline: 1px solid var(--color-btn-border);
+	vertical-align: middle;
+}
+
+/* that rule is for custom rendering like font previews */
+.ui-treeview-entry img.ui-treeview-image {
+	border: 1px solid transparent;
+	max-height: 24px; /* required for hidpi*/
+}
+
+#ServerAuditDialog .ui-treeview-entry {
+	display: grid;
+	grid-template-columns: var(--btn-img-size-m) 6fr 3fr;
+	white-space: normal;
+}
+
+.ui-treeview-expanded-content {
+	display: grid;
+}
+
+.ui-treeview-entry > div.ui-treeview-expander-column {
+	width: 20px !important; /* overwrite first-child rule */
+}
+
+.ui-treeview div.ui-treeview-icon-column {
+	width: 30px; /* in table with headers has to be 100% */
+}
+
+.ui-treeview div.ui-treeview-icon-column img {
+	max-width: 30px;
+}
+
+.ui-treeview div.ui-treeview-state-column {
+	width: 38px;
+}
+
+.ui-treeview-headers {
+	white-space: nowrap;
+	display: grid;
+	grid-auto-flow: column;
+	/* grid-column: '1 / ' + (this._columns + 1) - set inside JS */
+}
+
+#ServerAuditDialog .ui-treeview-headers {
+	display: grid;
+	grid-column-end: 4 !important;
+	grid-template-columns: 0fr 6fr 3fr;
+	margin-inline-start: 4px;
+}
+
+#ServerAuditDialog .ui-treeview-headers div.ui-treeview-icon-column {
+	width: 0px /* prevent display of ui-treeview-icon-column in ui-treeview-header */
+}
+
+#ServerAuditDialog .ui-treeview-headers > div:nth-last-child(1) {
+	margin-inline-start: 7px;
+}
+
+.ui-treeview-header {
+	display: inline-block;
+	width: 100%;
+}
+
+.ui-treeview-header-text {
+	font-weight: bold;
+}
+
+.ui-treeview-entry > div {
+	display: table-cell;
+	width: 100%;
+}
+
+.ui-treeview-entry div:first-child {
+	display: flex;
+	width: min-content;
+	justify-content: start;
+}
+
+.ui-treeview-entry div:last-child {
+	display: flex;
+	width: 100%;
+	justify-content: start;
+}
+
+.ui-treeview-entry div:not(.autofilter) {
+	padding-inline-start: 2px;
+	margin-inline-end: 2px;
+}
+
+.ui-treeview.disabled .ui-treeview-entry div:not(.autofilter) {
 	background-color: var(--color-background-dark);
 }
 
@@ -504,6 +796,7 @@ input[type='checkbox'].autofilter, .jsdialog input[type='checkbox'] {
 	appearance: none;
 	width: 20px;
 	height: 20px;
+	vertical-align: middle;
 	background: url('images/lc_checkboxoff.svg') no-repeat center;
 	margin: 1px 8px;
 }
@@ -521,38 +814,37 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	background-image: url('images/dark/lc_checkbox.svg');
 }
 
-.ui-treeview-entry span {
+.ui-treeview-entry div span {
 	width: 100%;
 }
 
-.ui-treeview-entry.mobile-wizard {
+.ui-treeview-entry div.mobile-wizard {
 	line-height: 40px;
 	padding-left: 10px;
 	padding-right: 10px;
 }
 
-.ui-treeview .ui-listview-entry td {
-	vertical-align: middle;
+.ui-treeview-entry.selected {
+	background-color: var(--color-primary);
+	color: var(--color-text-darker);
+	border: 1px solid var(--color-primary);
 }
 
-.ui-treeview-entry.selected,
-.ui-listview-entry.selected {
-	background-color: var(--color-background-dark);
-	color: var(--color-text-dark);
-}
-
-.ui-treeview.disabled .ui-treeview-entry.selected,
-.ui-treeview.disabled .ui-listview-entry.selected {
+.ui-treeview.disabled .ui-treeview-entry.selected {
 	background-color: var(--color-background-darker) !important;
 }
 
-.ui-treeview-entry:hover,
-.ui-listview-entry:hover {
-	background-color: var(--color-background-darker);
+.ui-treeview-entry:hover {
+	background-color: var(--color-background-darker) !important;
 	color: var(--color-text-darker);
+	border: 1px solid var(--color-background-darker);
 }
 
-#mobile-wizard .ui-treeview-body input[type='checkbox'] {
+.ui-treeview-entry {
+	border: 1px solid transparent;
+}
+
+#mobile-wizard tbody input[type='checkbox'] {
 	float: none;
 	vertical-align: middle;
 }
@@ -560,44 +852,47 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 .ui-treeview.droptarget {
 	border: 1px solid #888;
 }
-.ui-treeview.droptarget:hover{
+.ui-treeview.droptarget:hover {
 	border: 1px solid #888;
 	box-shadow: 0 0 2px 0 #777;
 }
 
 /* tree grid */
 
-.ui-treeview tr[aria-level='2'] > td:first-child {
+.ui-treeview div[aria-level='1'] + .ui-treeview-expanded-content > .ui-treeview-entry {
 	padding-left: 2.5ch;
+	width: auto;
 }
 
-.ui-treeview tr[aria-level='3'] > td:first-child {
-	padding-left: 5ch;
+.ui-treeview div[aria-level='2'] + .ui-treeview-expanded-content > .ui-treeview-entry {
+	padding-left: 3.5ch;
+	width: auto;
 }
 
-.ui-treeview tr[aria-level='4'] > td:first-child {
-	padding-left: 7.5ch;
+.ui-treeview div[aria-level='3'] + .ui-treeview-expanded-content > .ui-treeview-entry {
+	padding-left: 4.5ch;
+	width: auto;
 }
 
-.ui-treeview tr[aria-level='5'] > td:first-child {
-	padding-left: 10ch;
+.ui-treeview div[aria-level='4'] + .ui-treeview-expanded-content > .ui-treeview-entry {
+	padding-left: 5.5ch;
+	width: auto;
 }
 
-.ui-treeview tr > td:first-child .ui-treeview-expander {
-	display: inline-block;
+.ui-treeview div[aria-level='5'] + .ui-treeview-expanded-content > .ui-treeview-entry {
+	padding-left: 6.5ch;
+	width: auto;
+}
+
+.ui-treeview div.ui-treeview-expander {
 	vertical-align: top;
-}
-
-.ui-treeview tr[aria-level]:not([aria-expanded]) > td:first-child::before {
-	font-family: monospace;
-	content: 'V';
-	color: transparent;
-	display: inline-block;
-	margin-inline-end: 7px;
-	vertical-align: top;
+	justify-content: end;
 }
 
 /* context menu */
+.context-menu-root:focus {
+	outline: none;
+}
 .context-menu-list {
 	background: var(--color-background-lighter);
 	border: 1px solid var(--color-border-dark);
@@ -605,10 +900,14 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	-webkit-box-shadow: 0 0 3px var(--color-box-shadow);
 	box-shadow: 0 0 3px var(--color-box-shadow);
 }
+
 .context-menu-item {
 	color: var(--color-main-text);
 	background-color: transparent;
+	padding-left: 1em;
+	font-size: var(--medium-font-size) !important;
 }
+
 .context-menu-separator {
 	border-bottom: 1px solid var(--color-border-lighter);
 }
@@ -617,9 +916,52 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	color: var(--color-text-lighter);
 	background-color: var(--color-background-lighter);
 }
+
+.context-menu-item.context-menu-submenu::before {
+	content: '';
+}
+
+.context-menu-item.context-menu-submenu::before,
+.context-menu-icon-spacer,
+img.context-menu-icon {
+	width: 1rem;
+	height: 1rem;
+	margin-right: 8px;
+	vertical-align: middle;
+	display: inline-block;
+}
+
+/*
+* Hide the spacer icon if the entire context menu list does not contain any <img>.
+* This prevents unnecessary visual gaps when no icons are present.
+*/
+.context-menu-list:not(:has(img)) .context-menu-icon-spacer {
+	display: none;
+}
+
+/*
+ * Applies consistent spacing across all items in a mixed submenu.
+ * 1. The entire context menu list has no <img> at all (icon-less menu)
+ * 2. The submenu contains a checkmark but has no <img>
+ * 3. The submenu contains a radio but has no <img>
+ * 4. The submenu contains a checkmark and also contains <img>
+ * 5. The submenu contains a radio and also contains <img>
+ */
+.context-menu-list:not(:has(img)) .context-menu-item,
+.context-menu-submenu:has(.context-menu-icon-lo-checkmark):not(:has(img)) .context-menu-item,
+.context-menu-submenu:has(.context-menu-icon-radio):not(:has(img)) .context-menu-item,
+.context-menu-submenu:has(.context-menu-icon-lo-checkmark):has(img) .context-menu-item,
+.context-menu-submenu:has(.context-menu-icon-radio):has(img) .context-menu-item {
+	padding-left: 2em;
+}
+
 /* input text */
 
-.jsdialog.ui-edit, #hyperlink-text-box:not(.mobile-wizard) {
+.ui-dialog .jsdialog.ui-edit:focus-visible {
+	outline-offset: -2px;
+}
+
+.jsdialog.ui-edit {
 	color: var(--color-text-dark);
 	background-color: var(--color-background-dark);
 	line-height: 28px;
@@ -644,10 +986,22 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	border-left: none;
 	border-right: none;
 }
+
+.autofilter #list.ui-treeview {
+	max-height: 250px;
+}
+
+.autofilter #list.ui-treeview,
+.modalpopup #check_list_box.ui-treeview {
+	min-height: inherit !important;
+}
 /* checkbox */
 
 .jsdialog.checkbutton {
 	white-space: nowrap;
+	display: flex;
+	margin: 0;
+	align-items: center;
 }
 
 .jsdialog.checkbutton input,
@@ -663,13 +1017,14 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 }
 /* Radio button */
 
+.ui-radiobutton,
 .radiobutton.jsdialog {
 	display: flex;
 	align-items: center;
 	justify-content: flex-start;
 }
 
-.jsdialog input[type='radio'] {
+.jsdialog input[type='radio']:not(.ui-color-picker-entry) {
 	margin: 1px 8px;
 	border: none;
 	height: 18px;
@@ -677,8 +1032,10 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	display: block;
 }
 
+.ui-radiobutton > label,
 .jsdialog .radiobutton > label {
 	vertical-align: middle;
+	white-space: nowrap;
 }
 
 .jsdialog input[type='radio'][disabled='disabled'] ~ label {
@@ -689,11 +1046,31 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 
 .ui-dialog-content .jsdialog.ui-text {
 	padding-inline-start: 0;
-	margin: auto 5px;
+}
+
+.jsdialog.ui-grid-cell input[type='checkbox'] + label[for^='hidden-part-checkbox'] {
+	vertical-align: super;
 }
 
 .jsdialog.ui-text {
 	padding-inline-start: 8px;
+}
+
+.jsdialog.ui-frame-label {
+	font-weight: bold;
+}
+
+/* fieldset and legend - form grouping */
+
+.jsdialog .ui-fieldset {
+	border: none;
+	padding-inline: 0;
+	padding-block: 0;
+}
+
+.jsdialog .ui-legend {
+	padding-inline: 0;
+	font-weight: bold;
 }
 
 /* spinfield */
@@ -730,6 +1107,10 @@ input[type='checkbox']:checked.autofilter, .jsdialog input[type='checkbox']:chec
 	width: 100%;
 }
 
+:dir(rtl) .spinfield {
+	padding: 4px 4px 4px 0;
+}
+
 .spinfieldunit {
 	font-size: var(--default-font-size);
 	color: var(--color-text-dark);
@@ -762,6 +1143,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	align-items: center;
 	box-sizing: border-box;
 	height: 24px;
+	min-width: 70px;
+}
+
+.ui-listbox-container {
+	height: 32px;
 }
 
 .ui-listbox {
@@ -771,12 +1157,12 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 .ui-listbox,
 .ui-combobox,
-.ui-timefield  {
+.ui-timefield {
 	box-sizing: border-box;
 	-webkit-appearance: none;
 	-moz-appearance: none;
 	appearance: none;
-	height: 24px;
+	height: 1.5rem;
 	line-height: normal;
 	font-size: var(--default-font-size);
 	font-family: var(--jquery-ui-font);
@@ -793,6 +1179,10 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	width: 100%;
 }
 
+.jsdialog .ui-combobox {
+	line-height: 22px;
+}
+
 .ui-listbox option {
 	font-weight: normal;
 	display: block;
@@ -805,24 +1195,29 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	display: none;
 }
 
+/* Draw vector border as downwards arrow. */
 .ui-listbox-arrow {
-	content: '';
-	background: url('images/jquery-ui-lightness/ui-icons_222222_256x240.png') no-repeat transparent;
-	background-position: -67px -17px !important;
-	display: inline-block;
-	position: relative;
-	width: 11px;
-	height: 11px;
-	cursor: pointer;
-	pointer-events: none;
+	width: auto !important;
+	height: 0px;
+	font-size: 0;
+	line-height: 0;
+	border: 4px solid transparent;
+	border-top: 5px solid var(--color-main-text);
+	display: inline-block !important;
 	margin-inline-start: -16px;
 	margin-inline-end: 4px;
+	margin-top: 4px;
+	cursor: pointer;
 }
 
-[data-theme='dark'] .ui-listbox-arrow {
-	background: url('images/jquery-ui-lightness/ui-icons_ffffff_256x240.png') no-repeat transparent;
+.ui-combobox .ui-listbox-arrow {
+	margin-inline-start: -8px;
 }
 
+:dir(rtl) .ui-listbox-arrow {
+	margin-inline-start: 4px;
+	margin-inline-end: -16px;
+}
 .ui-listbox[disabled='disabled'] ~ .ui-listbox-arrow,
 .ui-combobox[disabled='disabled'] ~ .ui-listbox-arrow {
 	opacity: 0.5;
@@ -847,9 +1242,23 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	padding-inline: 5px;
 }
 
+/* Similar to .arrowbackground, centers the vector dropdown arrow. */
 .ui-combobox-button {
+	box-sizing: border-box;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-inline-start: 1px solid var(--color-border);
+	background-color: transparent;
 	padding-left: 20px;
-	border-left: 1px solid var(--color-border);
+	border : none;
+}
+
+.ui-combobox-button:hover {
+	cursor: pointer;
+	border-left-color: transparent;
+	background-color: var(--color-background-darker);
 }
 
 .ui-combobox-dropdown {
@@ -864,7 +1273,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 .modalpopup[id$='-dropdown'] {
-	/* submenu is inserted into the same overlay, dont make it relative to parent */
+	/* submenu is inserted into the same overlay, don't make it relative to parent */
 	position: absolute !important;
 }
 
@@ -886,7 +1295,8 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background-color: var(--color-background-dark);
 }
 
-.ui-combobox-entry.selected:not(:hover) span {
+.ui-combobox-entry.selected:not(:hover) span,
+.margin-item.selected {
 	border: 1px solid var(--color-primary);
 	background-color: var(--color-primary);
 	color: var(--color-primary-text);
@@ -987,14 +1397,57 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 /* buttons: btns.css */
 
+/* Overflow group */
+
+.ui-overflow-manager {
+	display: flex !important;
+}
+
+.ui-overflow-group {
+	flex-flow: column;
+}
+
+.ui-overflow-group,
+.ui-overflow-group-content {
+	display: flex;
+}
+
+.ui-overflow-group-bottom {
+	text-align: center;
+	align-items: center;
+}
+
+.notebookbar.ui-overflow-group-bottom {
+	display: flex;
+	padding: 0 5px;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+
+.ui-overflow-group-label {
+	font-family: var(--jquery-ui-font);
+	font-size: var(--overflow-group-font-size);
+	color: var(--color-text-lighter);
+	flex-grow: 1;
+	text-align: center;
+}
+
+#design-master-page-group-content.ui-overflow-group-inner {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+}
 /* Icon View */
 
 .ui-iconview {
 	overflow: auto;
-	display: inline-flex;
-	display: -ms-inline-flexbox;
-	flex-wrap: wrap;
 	justify-content: space-between;
+	display: grid;
+	grid-template-columns: 1fr 1fr 1fr;
+	max-height: 40vh;
+	gap: 2px;
+	padding: 2px;
 }
 
 .ui-iconview.mobile-wizard {
@@ -1015,7 +1468,8 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	align-self: center;
 	border: 1px solid transparent;
 	border-radius: var(--border-radius);
-	padding-top: 5px;
+	text-wrap: nowrap;
+	font-family: var(--jquery-ui-font);
 }
 
 .ui-iconview-entry.selected {
@@ -1029,8 +1483,26 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background-color: var(--color-background-darker);
 }
 
+.ui-iconview-entry img {
+	vertical-align: middle;
+}
+
 .ui-iconview-separator {
 	flex: 0 0 99%;
+}
+
+.ui-iconview-entry-title {
+	font-size: var(--default-font-size);
+}
+
+.icon-view-item-container {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	text-align: center;
+	word-wrap: break-word;
+	overflow-wrap: break-word;
 }
 
 /* Autofilter dropdown */
@@ -1064,7 +1536,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 .autofilter-container .ui-treeview {
 	border: none;
 }
-.autofilter-container #menu.ui-treeview .ui-treeview-body {
+.autofilter-container #menu.ui-treeview {
 	height: auto;
 	width: 100%;
 	padding: 8px 1px;
@@ -1125,16 +1597,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	line-height: normal;
 }
 
-.autofilter-container #check_tree_box.ui-treeview .ui-treeview-body,
-.autofilter-container #check_list_box.ui-treeview .ui-treeview-body {
+.autofilter-container #check_tree_box.ui-treeview,
+.autofilter-container #check_list_box.ui-treeview {
 	width: 100%;
 	min-width: 200px;
 	max-height: 150px;
-}
-
-#ZoteroDialog .ui-treeview-body {
-	max-height: 500px;
-	max-width: 100%;
 }
 
 .autofilter-container-submenu > .autofilter-container {
@@ -1146,21 +1613,23 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 /* hide radio in filter by color */
-.jsdialog.autofilter #background tr th:nth-of-type(1),
-.jsdialog.autofilter #textcolor tr th:nth-of-type(1),
-.jsdialog.autofilter #background tr td:nth-of-type(1),
-.jsdialog.autofilter #textcolor tr td:nth-of-type(1) {
+.jsdialog.autofilter #background .ui-treeview-entry div:nth-of-type(1),
+.jsdialog.autofilter #textcolor .ui-treeview-entry div:nth-of-type(1),
+.jsdialog.autofilter #background > div:nth-of-type(1),
+.jsdialog.autofilter #textcolor > div:nth-of-type(1) {
 	display: none;
 }
 
-/* hide arrow icons in the autofilter menu*/
-#menu img.jsdialog.autofilter.ui-treeview-checkbox {
-	display: none;
+/* border-less arrow icons in the autofilter menu */
+#menu img.jsdialog.autofilter.ui-treeview-checkbox.ui-treeview-image {
+	display: inline;
+	outline: none;
 }
 
 /* Word count dialog */
 
-#label9, #documentlabel-mobile {
+#WordCountDialog #label10,
+#WordCountDialog #documentlabel-mobile {
 	color: #636363 !important;
 }
 
@@ -1175,8 +1644,8 @@ input[type='number']:hover::-webkit-outer-spin-button {
 #mobile-wizard #wordslabel2,
 #mobile-wizard #inclspaceslabel2,
 #mobile-wizard #exclspaceslabel2,
-#mobile-wizard #cjkcharsft2
-{
+#mobile-wizard #cjkcharsft2,
+#mobile-wizard #commentslabel {
 	float: left !important;
 	clear: left !important;
 	width: 70% !important;
@@ -1190,8 +1659,8 @@ input[type='number']:hover::-webkit-outer-spin-button {
 #mobile-wizard #docwords,
 #mobile-wizard #docchars,
 #mobile-wizard #doccharsnospaces,
-#mobile-wizard #doccjkchars
-{
+#mobile-wizard #doccjkchars,
+#mobile-wizard #docComments {
 	float: right !important;
 	clear: right !important;
 	width: 20% !important;
@@ -1199,7 +1668,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	color: #636363 !important;
 }
 
-/* Dialog-specific excelptions*/
+/* Dialog-specific exceptions */
 #DefineNameDialog .cell.jsdialog,
 #ManageNamesDialog .cell.jsdialog {
 	padding-left: 0px;
@@ -1227,7 +1696,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	display: none;
 }
 
-/* Macros dialos */
+/* Macros dialog */
 
 #MacroWarnMedium label {
 	max-width: 400px;
@@ -1255,26 +1724,30 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	border-color: transparent;
 }
 
-#MacroSelectorDialog #categories .ui-treeview-entry.selected, #MacroSelectorDialog #categories .ui-listview-entry, #MacroSelectorDialog #categories .ui-listview-entry.selected {
+#MacroSelectorDialog #categories .ui-treeview-entry div.selected, #MacroSelectorDialog #categories .ui-treeview-entry, #MacroSelectorDialog #categories .ui-treeview-entry.selected {
 	background-color: var(--color-background-dark);
 	color: var(--color-text-dark);
 }
-#MacroSelectorDialog #categories .ui-treeview-entry:hover, #MacroSelectorDialog #categories .ui-treeview-entry.selected:hover, #MacroSelectorDialog #categories .ui-listview-entry:hover, #MacroSelectorDialog #categories .ui-listview-entry.selected:hover, #MacroSelectorDialog #categories .ui-treeview-entry.selected {
+#MacroSelectorDialog #categories .ui-treeview-entry div:hover, #MacroSelectorDialog #categories .ui-treeview-entry div.selected:hover, #MacroSelectorDialog #categories .ui-treeview-entry:hover, #MacroSelectorDialog #categories .ui-treeview-entry.selected:hover, #MacroSelectorDialog #categories .ui-treeview-entry div.selected {
 	background-color: var(--color-background-darker);
 	color: var(--color-text-darker);
 }
 
 /* color selector */
+.has-colorpicker.unotoolbutton > .unobutton img {
+	height: var(--btn-img-colorpicker-size);
+}
 .unotoolbutton .selected-color {
-	height: 5px;
-	width: 24px;
+	box-sizing: border-box;
+	height: var(--btn-color-colorpicker-size);
+	width: calc(var(--btn-img-size) - var(--btn-padding) * 2);
 	position: relative;
-	top: -5px;
-	grid-column: 1;
-	grid-row: 2;
 	border: 1px solid var(--color-border-dark);
 	border-radius: 7px;
 	outline: 1px solid var(--color-background-lighter);
+}
+#context-toolbar .unotoolbutton .selected-color {
+	outline: 1px solid var(--color-border-dark-63);
 }
 
 /* dropdown arrow */
@@ -1286,7 +1759,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	border: 4px solid transparent;
 	border-top: 5px solid var(--color-main-text);
 	display: inline-block !important;
-	margin-left: 3px;
+	margin-inline-start: 3px;
 	margin-top: 4px;
 }
 
@@ -1297,17 +1770,20 @@ input[type='number']:hover::-webkit-outer-spin-button {
 .arrowbackground {
 	box-sizing: border-box;
 	width: 16px;
-	height: 24px;
+	height: 100%;
 	display: flex;
 	align-items: center;
 	border-left: 1px solid transparent;
 	background-color: transparent;
 	grid-column: 3;
+	position: relative;
+	border: none;
+	padding: 1px;
 }
 
 .arrowbackground:hover {
 	border-left-color: transparent;
-	background-color: transparent;
+	background-color: var(--color-background-darker);
 }
 
 .unoarrow:not([disabled]):hover, .arrowbackground:not([disabled]):hover .unoarrow {
@@ -1325,24 +1801,33 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	padding: 8px 10px;
 	margin: 2px 0px;
 	background-color: var(--color-background-dark);
-}
-
-.menubutton span {
-	margin: 0px 5px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .jsdialog.menubutton img {
-	vertical-align: middle;
+	margin-inline-end: 4px;
+}
+
+button.menubutton.sidebar > span {
+	box-shadow: none !important;
+	font-size: var(--default-font-size) !important;
+}
+
+.jsdialog .unobutton img {
+	width: var(--btn-img-size);
+	height: var(--btn-img-size);
 }
 
 .menubutton .arrow {
 	display: table-cell !important;
 	float: right;
-	margin: 5px 0px 5px 5px;
+	margin: 5px 0 0 5px;
 }
 
 .jsdialog.menubutton[disabled] {
-	background-color: var(--color-background-lighter) !important;
+	background-color: transparent !important;
 	color: var(--color-text-lighter) !important;
 }
 
@@ -1391,6 +1876,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 .ui-color-picker-palette {
 	display: grid;
 	grid-gap: 4px;
+	margin-top: 3px;
 }
 
 .ui-color-picker-entry {
@@ -1398,10 +1884,15 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	cursor: pointer;
 	width: 16px;
 	height: 16px;
+	appearance: none;
+	webkit-appearance: none;
+	margin: 0;
 }
 
-.ui-color-picker-entry:hover {
-	border: 1px solid var(--color-primary);
+.ui-color-picker-entry:hover,
+.ui-color-picker-entry:focus-visible {
+	outline: 2px solid var(--color-primary);
+	outline-offset: 1px;
 }
 
 #ui-color-picker-custom,
@@ -1467,173 +1958,55 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	-webkit-animation-timing-function: ease-in-out;
 	animation-timing-function: ease-in-out;
 }
-@keyframes spinner-saving-anim{
-	0%{transform: translateY(-20px) translateX(0px); opacity: 0;}
-	20%{transform: translateY(5px) translateX(15px); opacity: 1;}
-	45%{transform: translateY(22px) translateX(-10px); opacity: 1;}
-	100%{transform: translateY(60px) translateX(15px); opacity: 0;}
+@keyframes spinner-saving-anim {
+	0% {transform: translateY(-20px) translateX(0px); opacity: 0;}
+	20% {transform: translateY(5px) translateX(15px); opacity: 1;}
+	45% {transform: translateY(22px) translateX(-10px); opacity: 1;}
+	100% {transform: translateY(60px) translateX(15px); opacity: 0;}
 }
-@-webkit-keyframes spinner-saving-anim{
-	0%{transform: translateY(-20px) translateX(0px); opacity: 0;}
-	20%{transform: translateY(5px) translateX(15px); opacity: 1;}
-	45%{transform: translateY(22px) translateX(-10px); opacity: 1;}
-	100%{transform: translateY(60px) translateX(15px); opacity: 0;}
+@-webkit-keyframes spinner-saving-anim {
+	0% {transform: translateY(-20px) translateX(0px); opacity: 0;}
+	20% {transform: translateY(5px) translateX(15px); opacity: 1;}
+	45% {transform: translateY(22px) translateX(-10px); opacity: 1;}
+	100% {transform: translateY(60px) translateX(15px); opacity: 0;}
 }
 
-.spinner-img.text-doctype #spinner-box-f-right {
-	fill: rgba(var(--blue1-txt-primary-color),0.5);
+.spinner-img #spinner-box-f-right {
+	fill: rgba(var(--doc-type),0.5);
 }
-.spinner-img.text-doctype #spinner-box-f-left {
-	fill: rgba(var(--blue1-txt-primary-color),0.2);
+.spinner-img #spinner-box-f-left {
+	fill: rgba(var(--doc-type),0.2);
 }
-.spinner-img.text-doctype #spinner-inner-right {
-	fill: rgba(var(--blue1-txt-primary-color),0.5);
+.spinner-img #spinner-inner-right {
+	fill: rgba(var(--doc-type),0.5);
 }
-.spinner-img.text-doctype #spinner-box-back {
-	fill: rgba(var(--blue1-txt-primary-color),0.4);
+.spinner-img #spinner-box-back {
+	fill: rgba(var(--doc-type),0.4);
 }
-.spinner-img.text-doctype #spinner-handle {
-	stroke: rgba(var(--blue1-txt-primary-color),0.8);
+.spinner-img #spinner-handle {
+	stroke: rgba(var(--doc-type),0.8);
 }
-.spinner-img.text-doctype #spinner-inner-left-linearGradient stop:first-child {
-	stop-color: rgba(var(--blue1-txt-primary-color));
+.spinner-img #spinner-inner-left-linearGradient stop:first-child {
+	stop-color: rgba(var(--doc-type));
 	stop-opacity: 0.7;
 }
-.spinner-img.text-doctype #spinner-inner-left-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--blue1-txt-primary-color));
+.spinner-img #spinner-inner-left-linearGradient stop:nth-child(2) {
+	stop-color: rgba(var(--doc-type));
 	stop-opacity: 0.5;
 }
-.spinner-img.text-doctype #spinner-paper-fold {
-	fill: rgba(var(--blue1-txt-primary-color),0.8);
+.spinner-img #spinner-paper-fold {
+	fill: rgba(var(--doc-type),0.8);
 }
-.spinner-img.text-doctype #spinner-paper-linearGradient stop:first-child {
-	stop-color: rgba(var(--blue1-txt-primary-color));
+.spinner-img #spinner-paper-linearGradient stop:first-child {
+	stop-color: rgba(var(--doc-type));
 	stop-opacity: 0.3;
 }
-.spinner-img.text-doctype #spinner-paper-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--blue1-txt-primary-color));
+.spinner-img #spinner-paper-linearGradient stop:nth-child(2) {
+	stop-color: rgba(var(--doc-type));
 	stop-opacity: 0.2;
 }
 
-.spinner-img.spreadsheet-doctype #spinner-box-f-right {
-	fill: rgba(var(--green0-txt-primary-color),0.5);
-}
-.spinner-img.spreadsheet-doctype #spinner-box-f-left {
-	fill: rgba(var(--green0-txt-primary-color),0.2);
-}
-.spinner-img.spreadsheet-doctype #spinner-inner-right {
-	fill: rgba(var(--green0-txt-primary-color),0.5);
-}
-.spinner-img.spreadsheet-doctype #spinner-box-back {
-	fill: rgba(var(--green0-txt-primary-color),0.4);
-}
-.spinner-img.spreadsheet-doctype #spinner-handle {
-	stroke: rgba(var(--green0-txt-primary-color),0.8);
-}
-.spinner-img.spreadsheet-doctype #spinner-inner-left-linearGradient stop:first-child {
-	stop-color: rgba(var(--green0-txt-primary-color));
-	stop-opacity: 0.7;
-}
-.spinner-img.spreadsheet-doctype #spinner-inner-left-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--green0-txt-primary-color));
-	stop-opacity: 0.5;
-}
-.spinner-img.spreadsheet-doctype #spinner-paper-fold {
-	fill: rgba(var(--green0-txt-primary-color),0.8);
-}
-.spinner-img.spreadsheet-doctype #spinner-paper-linearGradient stop:first-child {
-	stop-color: rgba(var(--green0-txt-primary-color));
-	stop-opacity: 0.3;
-}
-.spinner-img.spreadsheet-doctype #spinner-paper-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--green0-txt-primary-color));
-	stop-opacity: 0.2;
-}
-
-.spinner-img.presentation-doctype #spinner-box-f-right {
-	fill: rgba(var(--orange1-txt-primary-color),0.5);
-}
-.spinner-img.presentation-doctype #spinner-box-f-left {
-	fill: rgba(var(--orange1-txt-primary-color),0.2);
-}
-.spinner-img.presentation-doctype #spinner-inner-right {
-	fill: rgba(var(--orange1-txt-primary-color),0.5);
-}
-.spinner-img.presentation-doctype #spinner-box-back {
-	fill: rgba(var(--orange1-txt-primary-color),0.4);
-}
-.spinner-img.presentation-doctype #spinner-handle {
-	stroke: rgba(var(--orange1-txt-primary-color),0.8);
-}
-.spinner-img.presentation-doctype #spinner-inner-left-linearGradient stop:first-child {
-	stop-color: rgba(var(--orange1-txt-primary-color));
-	stop-opacity: 0.7;
-}
-.spinner-img.presentation-doctype #spinner-inner-left-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--orange1-txt-primary-color));
-	stop-opacity: 0.5;
-}
-.spinner-img.presentation-doctype #spinner-paper-fold {
-	fill: rgba(var(--orange1-txt-primary-color),0.8);
-}
-.spinner-img.presentation-doctype #spinner-paper-linearGradient stop:first-child {
-	stop-color: rgba(var(--orange1-txt-primary-color));
-	stop-opacity: 0.3;
-}
-.spinner-img.presentation-doctype #spinner-paper-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--orange1-txt-primary-color));
-	stop-opacity: 0.2;
-}
-
-.spinner-img.drawing-doctype #spinner-box-f-right {
-	fill: rgba(var(--yellow0-txt-primary-color),0.5);
-}
-.spinner-img.drawing-doctype #spinner-box-f-left {
-	fill: rgba(var(--yellow0-txt-primary-color),0.2);
-}
-.spinner-img.drawing-doctype #spinner-inner-right {
-	fill: rgba(var(--yellow0-txt-primary-color),0.5);
-}
-.spinner-img.drawing-doctype #spinner-box-back {
-	fill: rgba(var(--yellow0-txt-primary-color),0.4);
-}
-.spinner-img.drawing-doctype #spinner-handle {
-	stroke: rgba(var(--yellow0-txt-primary-color),0.8);
-}
-.spinner-img.drawing-doctype #spinner-inner-left-linearGradient stop:first-child {
-	stop-color: rgba(var(--yellow0-txt-primary-color));
-	stop-opacity: 0.7;
-}
-.spinner-img.drawing-doctype #spinner-inner-left-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--yellow0-txt-primary-color));
-	stop-opacity: 0.5;
-}
-.spinner-img.drawing-doctype #spinner-paper-fold {
-	fill: rgba(var(--yellow0-txt-primary-color),0.8);
-}
-.spinner-img.drawing-doctype #spinner-paper-linearGradient stop:first-child {
-	stop-color: rgba(var(--yellow0-txt-primary-color));
-	stop-opacity: 0.3;
-}
-.spinner-img.drawing-doctype #spinner-paper-linearGradient stop:nth-child(2) {
-	stop-color: rgba(var(--yellow0-txt-primary-color));
-	stop-opacity: 0.2;
-}
-
-/* progressbar */
-.ui-progressbar {
-	display: flex;
-	align-items: center;
-}
-
-.ui-progressbar progress {
-	width: 100%;
-}
-
-.snackbar .ui-progressbar progress {
-	min-width: 120px;
-	margin-right: 10px;
-}
+/* Progress bar - progressbar.css */
 
 /* snackbar */
 .snackbar {
@@ -1646,7 +2019,18 @@ input[type='number']:hover::-webkit-outer-spin-button {
 .snackbar #snackbar-container-progress {
 	align-items: center;
 	max-width: calc(80vw);
+	row-gap: 4px;
 }
+
+.snackbar .ui-progressbar progress {
+	min-width: 120px;
+	margin-right: 10px;
+}
+
+.snackbar .ui-progressbar progress::-webkit-progress-bar {
+	background-color: #FFFF;
+}
+
 #mobile-wizard.popup.snackbar,
 .snackbar.jsdialog-container .ui-dialog-content {
 	min-width: 200px;
@@ -1688,6 +2072,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background-color: transparent !important;
 	border: none !important;
 	margin: 0 !important;
+	justify-content: center;
 }
 
 .snackbar.jsdialog-container [id$='button'].ui-pushbutton.jsdialog {
@@ -1704,29 +2089,57 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	grid-template-columns: repeat(2, auto);
 }
 
+#mobile-wizard.popup.snackbar [id$='button'] {
+	padding: 8px;
+}
+
 #mobile-wizard.popup.snackbar [id$='button'],
 .snackbar.jsdialog-container [id$='button'] {
 	color: #469cff !important;
 	font-weight: 600;
 	font-size: var(--header-font-size) !important;
-	padding: 8px;
+	display: flex;
+	align-items: center;
 }
 .snackbar.jsdialog-container [id$='button']:hover {
 	background-color: #ffffff15 !important;
 }
 
 /* toolbuttons */
-
-.jsdialog:not(.menubutton) > .ui-content.unobutton {
-	width: var(--btn-size);
-}
-
 .jsdialog .ui-content.unobutton {
 	height: var(--btn-size);
-	padding: 0px;
+	width: var(--btn-size);
+	display: flex;
+	flex-direction: column;
+	padding: var(--btn-padding);
 	vertical-align: middle;
 	background-color: transparent;
 	border: none;
+	position: relative;
+	overflow: hidden;
+	justify-content: center;
+	align-items: center;
+}
+
+#toolbar-wrapper:not(.mobile) ~ #toolbar-down .has-dropdown > .ui-content.unobutton {
+	width: max-content;
+}
+
+.unoarrow::after,
+.jsdialog .ui-content.unobutton::after {
+	--click-increment: -1px;
+	position: absolute;
+	content: '';
+	top: var(--click-increment);
+	right: var(--click-increment);
+	bottom: var(--click-increment);
+	left: var(--click-increment);
+}
+
+/* targetting buttons inside of split button */
+.notebookbar .splitbutton > .ui-content.unobutton:hover,
+.jsdialog .splitbutton > .ui-content.unobutton:hover {
+	background-color: var(--color-background-darker);
 }
 
 .unotoolbutton.has-dropdown {
@@ -1736,34 +2149,25 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	grid-template-rows: auto 0px;
 }
 
-.unotoolbutton.jsdialog.sidebar.ui-content > .arrowbackground {
-	width: auto;
-}
-
 /* handling show/hide state */
 .hidden {
 	display: none !important;
 }
 
 /* dialog/popup fade animation */
-
-.fadeout {
-	animation: fade 0.7s;
-	-webkit-animation: fade 0.7s;
-	-moz-animation: fade 0.7s;
+@media (prefers-reduced-motion: no-preference) {
+	.fadeout {
+		animation: fade 0.7s;
+	}
+	.fadein {
+		animation: fade reverse 0.15s;
+	}
+	.fsdialog-overlay {
+		animation: fade reverse .3s;
+	}
 }
 
 @keyframes fade {
-	from { opacity: 1 }
-	to { opacity: 0 }
-}
-
-@-moz-keyframes fade {
-	from { opacity: 1 }
-	to { opacity: 0 }
-}
-
-@-webkit-keyframes fade {
 	from { opacity: 1 }
 	to { opacity: 0 }
 }
@@ -1785,7 +2189,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 /* Writer - Table of Contents, Index or Bibliography dialog, Columns tab */
 [data-theme='dark'] #ColumnPage #pageexample-img,
-[data-theme='dark'] #ColumnPage #valueset-img {
+[data-theme='dark'] #ColumnPage #column-iconview img {
 	filter: invert(.9)
 }
 
@@ -1815,7 +2219,14 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 .ui-custom-textarea {
+	position: relative;
+}
+
+.ui-custom-textarea-overflow-wrapper {
 	overflow: auto;
+	overscroll-behavior: none;
+	width: 100%;
+	height: 100%;
 	display: grid;
 }
 
@@ -1825,6 +2236,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 .ui-custom-textarea,
 .ui-custom-textarea-cursor-layer,
+.ui-custom-textarea-handle-layer,
 .ui-custom-textarea-text-layer {
 	font-family: monospace;
 	line-height: 1.2;
@@ -1834,6 +2246,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 }
 
 .ui-custom-textarea-cursor-layer,
+.ui-custom-textarea-handle-layer,
 .ui-custom-textarea-text-layer {
 	padding: 4px;
 	grid-column: 1;
@@ -1845,6 +2258,10 @@ input[type='number']:hover::-webkit-outer-spin-button {
 .ui-custom-textarea-cursor-layer {
 	color: transparent;
 	pointer-events: none;
+}
+
+.ui-custom-textarea-handle-layer {
+	position: absolute; /* both lets us position handles absolute to this and pulls us out of the overflow: auto */
 }
 
 .ui-custom-textarea.focused .ui-custom-textarea-cursor-layer span.cursor:not(.hidden) {
@@ -1908,6 +2325,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 
 /* Zotero dialog*/
 
+#ZoteroDialog .ui-treeview {
+	max-height: 500px;
+	max-width: 100%;
+}
+
 #ZoteroDialog-mainbox.jsdialog .ui-treeview {
 	height: 400px;
 }
@@ -1962,6 +2384,11 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	background-color: transparent !important;
 	border-color: transparent;
 }
+
+#toolbar-down  .jsdialog .ui-edit-container {
+	place-content: center;
+}
+
 /* Formula Wizard */
 #FormulaDialog .ui-tabs-root {
 	background-color: var(--color-background-tabs-group);
@@ -1979,7 +2406,7 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	grid-template-rows: auto 1fr;
 	grid-row-gap: 4px;
 }
-#FormulaDialog #StructPage .ui-treeview-entry {
+#FormulaDialog #StructPage .ui-treeview-entry div {
 	background-color: transparent;
 }
 #FormulaDialog #search {
@@ -2005,11 +2432,47 @@ input[type='number']:hover::-webkit-outer-spin-button {
 	display: grid;
 	min-width: 400px;
 }
+
 #FormulaDialog .ui-tabs-content.jsdialog {
 	grid-auto-columns: 250px;
-	margin-right: 0.2em;
 	margin-top: 0px;
 }
+
+#FormulaDialog #box3 :is(#grid2, #grid3) {
+	align-items: center;
+}
+
+#FormulaDialog #ALTBOX #headline {
+	font-weight: bold;
+}
+
+/* text-area overflow on function wizard window */
+
+#FormulaDialog #ed_formula.ui-textarea {
+	max-width: 392px;
+}
+
+#FormulaDialog #tabcontrol {
+	margin-inline-end: 10px;
+}
+
+#FormulaDialog .ui-tabpage > div > .ui-grid-cell > :not(.ui-pushbutton-wrapper) {
+	margin: auto 4px;
+}
+
+#FormulaDialog .ui-pushbutton-wrapper {
+	background: initial;
+}
+
+#FormulaDialog {
+	/* don't leave white area below the functions if right panel is short */
+	height: 100%;
+}
+
+#FormulaDialog .ui-textarea {
+	margin-top: 10px;
+}
+
 
 div [id^='TemplateDialog'] {
 	min-width: 590px;
@@ -2046,11 +2509,17 @@ kbd,
 
 /* manage changes dialog */
 
-.jsdialog #writerchanges .ui-treeview-body {
+.jsdialog #writerchanges tbody {
 	min-height: 300px;
 }
 
 /* Insert hyperlink dialog */
+
+#HyperlinkDocPage,
+#HyperlinkInternetPage,
+#HyperlinkMailPage {
+	width: 100%;
+}
 
 #HyperlinkInternetPage #grid2,
 #HyperlinkInternetPage #label2,
@@ -2058,6 +2527,43 @@ kbd,
 #HyperlinkInternetPage #linktyp_ftp,
 #HyperlinkInternetPage #linktyp_internet {
 	display: none;
+}
+
+#HyperlinkInternetPage #grid1,
+#HyperlinkInternetPage #grid3,
+#HyperlinkMailPage #grid3 {
+	grid-template-columns: 1fr 3fr !important;
+	column-gap: 0px !important;
+}
+
+/* Third column has nothing to display */
+#HyperlinkMailPage #grid1 {
+	grid-template-columns: 1fr 3fr 0px !important;
+	column-gap: 0px !important;
+}
+
+/* Unlike frame1, and both frames on the mail page, this only has one element,
+   and is therefore a div not a fieldset. Fieldsets have 2px margin on both sides,
+   so add it here to to align elements. */
+#HyperlinkInternetPage #frame2 {
+	margin-left: 2px;
+	margin-right: 2px;
+}
+
+#HyperlinkDocPage #grid5 {
+	grid-template-columns: 87px 1fr 38px !important;
+}
+
+#HyperlinkDocPage #frame1,
+[id^='Hyperlink'] .ui-grid-cell:empty,
+[id^='Hyperlink'] .hidden {
+	display: none;
+}
+
+/* grid requires all elements to occupy space, but we can reduce their sizing */
+[id^='Hyperlink'] #browse button {
+	margin: auto;
+	max-height: 32px;
 }
 
 /* feature_lock */
@@ -2162,10 +2668,362 @@ kbd,
 	margin: 0;
 }
 
-#DocumentPropertiesDialog #customprops .jsdialog.ui-scrollwindow {
-	max-height: min-content;
+#DocumentPropertiesDialog #customprops #CustomInfoPage > .jsdialog.ui-scrollwindow:not(.formulabar) {
+	height: 540px;
+	max-height: none;
 }
 
 #ServerAuditDialog #ServerAuditDialog-mainbox {
-	min-width: calc(min(800px, 80vw));
+	min-width: calc(min(600px, 80vw));
+}
+
+#ServerAuditDialog .ui-treeview {
+	border-color: transparent;
+	max-height: max-content;
+}
+#ServerAuditDialog .ui-treeview td[role='gridcell'] {
+	padding-inline-start: 0;
+}
+#ServerAuditDialog div:first-child .ui-treeview-header-sort-icon:after {
+	display: none;
+}
+#ServerAuditDialog div:first-child .ui-treeview-header-sort-icon {
+	background: url('images/lc_serverauditheader.svg') no-repeat center;
+	width: 16px;
+	display: table-caption;
+	height: 16px;
+}
+
+#ServerAuditDialog #ServerAuditDialog-mainbox label {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: #000;
+	border-radius: 30px;
+	width: fit-content;
+	height: 16px;
+	margin-top: 8px;
+	padding-right: 10px;
+}
+
+#ServerAuditDialog #ServerAuditDialog-mainbox label#auditsuccess {
+	background-color: #c4f7cc;
+	color: #1c4f26;
+}
+
+#ServerAuditDialog #ServerAuditDialog-mainbox label#auditerror {
+	background-color: #ffd6d9;
+	color: #d42314;
+}
+
+#ServerAuditDialog #ServerAuditDialog-mainbox label#auditsuccess::before {
+	background: url('images/circle-check.svg') no-repeat center/18px;
+	content: '';
+	width: 16px;
+	height: 16px;
+}
+
+#ServerAuditDialog #ServerAuditDialog-mainbox label#auditerror::before {
+	background: url('images/monochrome-x-cross.svg') no-repeat center;
+	content: '';
+	width: 16px;
+	height: 16px;
+}
+
+#findreplacetabbox {
+	justify-content: start;
+}
+
+#showcomments-container[default-state='true'],
+#insertmode-container[default-state='true'],
+#permissionmode-container[default-state='true'],
+#documentstatus-container[default-state='true'],
+#statusselectionmode-container[default-state='true'] {
+	display: none !important;
+}
+
+.status-hidden {
+	display: none !important;
+}
+
+/* Writer - Format - Page Style - Borders - Presets and Shadow Style - Position */
+/* Calc - Format - Format Page - Borders - Presets and Shadow Style - Position */
+#BorderPage.jsdialog #presets.ui-iconview,
+#BorderPage.jsdialog #shadows.ui-iconview {
+	grid-template-columns: 1fr 1fr 1fr 1fr 1fr; /* we want presets and shadows in a single row */
+	overflow: visible;
+}
+
+/* Impress - Sidebar - Layouts */
+/* Impress - Layout - Slide Transition */
+[data-theme='dark'] .sidebar-panel #layoutpanel_icons .ui-iconview-entry img,
+[data-theme='dark'] .sidebar-panel #transitions_icons .ui-iconview-entry img {
+	filter: invert(1);
+}
+
+/* Impress - Sidebar - Layouts */
+/* Draw - Insert - Fontwork */
+.sidebar-panel #layoutpanel_icons .ui-iconview-entry img,
+#FontworkGalleryDialog .ui-iconview-entry img {
+	padding: 5px 0;
+}
+
+/* Writer - Format - Page Style - Area - Image */
+#ImageTabPage #frame1 .ui-grid-cell {
+	display: grid;
+	grid-gap: 4px;
+}
+
+/* Calc - Format - Format Cells - Background - Color */
+/* Format -> Character -> Font Effects -> Font color */
+
+#ColorPage.jsdialog :is(#iconview_colors, #iconview_recent_colors).ui-iconview,
+:is(#colorwindow_iv_colors, #colorwindow_iv_recentcolors).ui-iconview {
+	grid-template-columns: repeat(12, 1fr);
+	width: max-content;
+	line-height: 0;
+	padding: 5px;
+}
+
+#ColorPage.jsdialog #iconview_colors.ui-iconview,
+#colorwindow_iv_colors.ui-iconview {
+	max-height: 19vh;
+}
+
+#ColorPage.jsdialog :is(#iconview_colors, #iconview_recent_colors).ui-iconview .ui-iconview-entry img,
+:is(#colorwindow_iv_colors, #colorwindow_iv_recentcolors) .ui-iconview-entry img {
+	padding: 1px;
+}
+
+#ColorPage.jsdialog :is(#iconview_colors, #iconview_recent_colors).ui-iconview .ui-iconview-entry:is(:hover, .selected),
+:is(#colorwindow_iv_colors, #colorwindow_iv_recentcolors) .ui-iconview-entry:is(:hover, .selected) {
+	outline: 2px solid var(--color-primary);
+	border: 1px solid transparent;
+	background-color: transparent;
+	border-radius: 0;
+}
+
+#ColorPage.jsdialog :is(#iconview_colors, #iconview_recent_colors).ui-iconview .ui-iconview-entry span,
+:is(#colorwindow_iv_colors, #colorwindow_iv_recentcolors) .ui-iconview-entry span {
+	font-size: 0; /* Hide placeholder text to prevent layout shifts in color palette iconview widgets due to lazy loading */
+}
+
+/* Writer - Format - Character */
+/* Writer - Format - Paragraph */
+/* Writer - Format - Page Style */
+
+#ParagraphPropertiesDialog #ParaIndentSpacing #maingrid,
+#ParagraphPropertiesDialog #labelTP_NUMPARA #NumParaPage,
+#ParagraphPropertiesDialog #labelTP_DROPCAPS #maingrid52,
+#ParagraphPropertiesDialog #transparence #box1,
+#CharacterPropertiesDialog #fonteffects #FontColor,
+#CharacterPropertiesDialog #fonteffects #TextDecoration,
+#CharacterPropertiesDialog #fonteffects #Effects,
+[id^='TemplateDialog'] #Footnote #FootnoteAreaPage {
+	width: fit-content;
+}
+
+[id^='TemplateDialog'] #Footnote #FootnoteAreaPage .menubutton {
+	margin: 0;
+}
+
+#CharacterPropertiesDialog :is(#font, #fonteffects, #position, #asianlayout) img.jsdialog.ui-drawing-area {
+	width: 650px;
+}
+
+#CharacterPropertiesDialog #position #box7,
+#CharacterPropertiesDialog #FontColor #grid3 {
+	align-items: center;
+}
+
+/* Writer - Format - Paragraph - Text Flow */
+/* Writer - Format - Paragraph - Tabs */
+#ParagraphPropertiesDialog #textflow #checkAcrossPage.checkbutton,
+#ParagraphPropertiesDialog #labelTP_TABULATOR #ParagraphTabsPage {
+	grid-column-gap: 0;
+}
+
+/* Writer - Format - Paragraph - Tabs */
+/* Writer - Format - Paragraph - Area - Color */
+#ParagraphPropertiesDialog #labelTP_TABULATOR #entryED_TABTYPE_DECCHAR-input,
+#ParagraphPropertiesDialog #labelTP_TABULATOR #entryED_FILLCHAR_OTHER-input,
+#ColorPage.jsdialog #rgbpreset input,
+#ColorPage.jsdialog #rgbcustom input {
+	max-width: 100px;
+}
+
+/* Writer - Format - Paragraph - Area - Color */
+#ColorPage.jsdialog #rgbpreset {
+	width: max-content;
+}
+
+/* Writer - Format - Page Style - Columns - Settings */
+
+#ColumnPage.jsdialog #grid4 {
+	align-items: center;
+}
+
+#ColumnPage.jsdialog #column-iconview.ui-iconview {
+	grid-template-columns: repeat(5, 1fr);
+	overflow: visible;
+}
+
+/* Format - Bullets and Numbering */
+
+#BulletsAndNumberingDialog
+:is(#pick_bullet_iconview,
+#pick_numbering_iconview,
+#pick_outline_iconview,
+#pick_graphic_iconview).jsdialog.ui-iconview {
+	grid-template-columns: repeat(4, 1fr);
+}
+
+#BulletsAndNumberingDialog #PickBulletPage #changeBulletBtn.jsdialog.ui-grid-cell {
+	justify-content: flex-end;
+}
+
+#BulletsAndNumberingDialog #pick_graphic_iconview.jsdialog.ui-iconview {
+	min-width: 650px;
+}
+
+#BulletsAndNumberingDialog #PickGraphicPage.jsdialog #pick_graphic_iconview.ui-iconview .ui-iconview-entry span {
+	font-size: 0; /* Hide placeholder text to prevent layout shifts in image page of bullets and numbering dialog due to lazy loading */
+}
+
+#BulletsAndNumberingDialog #NumberingPositionPage #previewwin.jsdialog img.jsdialog.ui-drawing-area {
+	width: 370px;
+}
+
+/* Format - Bullets and Numbering - Select image as bullet -> Go to Customize */
+#BulletsAndNumberingDialog #customize #bitmap-button.unobutton {
+	width: fit-content; /* makes button text visible*/
+}
+
+/* Insert - Line - Sidebar - Line Style */
+/* Insert - Line - Sidebar - Thickness */
+#floating_line_style_iconview.ui-iconview.jsdialog,
+#line_iconview.ui-iconview.jsdialog {
+	grid-template-columns: 1fr; /* we want line style in a single column */
+}
+
+/* Insert - Line - Sidebar - Arrow Styles */
+#floating_line_end_iconview.ui-iconview.jsdialog {
+	grid-template-columns: 1fr 1fr;
+}
+
+/* Insert - Line - Sidebar - Line Style */
+/* Insert - Line - Sidebar - Arrow Styles */
+#floating_line_style_iconview.ui-iconview.jsdialog,
+#floating_line_end_iconview.ui-iconview.jsdialog {
+	font-size: 0; /* Hide placeholder text to prevent layout shifts due to lazy loading */
+}
+
+:is(#floating_line_style_iconview, #floating_line_end_iconview, #line_iconview).ui-iconview .ui-iconview-entry {
+	border: 1px solid transparent !important; /* Prevents layout shift by reserving space for the border on hover */
+}
+
+/* Select Chart - Sidebar - Edit Object - Colors */
+:is(#colorful_palettes, #monochromatic_palettes) .ui-iconview-entry {
+	border: 1px solid transparent;
+}
+
+/* Calc - Insert - Chart - Chart Wizard(Data series) */
+
+#CHART2_HID_SCH_WIZARD_ROADMAP #tp_DataSource #box1.jsdialog.ui-grid-cell {
+	align-items: start;
+}
+
+#CHART2_HID_SCH_WIZARD_ROADMAP #tp_DataSource #grid2 :is(#box5, #box6) {
+	align-items: center;
+}
+
+/* Calc - Insert - Chart - Chart Wizard */
+#subtype_iconview.jsdialog.ui-iconview {
+	grid-template-columns: repeat(4, 1fr);
+	overflow: visible;
+}
+
+#CHART2_HID_SCH_WIZARD_ROADMAP.vertical.jsdialog label {
+	width: max-content;
+}
+
+/* Listbox UI grid */
+.jsdialog.ui-grid[role='listbox']:not(:has(> .ui-iconview)) {
+	max-height: min(470px, 45vh);
+}
+
+.jsdialog.ui-grid[role='listbox'] {
+	overflow-x: hidden;
+	overflow-y: auto;
+	scrollbar-width: var(--scrollbar-width);
+	scrollbar-color: var(--scrollbar-color);
+}
+
+/* Writer - Form - Properties(Dropdown) */
+#ContentControlDialog #tabindexlabel {
+	width: max-content;
+}
+
+/* Prevents adding empty space on top of tabpages */
+/* i.e Writer - Format - Page Style */
+.single-child-grid {
+	align-self: start;
+}
+
+/* Apply label styling to static text for consistent appearance */
+#FormulaDialog #ParameterPage :is(#editdesc, #pardesc),
+#FormulaDialog #ALTBOX #funcdesc,
+#GotoPageDialog #grid1 #page_count {
+	margin: auto 0px;
+	color: var(--color-main-text);
+	font-size: var(--default-font-size);
+	line-height: var(--default-height);
+	padding-left: inherit;
+}
+
+#sheets-buttons-toolbox #sheetlist.menubutton:hover {
+	border: 1px solid var(--color-btn-border);
+	background-color: var(--color-background-tabs-group);
+}
+
+#sheetlist-entries .ui-combobox-entry.selected span {
+	background-color: rgba(var(--doc-type)) !important;
+	color: var(--color-primary-text) !important;
+	border: 1px solid rgba(var(--doc-type)) !important;
+}
+
+#sheets-buttons-toolbox #sheetlist.menubutton {
+	padding: 0;
+	margin: 0;
+	box-sizing: inherit;
+}
+
+#sheetlist .arrowbackground {
+	display: none;
+}
+
+#sheets-buttons-toolbox #sheetlist-button img {
+	margin-inline-end: 0;
+}
+
+div [id^='themeview'] {
+	grid-template-columns: 1fr 1fr;
+	width: 420px;
+}
+div [id^='themeview1col'] {
+	grid-template-columns: 1fr;
+	width: 220px;
+}
+
+div [id^='themeview'].ui-iconview-entry, div [id^='themeview1col'].ui-iconview-entry {
+	width: 200px;
+	height: 146px
+}
+
+#SpecialCharactersDialog #showcharset.jsdialog.ui-iconview {
+	grid-template-columns: repeat(16, 1fr);
+}
+
+#imSetInsMode {
+	content: url('images/queryinsmode.svg');
 }

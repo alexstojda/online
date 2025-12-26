@@ -43,12 +43,12 @@ class Quarantine
         uint64_t size() const { return _size; }
 
     private:
-        std::string _fullPath; //< The full path, including the quarantine directory and filename.
-        uint64_t _secondsSinceEpoch = 0; //< The timestamp in the filename.
-        int _pid = 0; //< The PID that generated it; informational.
-        std::string _docKey; //< The DocKey the file belongs to.
-        std::string _filename; //< The filename, without the path or other components.
-        uint64_t _size = 0; //< The size of the file in bytes.
+        std::string _fullPath; ///< The full path, including the quarantine directory and filename.
+        std::string _docKey; ///< The DocKey the file belongs to.
+        std::string _filename; ///< The filename, without the path or other components.
+        uint64_t _secondsSinceEpoch = 0; ///< The timestamp in the filename.
+        uint64_t _size = 0; ///< The size of the file in bytes.
+        int _pid = 0; ///< The PID that generated it; informational.
     };
 
 public:
@@ -59,7 +59,7 @@ public:
     static bool isEnabled() { return !QuarantinePath.empty(); }
 
     /// Quarantines a new version of the document.
-    bool quarantineFile(const std::string& docName);
+    bool quarantineFile(const std::string& docPath);
 
     /// Returns the last quarantined file's path.
     std::string lastQuarantinedFilePath() const;
@@ -67,6 +67,10 @@ public:
 private:
     /// Returns quarantine directory size in bytes.
     static std::size_t quarantineSize();
+
+    /// Quarantines a new version of the document; the implementation.
+    static bool quarantineFile(const std::string& docKey, const std::string& docPath,
+                               const std::string& quarantinedFilename);
 
     /// Cleans up quarantined files to make sure we don't exceed MaxSizeBytes.
     static void makeQuarantineSpace(std::size_t headroomBytes);
@@ -87,9 +91,9 @@ private:
     /// Protects the shared QuarantineMap from concurrent modification.
     static std::mutex Mutex;
     static std::string QuarantinePath;
-    static std::size_t MaxSizeBytes; //< Total limit on all quarantined files.
-    static std::size_t MaxAgeSecs; //< The oldest quarantined file for any doc.
-    static std::size_t MaxVersions; //< The maximum number of quarantines per doc.
+    static std::size_t MaxSizeBytes; ///< Total limit on all quarantined files.
+    static std::size_t MaxAgeSecs; ///< The oldest quarantined file for any doc.
+    static std::size_t MaxVersions; ///< The maximum number of quarantines per doc.
 
     /// The delimiter used in the quarantine filename.
     static constexpr char Delimiter = '_';
@@ -102,3 +106,5 @@ private:
     /// The document filename is encoded to ensure tokenization.
     const std::string _quarantinedFilename;
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

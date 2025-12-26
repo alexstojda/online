@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* global Proxy _ */
 /*
  * Copyright the Collabora Online contributors.
@@ -10,16 +11,14 @@
 */
 
 class HTMLObjectSection extends CanvasSectionObject {
-	name: string = "will-be-set-at-initialization"; // There may be multiple instances of this class.
-	processingOrder: number = L.CSections.HTMLObject.processingOrder;
-	drawingOrder: number = L.CSections.HTMLObject.drawingOrder;
-	zIndex: number = L.CSections.HTMLObject.zIndex;
+	processingOrder: number = app.CSections.HTMLObject.processingOrder;
+	drawingOrder: number = app.CSections.HTMLObject.drawingOrder;
+	zIndex: number = app.CSections.HTMLObject.zIndex;
 	documentObject: boolean = true;
 
 	constructor (sectionName: string, objectWidth: number, objectHeight: number, documentPosition: cool.SimplePoint, extraClass: string = "", showSection: boolean = true) {
-        super();
+        super(sectionName);
 
-		this.name = sectionName;
 		this.size = [objectWidth * app.dpiScale, objectHeight * app.dpiScale];
 		this.position = [documentPosition.pX, documentPosition.pY];
 		this.sectionProperties.objectWidth = objectWidth;
@@ -34,7 +33,7 @@ class HTMLObjectSection extends CanvasSectionObject {
 		else this.sectionProperties.objectDiv.style.height = objectHeight + 'px';
 
 		if (extraClass)
-			this.sectionProperties.objectDiv.classList.add(extraClass);
+			this.sectionProperties.objectDiv.className += ' ' + extraClass;
 
 		// canvas-container and canvas overlap entirely. We can append the html object to canvas-container.
 		document.getElementById('canvas-container').appendChild(this.sectionProperties.objectDiv);
@@ -43,6 +42,9 @@ class HTMLObjectSection extends CanvasSectionObject {
 			this.sectionProperties.objectDiv.style.display = 'none';
 			this.showSection = false;
 		}
+
+		// This one is important for canvas section container. This property lets the events pass through the object and find canvas.
+		this.sectionProperties.objectDiv.style.pointerEvents = 'none';
 	}
 
 	onInitialize(): void {
@@ -58,19 +60,8 @@ class HTMLObjectSection extends CanvasSectionObject {
 	}
 
 	adjustHTMLObjectPosition() {
-		let leftAddition = 0;
-		let topAddition = 0;
-
-		if (this.sectionProperties.objectDiv.parentNode.id === 'map') {
-			const clientRectMap = document.getElementById('map').getBoundingClientRect();
-			const clientRectCanvas = document.getElementById('canvas-container').getBoundingClientRect();
-
-			leftAddition = clientRectMap.width - clientRectCanvas.width;
-			topAddition = clientRectMap.height - clientRectCanvas.height;
-		}
-
-		const left = Math.round((this.myTopLeft[0] + leftAddition) / app.dpiScale) + 'px';
-		const top = Math.round((this.myTopLeft[1] + topAddition) / app.dpiScale) + 'px';
+		const left = Math.round(this.myTopLeft[0] / app.dpiScale) + 'px';
+		const top = Math.round(this.myTopLeft[1] / app.dpiScale) + 'px';
 
 		if (this.sectionProperties.objectDiv.style.left !== left)
 			this.sectionProperties.objectDiv.style.left = left;
@@ -79,7 +70,7 @@ class HTMLObjectSection extends CanvasSectionObject {
 			this.sectionProperties.objectDiv.style.top = top;
 	}
 
-	onDraw(frameCount?: number, elapsedTime?: number, subsetBounds?: Bounds): void {
+	onDraw(frameCount?: number, elapsedTime?: number): void {
 		this.adjustHTMLObjectPosition();
 	}
 
@@ -99,13 +90,10 @@ class HTMLObjectSection extends CanvasSectionObject {
 	}
 
 	public getPosition(): cool.SimplePoint {
-		const twips = [Math.round(this.position[0] * app.pixelsToTwips), Math.round(this.position[1] * app.pixelsToTwips)];
-		return new cool.SimplePoint(twips[0], twips[1]);
+		return this.documentPosition.clone();
 	}
 
 	public onRemove(): void {
 		this.sectionProperties.objectDiv.remove();
 	}
 }
-
-app.definitions.htmlObjectSection = HTMLObjectSection;

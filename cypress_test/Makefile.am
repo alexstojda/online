@@ -1,5 +1,12 @@
-if ENABLE_CYPRESS
-
+#
+# Copyright the Collabora Online contributors.
+#
+# SPDX-License-Identifier: MPL-2.0
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
 export NODE_PATH=$(abs_builddir)/node_modules
 
 V = $(if $(verbose),,@)
@@ -9,7 +16,6 @@ ESLINT_BINARY = $(abs_builddir)/node_modules/eslint/bin/eslint.js
 WAIT_ON_BINARY = $(abs_builddir)/node_modules/wait-on/bin/wait-on
 GET_PORT_BINARY = $(abs_builddir)/node_modules/get-port-cli/cli.js
 NPM_INSTALLED = $(abs_builddir)/workdir/npm_installed
-CAPABILITIES = $(if @ENABLE_SETCAP@,true,false)
 CYPRESS_CONFIG = $(abs_srcdir)/cypress.config.ts
 SERVER_ARG = $(subst :, ,$(shell basename $(if $(coolwsd),$(coolwsd),http://localhost:9980)))
 COOLWSD_SERVER = $(firstword $(SERVER_ARG))
@@ -27,6 +33,12 @@ COOLWSD_OUTPUT=$(abs_builddir)/cypress/wsd_logs/coolwsd_output.log
 
 SUPPORT_FILE_ABS = $(abs_srcdir)/support/index.js
 SUPPORT_FILE = $(if $(findstring $(abs_srcdir),$(abs_builddir)),support/index.js,$(SUPPORT_FILE_ABS))
+
+LIGHTHOUSE_USER_AGENT = "cypress"
+LIGHTHOUSE_TEST_FOLDER = $(abs_srcdir)/integration_tests/lighthouse
+LIGHTHOUSE_DATA_FOLDER = $(DESKTOP_DATA_FOLDER)
+LIGHTHOUSE_DATA_WORKDIR = $(DESKTOP_DATA_WORKDIR)
+LIGHTHOUSE_TRACK_FOLDER = $(abs_builddir)/workdir/track/lighthouse
 
 DESKTOP_USER_AGENT = "cypress"
 DESKTOP_TEST_FOLDER = $(abs_srcdir)/integration_tests/desktop
@@ -85,6 +97,8 @@ if HAVE_LO_PATH
 
 MOBILE_TEST_FILES=$(subst $(MOBILE_TEST_FOLDER)/,,$(wildcard $(MOBILE_TEST_FOLDER)/*_spec.js) $(wildcard $(MOBILE_TEST_FOLDER)/*/*_spec.js))
 
+LIGHTHOUSE_TEST_FILES=$(subst $(LIGHTHOUSE_TEST_FOLDER)/,,$(wildcard $(LIGHTHOUSE_TEST_FOLDER)/*_spec.js) $(wildcard $(LIGHTHOUSE_TEST_FOLDER)/*/*_spec.js))
+
 DESKTOP_TEST_FILES=$(subst $(DESKTOP_TEST_FOLDER)/,,$(wildcard $(DESKTOP_TEST_FOLDER)/*_spec.js) $(wildcard $(DESKTOP_TEST_FOLDER)/*/*_spec.js))
 
 IDLE_TEST_FILES=$(subst $(IDLE_TEST_FOLDER)/,,$(wildcard $(IDLE_TEST_FOLDER)/*_spec.js) $(wildcard $(IDLE_TEST_FOLDER)/*/*_spec.js))
@@ -112,7 +126,7 @@ do-check: $(DESKTOP_TEST_FILES_DONE) $(MOBILE_TEST_FILES_DONE) $(IDLE_TEST_FILES
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(if $(wildcard $(ERROR_LOG)),$(V)cat $(ERROR_LOG))
 
-$(PID_FILE): @JAILS_PATH@ $(NODE_BINS)
+$(PID_FILE): @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(if $(HEADLESS_BUILD),$(call start_Xvfb),)
@@ -124,7 +138,7 @@ setup_short_idle:
 setup_regular_idle:
 	$(eval SHORT_IDLE=)
 
-start_short_idle_coolwsd: @JAILS_PATH@ $(NODE_BINS) setup_short_idle
+start_short_idle_coolwsd: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS) setup_short_idle
 	$(V)$(KILL_COMMAND) || true
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(call cleanup_before_run)
@@ -169,11 +183,14 @@ $(IDLE_TEST_FILES_DONE): start_short_idle_coolwsd $(PID_FILE)
 @JAILS_PATH@:
 	mkdir -p $@
 
+@CACHE_PATH@:
+	mkdir -p $@
+
 define run_JS_error_check
 	$(V)echo "Checking for JS errors in test code..."
 	$(V)echo
 	$(V)$(NODE) $(ESLINT_BINARY) $(abs_srcdir) \
-		--ignore-path $(abs_srcdir)/.eslintignore --config $(abs_srcdir)/.eslintrc
+		--ignore-path $(abs_srcdir)/.eslintignore --config .eslintrc
 	$(V)echo
 endef
 
@@ -181,9 +198,10 @@ define start_coolwsd
 	$(if $(coolwsd),true,$(call start_coolwsd_instance))
 endef
 
+# Use 'ulimit' to intentionally reduce the maximum number of open file descriptors: if 1024 is not
+# enough, then probably we leak them.
 define start_coolwsd_instance
 	$(eval FREE_PORT:=$(shell $(GET_PORT_BINARY) --host=127.0.0.1 $(ALLOWED_PORTS)))
-	export $FREE_PORT
 	$(if $(findstring php-proxy, $(CYPRESS_INTEGRATION)),\
 		$(if $(findstring $(PHP_PROXY_PORT),$(FREE_PORT)),,$(error CypressError: $(PHP_PROXY_PORT) port is unavailable!)))
 	$(if $(findstring nextcloud, $(CYPRESS_INTEGRATION)),\
@@ -194,20 +212,20 @@ define start_coolwsd_instance
 	$(V)fc-cache "@LO_PATH@"/share/fonts/truetype
 	$(V)echo
 	$(V)mkdir -p $(dir $(COOLWSD_OUTPUT))
-	../coolwsd --o:sys_template_path="@SYSTEMPLATE_PATH@" \
-			--o:child_root_path="@JAILS_PATH@" --o:storage.filesystem[@allow]=true \
-			--o:security.capabilities="$(CAPABILITIES)" \
+	ulimit -n 1024; ../coolwsd --o:sys_template_path="@SYSTEMPLATE_PATH@" \
+			--o:child_root_path="@JAILS_PATH@" \
+			--o:cache_files.path="@CACHE_PATH@" \
+			--o:storage.filesystem[@allow]=true \
 			--disable-ssl --forcecaching \
 			--o:ssl.cert_file_path="$(abs_top_srcdir)/etc/cert.pem" \
 			--o:ssl.key_file_path="$(abs_top_srcdir)/etc/key.pem" \
 			--o:ssl.ca_file_path="$(abs_top_srcdir)/etc/ca-chain.cert.pem" \
 			--o:admin_console.username=admin --o:admin_console.password=admin \
-			--o:logging.file[@enable]=true --o:logging.level=trace \
+			--o:logging.file[@enable]=true --o:logging.level=debug \
 			--o:logging.disabled_areas="" --o:welcome.enable=false \
 			--o:user_interface.mode=$(USER_INTERFACE) \
 			--o:accessibility.enable=$(A11Y_ENABLE) \
 			--o:security.enable_macros_execution=true \
-			--o:mount_namespaces[@default]=true \
 			$(if $(SHORT_IDLE),--o:per_view.out_of_focus_timeout_secs=1) \
 			$(if $(SHORT_IDLE),--o:per_view.idle_timeout_secs=7) \
 			--port=$(FREE_PORT) \
@@ -216,7 +234,7 @@ define start_coolwsd_instance
 			--unattended \
 			$(if $(findstring php-proxy, $(CYPRESS_INTEGRATION)),--o:net.proxy_prefix=true) \
 			 > $(COOLWSD_OUTPUT) 2>&1 &
-	$(V)$(WAIT_ON_BINARY) http://localhost:$(FREE_PORT) --timeout 60000 || (echo ==dump coolwsd.log== && cat $(COOLWSD_OUTPUT) && exit 1)
+	$(V)$(WAIT_ON_BINARY) http://localhost:$(FREE_PORT) --timeout 60000 || (echo ==dump coolwsd console output== && cat $(COOLWSD_OUTPUT) && exit 1)
 	$(V)echo
 endef
 
@@ -232,6 +250,9 @@ define cleanup_before_run
 	$(V)rm -f $(ERROR_LOG)
 	$(V)rm -f $(PID_FILE)
 	$(V)rm -rf cypress
+	$(V)rm -rf integration_tests/snapshots/actual
+	$(V)rm -rf $(abs_top_srcdir)/test/data/presets
+	$(V)cp -r $(abs_top_srcdir)/test/data/presets-default $(abs_top_srcdir)/test/data/presets
 endef
 
 NODE_BINS = \
@@ -253,6 +274,7 @@ clean-local:
 	rm -rf node_modules
 	rm -rf workdir
 	rm -rf cypress
+	rm -rf integration_tests/snapshots/actual
 	rm -rf package-lock.json
 	rm -rf .nyc_output
 	rm -rf coverage
@@ -261,7 +283,7 @@ clean-local:
 # Mobile tests.
 ###############
 
-check-mobile: @JAILS_PATH@ $(NODE_BINS)
+check-mobile: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(if $(HEADLESS_BUILD),$(call start_Xvfb),)
@@ -270,7 +292,7 @@ check-mobile: @JAILS_PATH@ $(NODE_BINS)
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(V)$(KILL_COMMAND) || true
 
-run-mobile: @JAILS_PATH@ $(NODE_BINS)
+run-mobile: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -319,10 +341,55 @@ define run_mobile_tests
 endef
 
 ################
+# Lighthouse tests.
+################
+
+check-lighthouse: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
+	$(call cleanup_before_run)
+	$(call run_JS_error_check)
+	$(if $(HEADLESS_BUILD),$(call start_Xvfb),)
+	$(call start_coolwsd)
+	$(call run_lighthouse_tests,$(spec))
+	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
+	$(V)$(KILL_COMMAND) || true
+
+LIGHTHOUSE_CONFIG = \
+	specPattern=$(LIGHTHOUSE_TEST_FOLDER)/**/*_spec.js,supportFile=$(SUPPORT_FILE),userAgent=$(LIGHTHOUSE_USER_AGENT)
+
+LIGHTHOUSE_ENV = \
+	DATA_FOLDER=$(LIGHTHOUSE_DATA_FOLDER),DATA_WORKDIR=$(LIGHTHOUSE_DATA_WORKDIR),WSD_VERSION_HASH=$(COOLWSD_VERSION_HASH),SERVER=$(COOLWSD_SERVER),SERVER_PORT=$(FREE_PORT),LO_CORE_VERSION="$(CORE_VERSION)",INTEGRATION=$(CYPRESS_INTEGRATION),IMAGES_FOLDER=$(abs_top_srcdir)/browser/images/help/en/
+
+LIGHTHOUSE_INCLUDE_TAGS = \
+	taglighthouse,$(A11Y_TAG)
+
+# Run lighthouse accessibility tests with Chrome browser.
+# Parameters:
+# 1 - spec (optional):	test file to run, if not specified all lighthouse tests are run.
+define run_lighthouse_tests
+	$(V)echo $(if $(1),"Running lighthouse test: $(1)","Running all lighthouse accessibility tests...")
+	$(V)echo
+	$(eval CYPRESS_INCLUDE_TAGS=$(LIGHTHOUSE_INCLUDE_TAGS))
+	$(V)echo Cypress tags: $(CYPRESS_INCLUDE_TAGS)
+	$(V)echo
+	$(eval export CYPRESS_INCLUDE_TAGS)
+	$(eval LIGHTHOUSE_BROWSER=chrome)
+	$(eval SPEC_FILE=$(if $(1),$(LIGHTHOUSE_TEST_FOLDER)/$(1)))
+	$(if $(1),$(call check_spec_existence,$(1),lighthouse))
+	$(CYPRESS_BINARY) run \
+		--browser $(LIGHTHOUSE_BROWSER) \
+		--headless \
+		--config-file $(CYPRESS_CONFIG) \
+		--config $(LIGHTHOUSE_CONFIG) \
+		--env $(LIGHTHOUSE_ENV) \
+		$(if $(SPEC_FILE),--spec=$(SPEC_FILE)) \
+		|| ($(KILL_COMMAND) && false)
+endef
+
+################
 # Desktop tests.
 ################
 
-check-desktop: @JAILS_PATH@ $(NODE_BINS)
+check-desktop: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(if $(HEADLESS_BUILD),$(call start_Xvfb),)
@@ -331,7 +398,7 @@ check-desktop: @JAILS_PATH@ $(NODE_BINS)
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(V)$(KILL_COMMAND) || true
 
-run-desktop: @JAILS_PATH@ $(NODE_BINS)
+run-desktop: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -394,12 +461,12 @@ endef
 # Idle tests.
 ################
 
-check-idle: @JAILS_PATH@ $(NODE_BINS) start_short_idle_coolwsd $(PID_FILE)
+check-idle: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS) start_short_idle_coolwsd $(PID_FILE)
 	$(call run_idle_tests,$(spec))
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(V)$(KILL_COMMAND) || true
 
-run-idle: @JAILS_PATH@ $(NODE_BINS) start_short_idle_coolwsd $(PID_FILE)
+run-idle: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS) start_short_idle_coolwsd $(PID_FILE)
 	$(call run_interactive_idle,$(spec)) || true
 	$(V)$(KILL_COMMAND) || true
 
@@ -458,7 +525,7 @@ endef
 ###################
 # Multi-user tests.
 ###################
-check-multi: @JAILS_PATH@ $(NODE_BINS)
+check-multi: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(if $(HEADLESS_BUILD),$(call start_Xvfb),)
@@ -469,7 +536,7 @@ check-multi: @JAILS_PATH@ $(NODE_BINS)
 	$(if $(HEADLESS_BUILD),$(V)pkill Xvfb,)
 	$(V)$(KILL_COMMAND) || true
 
-run-multi: @JAILS_PATH@ $(NODE_BINS)
+run-multi: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -528,7 +595,7 @@ check-interfer-mobile: do-interfer-mobile-check-log
 do-interfer-mobile-check-log: do-interfer-mobile-check
 	$(if $(wildcard $(ERROR_LOG)),$(V)cat $(ERROR_LOG))
 
-do-interfer-mobile-check: @JAILS_PATH@ $(NODE_BINS)
+do-interfer-mobile-check: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -537,7 +604,7 @@ do-interfer-mobile-check: @JAILS_PATH@ $(NODE_BINS)
 		$(call run_mobile_interference_tests))
 	$(V)$(KILL_COMMAND) || true
 
-run-interfer-mobile: @JAILS_PATH@ $(NODE_BINS)
+run-interfer-mobile: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -591,6 +658,28 @@ define run_mobile_interference_test
 	wait # waits the background process to be finished
 endef
 
+#########################
+# proxy.php desktop tests
+#########################
+
+check-php-proxy:
+	@mkdir -p workdir
+	@rm -rf workdir/proxy.php
+	curl -L -o workdir/proxy.php https://raw.githubusercontent.com/CollaboraOnline/richdocumentscode/master/proxy.php
+	@# necessary for comunication of proxy.php in docker with locally running coolwsd
+	sed -i 's/localhost/172.17.0.1/g' workdir/proxy.php
+	-docker stop php-proxy 2>/dev/null || true
+	-docker rm php-proxy 2>/dev/null || true
+	docker run -d --name php-proxy -p 80:80 -v $(PWD)/workdir/proxy.php:/var/www/html/proxy.php php:8.2-apache
+	@echo "PHP proxy server starting on http://localhost"
+	sleep 3
+	-$(MAKE) CYPRESS_INTEGRATION="php-proxy" check-desktop
+	$(MAKE) cleanup-php-proxy
+
+cleanup-php-proxy:
+	-docker stop php-proxy
+	-docker rm php-proxy
+
 #############################
 # Desktop interference tests.
 #############################
@@ -601,7 +690,7 @@ check-interfer-desktop: do-interfer-desktop-check-log
 do-interfer-desktop-check-log: do-interfer-desktop-check
 	$(if $(wildcard $(ERROR_LOG)),$(V)cat $(ERROR_LOG))
 
-do-interfer-desktop-check: @JAILS_PATH@ $(NODE_BINS)
+do-interfer-desktop-check: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -610,7 +699,7 @@ do-interfer-desktop-check: @JAILS_PATH@ $(NODE_BINS)
 		$(call run_desktop_interference_tests))
 	$(V)$(KILL_COMMAND) || true
 
-run-interfer-desktop: @JAILS_PATH@ $(NODE_BINS)
+run-interfer-desktop: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(call cleanup_before_run)
 	$(call run_JS_error_check)
 	$(call start_coolwsd)
@@ -671,7 +760,7 @@ endef
 run-cov: do-run-cov
 	$(if $(wildcard $(ERROR_LOG)),$(V)cat $(ERROR_LOG))
 
-do-run-cov: @JAILS_PATH@ $(NODE_BINS)
+do-run-cov: @JAILS_PATH@ @CACHE_PATH@ $(NODE_BINS)
 	$(V)echo
 	$(V)echo "Setup coverage tools..."
 	$(V)echo
@@ -780,7 +869,8 @@ define check_spec_existence
 	$(eval TEST_FILES=$(if $(filter mobile,$(2)),$(MOBILE_TEST_FILES),\
 				$(if $(filter desktop,$(2)),$(DESKTOP_TEST_FILES),\
 				$(if $(filter idle,$(2)),$(IDLE_TEST_FILES),\
-				$(if $(filter multi,$(2)),$(MULTIUSER_TEST_FILES))))))
+				$(if $(filter lighthouse,$(2)),$(LIGHTHOUSE_TEST_FILES),\
+				$(if $(filter multi,$(2)),$(MULTIUSER_TEST_FILES)))))))
 	$(if $(filter $(1),$(TEST_FILES)),,$(error CypressError: Can't find the given spec file!))
 
 endef
@@ -790,5 +880,4 @@ else
 check-local:
 	$(error CypressError: Can't find LibreOffice core installation!)
 
-endif
 endif

@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -22,6 +23,7 @@ type SnackbarData = {
 	timeout: number;
 	hasProgress: boolean | undefined;
 	withDismiss: boolean | undefined;
+	infinite: boolean | undefined;
 };
 
 class SnackbarController {
@@ -55,6 +57,7 @@ class SnackbarController {
 		timeout: number | undefined,
 		hasProgress: boolean | undefined,
 		withDismiss: boolean | undefined,
+		infinite: boolean | undefined,
 	) {
 		if (!app.socket) return;
 
@@ -65,6 +68,7 @@ class SnackbarController {
 			timeout: timeout,
 			hasProgress: hasProgress,
 			withDismiss: withDismiss,
+			infinite: infinite,
 		});
 
 		this.scheduleSnackbar();
@@ -119,7 +123,13 @@ class SnackbarController {
 								}
 							: {},
 						snackbarData.hasProgress
-							? { id: 'progress', type: 'progressbar', value: 0, maxValue: 100 }
+							? {
+									id: 'progress',
+									type: 'progressbar',
+									value: 0,
+									maxValue: 100,
+									infinite: snackbarData.infinite,
+								}
 							: {},
 						snackbarData.action
 							? {
@@ -139,7 +149,7 @@ class SnackbarController {
 			eventType: string,
 			object: any,
 			data: any,
-			builder: any,
+			builder: JSBuilder,
 		) => {
 			window.app.console.debug(
 				"control: '" +
@@ -186,7 +196,7 @@ class SnackbarController {
 	}
 
 	// value should be in range 0-100
-	public setSnackbarProgress(value: number) {
+	public setSnackbarProgress(value: number, infinite: boolean) {
 		if (!app.socket) return;
 
 		var json = {
@@ -199,6 +209,7 @@ class SnackbarController {
 				type: 'progressbar',
 				value: value,
 				maxValue: 100,
+				infinite: infinite,
 			},
 		};
 

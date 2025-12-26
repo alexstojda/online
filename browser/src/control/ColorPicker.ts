@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -9,7 +10,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 /*
- * L.ColorPicker is used for building a native HTML color picker
+ * ColorPicker is used for building a native HTML color picker
  * panel to be used by the properties mobile wizard.
  */
 
@@ -192,7 +193,7 @@ class ColorPicker {
 		if (this.options.noColorControl && this.options.autoColorControl) {
 			this.options.autoColorControl = false;
 			window.app.console.warn(
-				'L.ColorPicker: requested both no color and auto color control',
+				'ColorPicker: requested both no color and auto color control',
 			);
 		}
 
@@ -293,7 +294,10 @@ class ColorPicker {
 				? 'colors-container-no-color-row'
 				: 'colors-container-auto-color-row',
 			handlers: [
-				{ event: 'click', handler: L.bind(this.onClickPseudoColor, this) },
+				{
+					event: 'click',
+					handler: window.L.bind(this.onClickPseudoColor, this),
+				},
 			],
 			children: [description, checked],
 		};
@@ -321,7 +325,7 @@ class ColorPicker {
 				handlers: [
 					{
 						event: 'click',
-						handler: L.bind(this.onClickBasicColorSample, this),
+						handler: window.L.bind(this.onClickBasicColorSample, this),
 					},
 				],
 			};
@@ -355,7 +359,10 @@ class ColorPicker {
 				color: tints[k],
 				size: 'big',
 				handlers: [
-					{ event: 'click', handler: L.bind(this.onClickTintSample, this) },
+					{
+						event: 'click',
+						handler: window.L.bind(this.onClickTintSample, this),
+					},
 				],
 			};
 			tintsEntries1.push(entry);
@@ -377,7 +384,10 @@ class ColorPicker {
 				color: tints[k],
 				size: 'big',
 				handlers: [
-					{ event: 'click', handler: L.bind(this.onClickTintSample, this) },
+					{
+						event: 'click',
+						handler: window.L.bind(this.onClickTintSample, this),
+					},
 				],
 			};
 			tintsEntries2.push(entry);
@@ -392,7 +402,7 @@ class ColorPicker {
 	}
 
 	_createBasicColorSelectionMark() {
-		this._basicColorSelectionMark = L.DomUtil.create(
+		this._basicColorSelectionMark = window.L.DomUtil.create(
 			'div',
 			'colors-container-basic-color-mark',
 			null,
@@ -501,7 +511,7 @@ class ColorPicker {
 		if (sampleElem && sampleElem.firstChild) {
 			if (colorType === 'BASIC_COLOR') {
 				sampleElem.removeChild(sampleElem.firstChild);
-				L.DomUtil.removeClass(
+				window.L.DomUtil.removeClass(
 					sampleElem,
 					'colors-container-selected-basic-color',
 				);
@@ -525,7 +535,10 @@ class ColorPicker {
 		if (sampleElem) {
 			if (colorType === 'BASIC_COLOR') {
 				sampleElem.appendChild(this._basicColorSelectionMark);
-				L.DomUtil.addClass(sampleElem, 'colors-container-selected-basic-color');
+				window.L.DomUtil.addClass(
+					sampleElem,
+					'colors-container-selected-basic-color',
+				);
 			} else if (colorType === 'TINT' && sampleElem.firstChild) {
 				const child: ChildNode & { style?: HTMLElement['style'] } =
 					sampleElem.firstChild;
@@ -577,7 +590,7 @@ class ColorPicker {
 	}
 
 	_updateNoColorControl(checked: boolean) {
-		var noColorElem = L.DomUtil.get(this._noColorControlId);
+		var noColorElem = window.L.DomUtil.get(this._noColorControlId);
 		if (noColorElem) {
 			if (noColorElem.checked !== checked) {
 				noColorElem.checked = checked;
@@ -585,16 +598,19 @@ class ColorPicker {
 					if (checked) {
 						noColorElem.innerHTML = '&#10004;';
 						// update value for the related menu entry
-						L.DomUtil.addClass(this._selectedColorElement, 'no-color-selected');
-						this._selectedColorElement.innerHTML = '\\';
-					} else {
-						noColorElem.innerHTML = '';
-						// update value for the related menu entry
-						L.DomUtil.removeClass(
+						window.L.DomUtil.addClass(
 							this._selectedColorElement,
 							'no-color-selected',
 						);
-						this._selectedColorElement.innerHTML = '';
+						this._selectedColorElement.innerHTML = '\\';
+					} else {
+						noColorElem.replaceChildren();
+						// update value for the related menu entry
+						window.L.DomUtil.removeClass(
+							this._selectedColorElement,
+							'no-color-selected',
+						);
+						this._selectedColorElement.replaceChildren();
 					}
 				}
 			}
@@ -602,7 +618,7 @@ class ColorPicker {
 	}
 
 	_updateAutoColorControl(checked: boolean) {
-		var autoColorElem: HTMLInputElement = L.DomUtil.get(
+		var autoColorElem: HTMLInputElement = window.L.DomUtil.get(
 			this._autoColorControlId,
 		);
 		if (autoColorElem) {
@@ -612,19 +628,19 @@ class ColorPicker {
 					if (checked) {
 						autoColorElem.innerHTML = '&#10004;';
 						// update value for the related menu entry
-						L.DomUtil.addClass(
+						window.L.DomUtil.addClass(
 							this._selectedColorElement,
 							'auto-color-selected',
 						);
 						this._selectedColorElement.innerHTML = '\\';
 					} else {
-						autoColorElem.innerHTML = '';
+						autoColorElem.replaceChildren();
 						// update value for the related menu entry
-						L.DomUtil.removeClass(
+						window.L.DomUtil.removeClass(
 							this._selectedColorElement,
 							'auto-color-selected',
 						);
-						this._selectedColorElement.innerHTML = '';
+						this._selectedColorElement.replaceChildren();
 					}
 				}
 			}
@@ -638,7 +654,7 @@ class ColorPicker {
 		} else if (type === 'TINT') {
 			sampleId = this._tintSampleIdTag + index;
 		}
-		return L.DomUtil.get(sampleId);
+		return window.L.DomUtil.get(sampleId);
 	}
 
 	_updateSelectedColorElement() {
@@ -647,5 +663,3 @@ class ColorPicker {
 		}
 	}
 }
-
-L.ColorPicker = ColorPicker;

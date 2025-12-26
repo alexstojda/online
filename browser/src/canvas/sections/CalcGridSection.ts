@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* global Proxy _ */
 /*
  * Copyright the Collabora Online contributors.
@@ -9,24 +10,27 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-class CalcGridSection extends app.definitions.canvasSectionObject {
+class CalcGridSection extends CanvasSectionObject {
 	constructor () {
-        super();
+        super(app.CSections.CalcGrid.name);
 
         // Even if this one is drawn on top, won't be able to catch events.
         // Sections with "interactable: true" can catch events even if they are under a section with property "interactable: false".
         this.interactable = false;
-        this.name = L.CSections.CalcGrid.name,
         this.anchor = ['top', 'left'];
-        this.processingOrder = L.CSections.CalcGrid.processingOrder, // Size and position will be copied (boundSection), this value is not important.
-        this.drawingOrder = L.CSections.CalcGrid.drawingOrder,
-        this.zIndex = L.CSections.CalcGrid.zIndex,
+        this.processingOrder = app.CSections.CalcGrid.processingOrder, // Size and position will be copied (boundSection), this value is not important.
+        this.drawingOrder = app.CSections.CalcGrid.drawingOrder,
+        this.zIndex = app.CSections.CalcGrid.zIndex,
         this.boundToSection = 'tiles';
         this.sectionProperties = {
             docLayer: app.map._docLayer,
-            strokeStyle: '#c0c0c0',
+            strokeStyle: getComputedStyle(document.body).getPropertyValue('--color-calc-grid'),
 			tsManager: null
         };
+	}
+
+	public resetStrokeStyle() {
+		this.sectionProperties.strokeStyle = getComputedStyle(document.body).getPropertyValue('--color-calc-grid');
 	}
 
 	// repaintArea, paneTopLeft, canvasCtx
@@ -95,7 +99,21 @@ class CalcGridSection extends app.definitions.canvasSectionObject {
 			// as horizontal line rendering: due to cache effects - so to
 			// help our poor CPU renderers - render in horizontal strips.
 			var bandSize = 256;
-			var clearDash = false;
+			var printRangeLine = false;
+
+			var drawPrintLine = function(ctx: CanvasRenderingContext2D,
+						    x1: number, y1: number, x2: number, y2: number) {
+				ctx.moveTo(x1 + 0.5, y1 + 0.5);
+				ctx.lineTo(x2 - 0.5, y2 - 0.5);
+				ctx.stroke();
+			};
+			var drawHairLine = function(ctx: CanvasRenderingContext2D,
+						    x1: number, y1: number, x2: number, y2: number) {
+				// https://bugzilla.mozilla.org/show_bug.cgi?id=1857185
+				ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+			};
+
+			this.context.fillStyle = this.sectionProperties.strokeStyle;
 			for (var miny = area.min.y; miny < area.max.y; miny += bandSize)
 			{
 				var maxy = Math.min(area.max.y, miny + bandSize);
@@ -106,20 +124,22 @@ class CalcGridSection extends app.definitions.canvasSectionObject {
 				this.sectionProperties.docLayer.sheetGeometry._columns.forEachInCorePixelRange(
 					area.min.x, area.max.x,
 					function(pos: any, colIndex: any) {
-						var xcoord = xTransform(Math.floor(scale * (pos - paneOffset.x)) - 0.5);
+						var xcoord = xTransform(Math.floor(scale * (pos - paneOffset.x)));
 
-						clearDash = false;
+						printRangeLine = false;
+						var drawLine = drawHairLine;
 						if (printRange.length === 4
 							&& (printRange[0] === colIndex || printRange[2] + 1 === colIndex)) {
-							clearDash = true;
+							printRangeLine = true;
 							startEndDash(this.context, false /* end? */);
+							drawLine = drawPrintLine;
 						}
 
-						this.context.moveTo(xcoord, Math.floor(scale * (miny - paneOffset.y)) + 0.5);
-						this.context.lineTo(xcoord, Math.floor(scale * (maxy - paneOffset.y)) - 0.5);
-						this.context.stroke();
+						drawLine(this.context,
+							 xcoord - 1, Math.floor(scale * (miny - paneOffset.y)) - 1,
+							 xcoord, Math.floor(scale * (maxy - paneOffset.y)));
 
-						if (clearDash)
+						if (printRangeLine)
 							startEndDash(this.context, true /* end? */);
 					}.bind(this));
 
@@ -128,22 +148,22 @@ class CalcGridSection extends app.definitions.canvasSectionObject {
 					miny, maxy,
 					function(pos: any, rowIndex: any) {
 
-						clearDash = false;
+						printRangeLine = false;
+						var drawLine = drawHairLine;
 						if (printRange.length === 4
 							&& (printRange[1] === rowIndex || printRange[3] + 1 === rowIndex)) {
-							clearDash = true;
+							printRangeLine = true;
 							startEndDash(this.context, false /* end? */);
+							drawLine = drawPrintLine;
 						}
 
-						this.context.moveTo(
-							xTransform(Math.floor(scale * (area.min.x - paneOffset.x)) + 0.5),
-							Math.floor(scale * (pos - paneOffset.y)) - 0.5);
-						this.context.lineTo(
-							xTransform(Math.floor(scale * (area.max.x - paneOffset.x)) - 0.5),
-							Math.floor(scale * (pos - paneOffset.y)) - 0.5);
-						this.context.stroke();
+						drawLine(this.context,
+							 xTransform(Math.floor(scale * (area.min.x - paneOffset.x))) - 1,
+							 Math.floor(scale * (pos - paneOffset.y)) - 1,
+							 xTransform(Math.floor(scale * (area.max.x - paneOffset.x))),
+							 Math.floor(scale * (pos - paneOffset.y)));
 
-						if (clearDash)
+						if (printRangeLine)
 							startEndDash(this.context, true /* end? */);
 					}.bind(this));
 
@@ -155,7 +175,7 @@ class CalcGridSection extends app.definitions.canvasSectionObject {
 		}
 	}
 
-    onDraw(frameCount?: number, elapsedTime?: number, subsetBounds?: Bounds): void {
+    onDraw(frameCount?: number, elapsedTime?: number): void {
 		if (this.containerObject.isInZoomAnimation() || this.sectionProperties.tsManager.waitForTiles())
 			return;
 

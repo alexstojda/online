@@ -13,25 +13,25 @@
 
 #include "FileUtil.hpp"
 #include "JailUtil.hpp"
+#include "Log.hpp"
 
+#include <SigUtil.hpp>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <fstream>
+#include <string>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sysexits.h>
-#include <fcntl.h>
 #include <unistd.h>
+
 #ifdef __linux__
 #include <sys/sysmacros.h>
 #endif
-
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <fstream>
-#include <string>
-
-#include "Log.hpp"
-#include <SigUtil.hpp>
 
 extern int domount(int argc, const char* const* argv);
 
@@ -66,18 +66,20 @@ bool enterMountingNS(uid_t uid, gid_t gid)
     if (unshare(CLONE_NEWNS | CLONE_NEWUSER) != 0)
     {
         // having multiple threads is a source of failure f.e.
-        LOG_ERR("enterMountingNS, unshare failed: " << strerror(errno));
-        return false;
-    }
-
-    // Do not propagate any mounts from this new namespace to the system.
-    if (mount("none", "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
-    {
-        LOG_ERR("enterMountingNS, root mount failed: " << strerror(errno));
+        LOG_SYS("enterMountingNS, unshare failed");
         return false;
     }
 
     setdeny();
+
+    // Do not propagate any mounts from this new namespace to the system.
+    if (mount("none", "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0)
+    {
+        LOG_SYS("enterMountingNS, root mount failed");
+        // set to original uid so coolmount check isn't surprised by 'nobody'
+        mapuser(uid, uid, gid, gid);
+        return false;
+    }
 
     // Map this user as the root user of the new namespace
     mapuser(uid, 0, gid, 0);
@@ -96,7 +98,7 @@ bool enterUserNS(uid_t uid, gid_t gid)
     if (unshare(CLONE_NEWUSER) != 0)
     {
         // having multiple threads is a source of failure f.e.
-        LOG_ERR("enterMountingNS, unshare failed: " << strerror(errno));
+        LOG_SYS("enterMountingNS, unshare failed");
         return false;
     }
 
@@ -114,18 +116,21 @@ bool enterUserNS(uid_t uid, gid_t gid)
 #endif
 }
 
-bool coolmount(const std::string& arg, std::string source, std::string target)
+static bool coolmount(const std::string& arg, std::string source, std::string target,
+                      bool silent = false)
 {
-    source = Util::trim(source, '/');
-    target = Util::trim(target, '/');
+    source = Util::rtrim(source, '/');
+    target = Util::rtrim(target, '/');
 
     if (isMountNamespacesEnabled())
     {
-        const char *argv[4];
+        const char *argv[5];
         argv[0] = "notcoolmount";
         int argc = 1;
         if (!arg.empty())
             argv[argc++] = arg.c_str();
+        if (silent)
+            argv[argc++] = "-s";
         if (!source.empty())
             argv[argc++] = source.c_str();
         if (!target.empty())
@@ -134,7 +139,7 @@ bool coolmount(const std::string& arg, std::string source, std::string target)
     }
 
     const std::string cmd = Poco::Path(Util::getApplicationPath(), "coolmount").toString() + ' '
-                            + arg + ' ' + source + ' ' + target;
+                            + arg + (silent ? " -s" : " ") + source + ' ' + target;
     LOG_TRC("Executing coolmount command: " << cmd);
     return !system(cmd.c_str());
 }
@@ -185,7 +190,7 @@ bool remountReadonly(const std::string& source, const std::string& target)
 static bool unmount(const std::string& target, bool silent = false)
 {
     LOG_DBG("Unmounting [" << target << ']');
-    const bool res = coolmount("-u", "", target);
+    const bool res = coolmount("-u", "", target, silent);
     if (res)
         LOG_TRC("Unmounted [" << target << "] successfully.");
     else
@@ -265,32 +270,58 @@ void removeAuxFolders(const std::string &root)
     FileUtil::removeFile(Poco::Path(root, "linkable").toString(), true);
 }
 
+/*
+    The tmp dir of a path/<jailid>/tmp is mounted from (or linked to) a
+    path/tmp/cool-<jailid> dir. In a mount namespace case the existence
+    of path/<jailid>/tmp is not visible to the parent process so its
+    contents cannot be removed via the path/<jailid>/tmp view, and
+    in any case the path/<jailid>/tmp should be removed.
+*/
+void removeAssocTmpOfJail(const std::string &root)
+{
+    Poco::Path jailPath(root);
+    jailPath.makeDirectory();
+    const std::string jailId = jailPath[jailPath.depth() - 1];
+
+    jailPath.popDirectory();
+    jailPath.pushDirectory("tmp");
+    jailPath.pushDirectory(std::string("cool-") + jailId);
+
+    FileUtil::removeFile(jailPath.toString(), true);
+}
+
 bool tryRemoveJail(const std::string& root)
 {
-    if (!FileUtil::Stat(root + '/' + LO_JAIL_SUBPATH).exists())
+    const bool emptyJail = FileUtil::isEmptyDirectory(root);
+    if (!emptyJail && !FileUtil::Stat(root + '/' + LO_JAIL_SUBPATH).exists())
         return false; // not a jail.
 
     LOG_TRC("Do remove of jail [" << root << ']');
 
-    // Unmount the tmp directory. Don't care if we fail.
-    const std::string tmpPath = Poco::Path(root, "tmp").toString();
+    if (!emptyJail)
+    {
+        // Unmount the tmp directory. Don't care if we fail.
+        const std::string tmpPath = Poco::Path(root, "tmp").toString();
 #ifdef __FreeBSD__
-    unmount(tmpPath + "/dev");
+        unmount(tmpPath + "/dev");
 #endif
-    FileUtil::removeFile(tmpPath, true); // Delete tmp contents with prejudice.
-    unmount(tmpPath);
+        FileUtil::removeFile(tmpPath, true); // Delete tmp contents with prejudice.
+        unmount(tmpPath);
 
-    // Unmount the loTemplate directory.
-    //FIXME: technically, the loTemplate directory may have any name.
-    unmount(Poco::Path(root, "lo").toString());
+        // Unmount the loTemplate directory.
+        //FIXME: technically, the loTemplate directory may have any name.
+        unmount(Poco::Path(root, "lo").toString());
 
-    // Unmount the test-mount directory too.
-    const std::string testMountPath = Poco::Path(root, CoolTestMountpoint).toString();
-    if (FileUtil::Stat(testMountPath).exists())
-        unmount(testMountPath);
+        // Unmount the test-mount directory too.
+        const std::string testMountPath = Poco::Path(root, CoolTestMountpoint).toString();
+        if (FileUtil::Stat(testMountPath).exists())
+            unmount(testMountPath);
+    }
 
     // Unmount/delete the jail (sysTemplate).
     safeRemoveDir(root);
+
+    removeAssocTmpOfJail(root);
 
     return true;
 }
@@ -331,7 +362,7 @@ void cleanupJails(const std::string& root)
                 try {
                     int pid = std::stoi(pidStr);
                     LOG_TRC("Checking pid for jail " << pid << " " << root);
-                    if (pid != getpid() && kill(pid, 0) == 0)
+                    if (pid != getpid() && ::kill(pid, 0) == 0)
                     {
                         LOG_TRC("Skipping cleaning jails directory for running coolwsd with pid " << pid);
                         skip = true;
@@ -388,14 +419,16 @@ void createJailPath(const std::string& path)
     LOG_INF("Creating jail path (if missing): " << path);
     Poco::File(path).createDirectories();
     if (chmod(path.c_str(), S_IXUSR | S_IWUSR | S_IRUSR) != 0)
-        LOG_WRN("chmod(\"" << path << "\") failed: " << strerror(errno));
+        LOG_WRN_SYS("chmod(\"" << path << "\") failed");
 }
 
 void setupChildRoot(bool bindMount, const std::string& childRoot, const std::string& sysTemplate)
 {
     // Start with a clean slate.
     cleanupJails(childRoot);
-    createJailPath(childRoot + CHILDROOT_TMP_INCOMING_PATH);
+
+    createJailPath(childRoot + CHILDROOT_TMP_INCOMING_PATH + "/fonts");
+    createJailPath(childRoot + CHILDROOT_TMP_SHARED_PRESETS_PATH);
 
     disableBindMounting(); // Clear to avoid surprises.
 
@@ -487,17 +520,15 @@ void setupDynamicFiles(const std::string& sysTemplate)
 {
     LOG_INF("Setting up systemplate dynamic files in [" << sysTemplate << "].");
 
-    const std::string etcSysTemplatePath = Poco::Path(sysTemplate, "etc").toString();
     LinkDynamicFiles = true; // Prefer linking, unless it fails.
 
-    if (!updateDynamicFilesImpl(sysTemplate))
+    const bool uptodate = updateDynamicFilesImpl(sysTemplate);
+    if (!uptodate)
     {
         // Can't copy!
         LOG_WRN("Failed to update the dynamic files in ["
                 << sysTemplate
-                << "]. Will disable bind-mounting in this run and clone systemplate into the "
-                   "jails, which is more resource intensive.");
-        disableBindMounting(); // We can't mount from incomplete systemplate.
+                << "]. Will clone dynamic elements of systemplate to the jails.");
         LinkDynamicFiles = false;
     }
 
@@ -535,7 +566,6 @@ bool updateDynamicFilesImpl(const std::string& sysTemplate)
                                      << "], which will be used instead.");
         }
 
-        const Poco::File srcFilePath(srcFilename);
         FileUtil::Stat srcStat(srcFilename);
         if (!srcStat.exists())
             continue;
@@ -544,7 +574,7 @@ bool updateDynamicFilesImpl(const std::string& sysTemplate)
         FileUtil::Stat dstStat(dstFilename);
 
         // Is it outdated?
-        if (dstStat.isUpToDate(srcStat))
+        if (FileUtil::Stat::isUpToDate(srcStat, srcFilename, dstStat, dstFilename))
         {
             LOG_TRC("File [" << dstFilename << "] is already up-to-date.");
             continue;
@@ -552,13 +582,13 @@ bool updateDynamicFilesImpl(const std::string& sysTemplate)
 
         if (checkWritableSysTemplate && !FileUtil::isWritable(sysTemplate))
         {
-            disableBindMounting(); // We can't mount from incomplete systemplate that can't be updated.
             LinkDynamicFiles = false;
             LOG_WRN("The systemplate directory ["
                     << sysTemplate << "] is read-only, and at least [" << dstFilename
-                    << "] is out-of-date. Will have to copy sysTemplate to jails. To restore "
-                       "optimal performance, make sure the files in ["
-                    << sysTemplate << "/etc] are up-to-date.");
+                    << "] is out-of-date. Will have to clone dynamic elements of "
+                    << "systemplate to the jails. To restore optimal performance, "
+                    << "make sure the files in [" << sysTemplate << "/etc] "
+                    << "are up-to-date.");
             return false;
         }
 
@@ -581,16 +611,18 @@ bool updateDynamicFilesImpl(const std::string& sysTemplate)
 
             // With parallel tests, another test might have linked already.
             FileUtil::Stat dstStat2(dstFilename);
-            if (dstStat2.isUpToDate(srcStat))
+            if (FileUtil::Stat::isUpToDate(dstStat2, dstFilename, srcStat, srcFilename))
             {
                 LOG_INF("File [" << dstFilename << "] now seems to be up-to-date.");
                 continue;
             }
 
             // Failed to link a file. Disable linking and copy instead.
-            LOG_WRN("Failed to link ["
-                    << srcFilename << "] -> [" << dstFilename << "] (" << strerror(linkerr)
-                    << "). Will copy and disable linking dynamic system files in this run.");
+            LOG_WRN_ERRNO(
+                linkerr,
+                "Failed to link ["
+                    << srcFilename << "] -> [" << dstFilename
+                    << "]. Will copy and disable linking dynamic system files in this run");
             LinkDynamicFiles = false;
         }
 
@@ -601,7 +633,7 @@ bool updateDynamicFilesImpl(const std::string& sysTemplate)
             if (!FileUtil::copyAtomic(srcFilename, dstFilename, true))
             {
                 FileUtil::Stat dstStat2(dstFilename); // Stat again.
-                if (!dstStat2.isUpToDate(srcStat))
+                if (!FileUtil::Stat::isUpToDate(dstStat2, dstFilename, srcStat, srcFilename))
                 {
                     return false; // No point in trying the remaining files.
                 }

@@ -10,13 +10,13 @@
  */
 
 /*
- * L.Control.MobileWizardBuilder used for building the native HTML component
+ * window.L.Control.MobileWizardBuilder used for building the native HTML component
  * variants for mobile/touch devices from the JSON description provided by the server.
  */
 
-/* global $ _UNO _ JSDialog */
+/* global $ _UNO _ JSDialog app ColorPicker */
 
-L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
+window.L.Control.MobileWizardBuilder = window.L.Control.JSDialogBuilder.extend({
 	_customizeOptions: function() {
 		this.options.noLabelsForUnoButtons = true;
 		this.options.useInLineLabelsForUnoButtons = false;
@@ -41,6 +41,16 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		this._controlHandlers['tabcontrol'] = JSDialog.mobileTabControl;
 		this._controlHandlers['borderstyle'] = JSDialog.mobileBorderSelector;
 
+		this._controlHandlers['colorlistbox'] = this._colorControl;
+		this._toolitemHandlers['.uno:XLineColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:FontColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:CharBackColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:BackgroundColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:TableCellBackgroundColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:FrameLineColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:Color'] = this._colorControl;
+		this._toolitemHandlers['.uno:FillColor'] = this._colorControl;
+
 		this._toolitemHandlers['.uno:FontworkAlignmentFloater'] = function () { return false; };
 		this._toolitemHandlers['.uno:FontworkCharacterSpacingFloater'] = function () { return false; };
 		this._toolitemHandlers['.uno:ExtrusionToggle'] = function () { return false; };
@@ -56,6 +66,28 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		this._toolitemHandlers['.uno:XLineStyle'] = this._explorableToolItemHandler;
 	},
 
+	// make a class identifier from parent's id by walking up the tree
+	_getParentId : function(it) {
+		while (it.parent && !it.id)
+			it = it.parent;
+		if (it && it.id)
+			return '-' + it.id;
+		else
+			return '';
+	},
+
+	// link each node to its parent, should do one recursive descent
+	_parentize: function(data, parent) {
+		if (data.parent)
+			return;
+		if (data.children !== undefined) {
+			for (var idx in data.children) {
+				this._parentize(data.children[idx], data);
+			}
+		}
+		data.parent = parent;
+	},
+
 	baseSpinField: function(parentContainer, data, builder, customCallback) {
 		var controls = {};
 		if (data.label) {
@@ -63,36 +95,35 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 			builder._fixedtextControl(parentContainer, fixedTextData, builder);
 		}
 
-		var div = L.DomUtil.create('div', 'spinfieldcontainer', parentContainer);
+		var div = window.L.DomUtil.create('div', 'spinfieldcontainer', parentContainer);
 		div.id = data.id;
 		controls['container'] = div;
 		var commandName = data.id  && data.id.startsWith('.uno:') ? data.id.substring('.uno:'.length) : data.id;
-		if (commandName && commandName.length && L.LOUtil.existsIconForCommand(commandName, builder.map.getDocType())) {
-			var image = L.DomUtil.create('img', 'spinfieldimage', div);
-			var icon = (data.id === 'Transparency') ? builder._createIconURL('settransparency') : builder._createIconURL(data.id);
-			L.LOUtil.setImage(image, icon, builder.map);
+		if (commandName && commandName.length && app.LOUtil.existsIconForCommand(commandName, builder.map.getDocType())) {
+			var image = window.L.DomUtil.create('img', 'spinfieldimage', div);
+			var icon = (data.id === 'Transparency') ? app.LOUtil.getIconNameOfCommand('settransparency') : app.LOUtil.getIconNameOfCommand(data.id);
+			app.LOUtil.setImage(image, icon, builder.map);
 			icon.alt = '';
 		}
 
-		var spinfield = L.DomUtil.create('input', 'spinfield', div);
+		var spinfield = window.L.DomUtil.create('input', 'spinfield', div);
 		spinfield.type = 'number';
 		spinfield.onkeypress = builder._preventNonNumericalInput;
 		spinfield.dir = document.documentElement.dir;
 		controls['spinfield'] = spinfield;
 
-		if (data.labelledBy)
-			spinfield.setAttribute('aria-labelledby', data.labelledBy);
+		JSDialog.SetupA11yLabelForLabelableElement(parentContainer, spinfield, data, builder);
 
 		if (data.unit) {
-			var unit = L.DomUtil.create('span', 'spinfieldunit', div);
+			var unit = window.L.DomUtil.create('span', 'spinfieldunit', div);
 			unit.textContent = builder._unitToVisibleString(data.unit);
 		}
 
-		var controlsContainer = L.DomUtil.create('div', 'spinfieldcontrols', div);
-		var minus = L.DomUtil.create('div', 'minus', controlsContainer);
+		var controlsContainer = window.L.DomUtil.create('div', 'spinfieldcontrols', div);
+		var minus = window.L.DomUtil.create('div', 'minus', controlsContainer);
 		minus.textContent = '-';
 
-		var plus = L.DomUtil.create('div', 'plus', controlsContainer);
+		var plus = window.L.DomUtil.create('div', 'plus', controlsContainer);
 		plus.textContent = '+';
 
 		if (data.min != undefined)
@@ -140,7 +171,7 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 	_preventNonNumericalInput: function(e) {
 		e = e || window.event;
-		var charCode = (typeof e.which === undefined) ? e.keyCode : e.which;
+		var charCode = e.which === undefined ? e.keyCode : e.which;
 		var charStr = String.fromCharCode(charCode);
 
 		if (!charStr.match(/^[0-9.,]+$/) && charCode !== 13)
@@ -200,7 +231,7 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 			selectedEntryIsString = isNaN(parseInt(data.selectedEntries[0]));
 			if (title && title.length) {
 				var value = data.entries[data.selectedEntries[0]];
-				valueNode = L.DomUtil.create('div', '', null);
+				valueNode = window.L.DomUtil.create('div', '', null);
 				valueNode.textContent = value;
 			} else if (selectedEntryIsString)
 				title = builder._cleanText(data.selectedEntries[0]);
@@ -227,7 +258,7 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 		var iconPath = null;
 		if (data.command)
-			iconPath = builder._createIconURL(data.command);
+			iconPath = app.LOUtil.getIconNameOfCommand(data.command);
 
 		builder._explorableEntry(parentContainer, data, contentNode, builder, valueNode, iconPath);
 
@@ -235,19 +266,22 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 	},
 
 	_checkboxControl: function(parentContainer, data, builder) {
-		var div = L.DomUtil.createWithId('div', data.id, parentContainer);
-		L.DomUtil.addClass(div, 'checkbutton');
+		var div = window.L.DomUtil.createWithId('div', data.id, parentContainer);
+		window.L.DomUtil.addClass(div, 'checkbutton');
 
-		var checkboxLabel = L.DomUtil.create('label', '', div);
+		var checkboxLabel = window.L.DomUtil.create('label', '', div);
 		checkboxLabel.textContent = builder._cleanText(data.text);
 		checkboxLabel.htmlFor = data.id;
-		var checkbox = L.DomUtil.createWithId('input', data.id, div);
+		var checkbox = window.L.DomUtil.createWithId('input', data.id, div);
 		checkbox.type = 'checkbox';
 
 		if (data.enabled === 'false' || data.enabled === false) {
-			$(checkboxLabel).addClass('disabled');
 			$(checkbox).attr('disabled', 'disabled');
+			div.disabled = true;
+			div.setAttribute('disabled', 'disabled');
 		}
+
+		JSDialog.SynchronizeDisabledState(div, [checkbox, checkboxLabel]);
 
 		checkbox.addEventListener('change', function() {
 			builder.callback('checkbox', 'change', div, this.checked, builder);
@@ -264,22 +298,27 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 	// TODO: use the same handler as desktop one
 	_radiobuttonControl: function(parentContainer, data, builder) {
-		var container = L.DomUtil.createWithId('div', data.id, parentContainer);
-		L.DomUtil.addClass(container, 'radiobutton');
-		L.DomUtil.addClass(container, builder.options.cssClass);
+		var container = window.L.DomUtil.createWithId('div', data.id, parentContainer);
+		window.L.DomUtil.addClass(container, 'radiobutton');
+		window.L.DomUtil.addClass(container, builder.options.cssClass);
 
-		var radiobutton = L.DomUtil.create('input', '', container);
+		var radiobuttonLabel = window.L.DomUtil.create('label', '', container);
+		radiobuttonLabel.textContent = builder._cleanText(data.text);
+		radiobuttonLabel.htmlFor = data.id;
+
+		var radiobutton = window.L.DomUtil.create('input', '', container);
 		radiobutton.type = 'radio';
 
 		if (data.group)
 			radiobutton.name = data.group;
 
-		var radiobuttonLabel = L.DomUtil.create('label', '', container);
-		radiobuttonLabel.textContent = builder._cleanText(data.text);
-		radiobuttonLabel.htmlFor = data.id;
-
-		if (data.enabled === 'false' || data.enabled === false)
+		if (data.enabled === 'false' || data.enabled === false) {
 			$(radiobutton).attr('disabled', 'disabled');
+			container.disabled = true;
+			container.setAttribute('disabled', 'disabled');
+		}
+
+		JSDialog.SynchronizeDisabledState(container, [radiobutton, radiobuttonLabel]);
 
 		if (data.checked === 'true' || data.checked === true)
 			$(radiobutton).prop('checked', true);
@@ -294,11 +333,12 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		return false;
 	},
 
+	// TODO: remove
 	_editControl: function(parentContainer, data, builder, callback) {
-		var container = L.DomUtil.create('div', 'ui-edit-container ' + builder.options.cssClass, parentContainer);
+		var container = window.L.DomUtil.create('div', 'ui-edit-container ' + builder.options.cssClass, parentContainer);
 		container.id = data.id;
 
-		var edit = L.DomUtil.create('input', 'ui-edit ' + builder.options.cssClass, container);
+		var edit = window.L.DomUtil.create('input', 'ui-edit ' + builder.options.cssClass, container);
 		edit.value = builder._cleanText(data.text);
 		edit.id = data.id + '-input';
 		edit.dir = 'auto';
@@ -308,8 +348,9 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		if (data.enabled === 'false' || data.enabled === false)
 			$(edit).prop('disabled', true);
 
+		// TODO: below is not true anymore
 		// we still use non welded sidebar where don't have partial updates
-		// kayup can be used only in welded dialogs
+		// keyup can be used only in welded dialogs
 		edit.addEventListener('change', function() {
 			if (callback)
 				callback(this.value);
@@ -515,11 +556,11 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 		data.text = builder._cleanText(data.text);
 
-		var valueNode =  L.DomUtil.create('div', 'color-sample-selected', null);
+		var valueNode =  window.L.DomUtil.create('div', 'color-sample-selected', null);
 		var selectedColor = null;
 
 		var updateFunction = function (titleSpan) {
-			selectedColor = builder._getCurrentColor(data, builder);
+			selectedColor = JSDialog.getCurrentColor(data, builder);
 			valueNode.style.backgroundColor = selectedColor;
 			if (titleSpan) {
 				if (data.id === 'fillattr')
@@ -534,15 +575,15 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 		updateFunction(null);
 
-		var iconPath = builder._createIconURL(data.command);
+		var iconPath = app.LOUtil.getIconNameOfCommand(data.command);
 		var noColorControl = (data.command !== '.uno:FontColor' && data.command !== '.uno:Color');
 		var autoColorControl = (data.command === '.uno:FontColor' || data.command === '.uno:Color');
 
 		var callback = function(color) {
-			builder._sendColorCommand(builder, data, color);
+			JSDialog.sendColorCommand(builder, data, color);
 		};
 
-		var colorPickerControl = new L.ColorPicker(
+		var colorPickerControl = new ColorPicker(
 			valueNode,
 			{
 				selectedColor: selectedColor,
@@ -555,7 +596,7 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		// color control panel
 		var colorsContainer = colorPickerControl.getContainer();
 
-		var contentNode = {type: 'container', children: [colorsContainer], onshow: L.bind(colorPickerControl.onShow, colorPickerControl)};
+		var contentNode = {type: 'container', children: [colorsContainer], onshow: window.L.bind(colorPickerControl.onShow, colorPickerControl)};
 
 		builder._explorableEntry(parentContainer, data, contentNode, builder, valueNode, iconPath, updateFunction);
 		return false;
@@ -623,9 +664,9 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		var content = data.children;
 
 		var iconPath = null;
-		var entryId = data.id;
+		var entryId = data.name ? data.name : data.id; // name is legacy panel name, id is vcl one
 		if (entryId && entryId.length) {
-			iconPath = builder._createIconURL(entryId);
+			iconPath = app.LOUtil.getIconNameOfCommand(entryId);
 		}
 
 		builder._explorableEntry(parentContainer, data, content, builder, null, iconPath);
@@ -633,14 +674,14 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 		if (data.hidden === true) {
 			var control = parentContainer.querySelector('[id=\'' + data.id + '\']');
 			if (control)
-				L.DomUtil.addClass(control, 'hidden');
+				window.L.DomUtil.addClass(control, 'hidden');
 		}
 
 		return false;
 	},
 
 	_mobilePopupContainer: function(parentContainer, data) {
-		var container = L.DomUtil.create('div', 'mobile-popup-container', parentContainer);
+		var container = window.L.DomUtil.create('div', 'mobile-popup-container', parentContainer);
 		container.id = 'popup-' + data.id;
 		return false;
 	},
@@ -654,7 +695,7 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 		var nodeId = data.command.indexOf('.uno:') === 0 ? data.command.substr('.uno:'.length) : data.command;
 		var contentNode = {id: nodeId, type: 'mobile-popup-container', children: [], onshow: onShow};
-		var iconPath = builder._createIconURL(data.command);
+		var iconPath = app.LOUtil.getIconNameOfCommand(data.command);
 
 		builder._explorableEntry(parentContainer, data, contentNode, builder, null, iconPath);
 
@@ -765,12 +806,12 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 
 			var childObject = parent;
 			if (childData.dialogid) {
-				var dialog = L.DomUtil.createWithId('div', childData.dialogid, childObject);
+				var dialog = window.L.DomUtil.createWithId('div', childData.dialogid, childObject);
 				childObject = dialog;
 			}
 
 			if (this.wizard._dialogid === 'ContentControlDialog' && childData.id !== '') {
-				var div = L.DomUtil.createWithId('div', childData.id, childObject);
+				var div = window.L.DomUtil.createWithId('div', childData.id, childObject);
 				childObject = div;
 			}
 
@@ -821,8 +862,8 @@ L.Control.MobileWizardBuilder = L.Control.JSDialogBuilder.extend({
 	}
 });
 
-L.control.mobileWizardBuilder = function (options) {
-	var builder = new L.Control.MobileWizardBuilder(options);
+window.L.control.mobileWizardBuilder = function (options) {
+	var builder = new window.L.Control.MobileWizardBuilder(options);
 	builder._setup(options);
 	builder._overrideHandlers();
 	builder._customizeOptions();

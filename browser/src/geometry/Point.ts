@@ -1,4 +1,7 @@
-declare var L: any;
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
+/* global L */
 
 namespace cool {
 
@@ -183,7 +186,7 @@ export class Point {
 			return undefined;
 		}
 
-		// Detect L.Point like objects such as CPoint.
+		// Detect cool.Point like objects such as CPoint.
 		if (Object.prototype.hasOwnProperty.call(x, 'x')
 			&& Object.prototype.hasOwnProperty.call(x, 'y')) {
 			x = <PointLike>x;
@@ -201,6 +204,3 @@ export class Point {
 }
 
 }
-
-L.Point = cool.Point;
-L.point = cool.Point.toPoint;

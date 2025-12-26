@@ -3,8 +3,11 @@
 
 require('cypress-wait-until');
 require('cypress-file-upload');
+require('cypress-real-events');
 import installLogsCollector from 'cypress-terminal-report/src/installLogsCollector';
+const { addCompareSnapshotCommand } = require('cypress-visual-regression/dist/command');
 
+addCompareSnapshotCommand();
 
 beforeEach(function() {
 	cy.log('Starting test: ' + getFullTestName());
@@ -36,14 +39,6 @@ installLogsCollector({
 	}
 });
 
-if (Cypress.env('INTEGRATION') === 'php-proxy') {
-	Cypress.Server.defaults({
-		ignore: function() {
-			return true;
-		}
-	});
-}
-
 var COMMAND_DELAY = 1000;
 
 // Ignore exceptions coming from nextcloud.
@@ -68,8 +63,10 @@ Cypress.on('fail', function(error) {
 	message += '\n';
 	message += error.message + '\n';
 	message += '\n';
-	message += error.codeFrame.absoluteFile + ':' + error.codeFrame.line + ':' + error.codeFrame.column + '\n';
-	message += error.codeFrame.frame;
+	if (error.codeFrame) {
+		message += error.codeFrame.absoluteFile + ':' + error.codeFrame.line + ':' + error.codeFrame.column + '\n';
+		message += error.codeFrame.frame;
+	}
 	Cypress.log({name: 'fail:', message: message});
 
 	throw error;

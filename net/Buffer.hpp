@@ -11,11 +11,12 @@
 
 #pragma once
 
+#include <common/HexUtil.hpp>
+#include <common/Util.hpp>
+
 #include <assert.h>
 #include <ostream>
 #include <vector>
-
-#include <Util.hpp>
 
 // Blocks -> we can share from client -> server ... etc.
 // headers / and a 'writeV' etc. =)
@@ -28,15 +29,24 @@ class Buffer
     std::size_t _offset;  /// offset into _buffer of data
     std::vector<char> _buffer;
 
+    void resetOffset()
+    {
+        // reset underlying capacity of previously large buffers
+        if (_buffer.empty() && _buffer.capacity() > 32768)
+            _buffer.shrink_to_fit();
+        _offset = 0;
+    }
+
 public:
     Buffer() : _offset(0)
     {
     }
 
-    typedef std::vector<char>::iterator iterator;
-    typedef std::vector<char>::const_iterator const_iterator;
+    using iterator = std::vector<char>::iterator;
+    using const_iterator = std::vector<char>::const_iterator;
 
     std::size_t size() const { return _buffer.size() - _offset; }
+    std::size_t capacity() const { return _buffer.capacity(); }
     bool empty() const { return _offset == _buffer.size(); }
 
     const char *getBlock() const
@@ -72,7 +82,7 @@ public:
         }
 
         _buffer.erase(_buffer.begin(), _buffer.begin() + _offset + len);
-        _offset = 0;
+        resetOffset();
     }
 
     void append(const char *data, const int len)
@@ -94,7 +104,7 @@ public:
         if (size() > 0 || _offset > 0)
             os << prefix << "Buffer size: " << size() << " offset: " << _offset << '\n';
         if (_buffer.size() > 0)
-            Util::dumpHex(os, _buffer, legend, prefix);
+            HexUtil::dumpHex(os, _buffer, legend, prefix);
     }
 
     // various std::vector API compatibility functions
@@ -102,7 +112,7 @@ public:
     void clear()
     {
         _buffer.clear();
-        _offset = 0;
+        resetOffset();
     }
 
     iterator begin() { return _buffer.begin() + _offset; }

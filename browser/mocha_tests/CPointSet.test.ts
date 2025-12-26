@@ -1,12 +1,17 @@
-/// <reference path="./refs/globals.ts"/>
-/// <reference path="../src/geometry/Point.ts" />
-/// <reference path="../src/geometry/Bounds.ts" />
-/// <reference path="../src/layer/vector/CPointSet.ts" />
-/// <reference path="../src/core/geometry.ts" />
+/* -*- js-indent-level: 8 -*- */
+/*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
 
 var assert = require('assert');
 
-describe('CPointSet empty() tests', function () {
+describe('CPointSet', function () {
 
 	describe('new CPointSet()', function () {
 		it('should be empty', function () {

@@ -40,12 +40,36 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Slide operations', functio
 
 	});
 
+	it('Check slide sorter focus', function() {
+		cy.cGet('#insertpage-button').click();
+		cy.wait(100);
+
+		// Set the focus to slide sorter.
+		cy.cGet('#preview-frame-part-0').click();
+		cy.cGet('#preview-frame-part-1').click();
+
+		// Slide sorter should keep focus while user clicks on different slides.
+		cy.window().then(win => {
+			const app = win['0'].app;
+			cy.expect(app.map._docLayer._preview.partsFocused).to.be.equal(true);
+		});
+
+		cy.cGet('#toolbar-up').click();
+		// Slide sorter should have lost the focus after user clicked somewhere.
+		cy.window().then(win => {
+			const app = win['0'].app;
+			cy.expect(app.map._docLayer._preview.partsFocused).to.be.equal(false);
+		});
+	});
+
 	it('Duplicate slide', function() {
 		// Also check if comments are getting duplicated
-		cy.cGet('#options-modify-page').click();
+		desktopHelper.closeNavigatorSidebar();
+		desktopHelper.getNbIcon('ModifyPage').click();
 		desktopHelper.insertComment();
-		cy.cGet('#annotation-content-area-1').should('include.text', 'some text0');
-		cy.cGet('#presentation-toolbar #duplicatepage').click();
+		cy.cGet('[id^=annotation-content-area-]').should('include.text', 'some text0');
+		cy.cGet('#Insert-tab-label').click();
+		desktopHelper.getNbIcon('DuplicatePage', 'Insert').click();
 
 		impressHelper.assertNumberOfSlidePreviews(2);
 		cy.cGet('#SlideStatus').should('have.text', 'Slide 2 of 2');
@@ -53,26 +77,33 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Slide operations', functio
 
 	});
 
-	it('Slide pane height test', function() {
-		var container, content, toolbar;
+	it('Navigator height test', function() {
+		var navigationContainer, navOptionContainer, presentationWrapper, navHeading;
 
-		cy.cGet('#slide-sorter')
+		cy.cGet('.navigation-header')
 			.then(function(items) {
 				expect(items).to.have.lengthOf(1);
-				content = items[0].getBoundingClientRect();
+				navHeading = items[0].getBoundingClientRect();
 			});
 
-		cy.cGet('#presentation-toolbar')
+		cy.cGet('.navigation-options-container')
 			.then(function(items) {
 				expect(items).to.have.lengthOf(1);
-				toolbar = items[0].getBoundingClientRect();
+				navOptionContainer = items[0].getBoundingClientRect();
 			});
+
 
 		cy.cGet('#presentation-controls-wrapper')
 			.then(function(items) {
 				expect(items).to.have.lengthOf(1);
-				container = items[0].getBoundingClientRect();
-				expect(container.height).equal(content.height + toolbar.height);
+				presentationWrapper = items[0].getBoundingClientRect();
+			});
+
+		cy.cGet('#navigation-sidebar')
+			.then(function(items) {
+				expect(items).to.have.lengthOf(1);
+				navigationContainer = items[0].getBoundingClientRect();
+				expect(navigationContainer.height).equal(navHeading.height + navOptionContainer.height + presentationWrapper.height);
 			});
 	});
 });

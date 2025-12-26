@@ -11,44 +11,49 @@
 
 #pragma once
 
+#include <common/Authorization.hpp>
+#include <common/Log.hpp>
+#include <common/Session.hpp>
+#include <common/SigUtil.hpp>
+#include <common/Util.hpp>
+#include <net/Socket.hpp>
+#include <wsd/QuarantineUtil.hpp>
+#include <wsd/ServerAuditUtil.hpp>
+#include <wsd/SlideCache.hpp>
+#include <wsd/Storage.hpp>
+#include <wsd/TileCache.hpp>
+#include <wsd/TileDesc.hpp>
+
+#if !MOBILEAPP
+#include <wopi/WopiStorage.hpp>
+#include <wsd/Admin.hpp>
+#else // MOBILEAPP
+#include <common/MobileApp.hpp>
+#endif // MOBILEAPP
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <string>
 #include <utility>
 
+#include <Poco/JSON/Object.h>
 #include <Poco/SharedPtr.h>
 #include <Poco/URI.h>
 
-#include "Log.hpp"
-#include "QuarantineUtil.hpp"
-#include "TileDesc.hpp"
-#include "Util.hpp"
-#include "net/Socket.hpp"
-#include "net/WebSocketHandler.hpp"
-#include "Storage.hpp"
-#include "ServerAuditUtil.hpp"
-
-#include "common/SigUtil.hpp"
-#include "common/Session.hpp"
-
-#if !MOBILEAPP
-#include "Admin.hpp"
-#include <wopi/WopiStorage.hpp>
-#else // MOBILEAPP
-#include <MobileApp.hpp>
-#endif // MOBILEAPP
-
 // Forwards.
 class PrisonerRequestDispatcher;
+class CheckFileInfo;
 class DocumentBroker;
-struct LockContext;
+class LockContext;
+class PresetsInstallTask;
 class TileCache;
 class Message;
+class SlideLayerCacheMap;
 
 namespace Poco {
     namespace JSON {
@@ -63,6 +68,8 @@ public:
     UrpHandler(ChildProcess* process) : _childProcess(process)
     {
     }
+
+private:
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
         _socket = socket;
@@ -75,85 +82,22 @@ public:
         return POLLIN;
     }
     void performWrites(std::size_t /*capacity*/) override {}
+
+    void onDisconnect() override
+    {
+        LOG_TRC("UrpHandler disconnected");
+        std::shared_ptr<StreamSocket> socket = _socket.lock();
+        if (socket)
+        {
+            socket->asyncShutdown(); // Flag for shutdown for housekeeping in SocketPoll.
+            socket->shutdownConnection(); // Immediately disconnect.
+        }
+    }
+
 private:
     // The socket that owns us (we can't own it).
     std::weak_ptr<StreamSocket> _socket;
     ChildProcess* _childProcess;
-};
-
-/// A ChildProcess object represents a Kit process that hosts a document and manipulates the
-/// document using the LibreOfficeKit API. It isn't actually a child of the WSD process, but a
-/// grandchild. The comments loosely talk about "child" anyway.
-
-class ChildProcess final : public WSProcess
-{
-public:
-    /// @param pid is the process ID of the child.
-    /// @param socket is the underlying Socket to the child.
-    template <typename T>
-    ChildProcess(const pid_t pid, const std::string& jailId,
-                 const std::shared_ptr<StreamSocket>& socket, const T& request)
-        : WSProcess("ChildProcess", pid, socket,
-                    std::make_shared<WebSocketHandler>(socket, request))
-        , _jailId(jailId)
-        , _smapsFD(-1)
-    {
-        int urpFromKitFD = socket->getIncomingFD(URPFromKit);
-        int urpToKitFD = socket->getIncomingFD(URPToKit);
-        if (urpFromKitFD != -1 && urpToKitFD != -1)
-        {
-            _urpFromKit = StreamSocket::create<StreamSocket>(
-                std::string(), urpFromKitFD, Socket::Type::Unix,
-                false, std::make_shared<UrpHandler>(this));
-            _urpToKit = StreamSocket::create<StreamSocket>(
-                std::string(), urpToKitFD, Socket::Type::Unix,
-                false, std::make_shared<UrpHandler>(this));
-        }
-    }
-
-    ChildProcess(ChildProcess&& other) = delete;
-
-    bool sendUrpMessage(const std::string& message)
-    {
-        if (!_urpToKit)
-            return false;
-        if (message.size() < 4)
-        {
-            LOG_ERR("URP Message too short");
-            return false;
-        }
-        _urpToKit->send(message.data() + 4, message.size() - 4);
-        return true;
-    }
-
-    virtual ~ChildProcess()
-    {
-        if (_urpFromKit)
-            _urpFromKit->shutdown();
-        if (_urpToKit)
-            _urpToKit->shutdown();
-        ::close(_smapsFD);
-    }
-
-    const ChildProcess& operator=(ChildProcess&& other) = delete;
-
-    void setDocumentBroker(const std::shared_ptr<DocumentBroker>& docBroker);
-    std::shared_ptr<DocumentBroker> getDocumentBroker() const { return _docBroker.lock(); }
-    const std::string& getJailId() const { return _jailId; }
-    void setSMapsFD(int smapsFD) { _smapsFD = smapsFD;}
-    int getSMapsFD(){ return _smapsFD; }
-
-    void moveSocketFromTo(const std::shared_ptr<SocketPoll> &from, SocketPoll &to)
-    {
-        to.takeSocket(from, getSocket());
-    }
-
-private:
-    const std::string _jailId;
-    std::weak_ptr<DocumentBroker> _docBroker;
-    std::shared_ptr<StreamSocket> _urpFromKit;
-    std::shared_ptr<StreamSocket> _urpToKit;
-    int _smapsFD;
 };
 
 class RequestDetails;
@@ -301,20 +245,19 @@ class DocumentBroker : public std::enable_shared_from_this<DocumentBroker>
 
 public:
     /// How to prioritize this document.
-    enum class ChildType {
+    enum class ChildType : bool {
         Interactive, Batch
     };
 
     DocumentBroker(ChildType type, const std::string& uri, const Poco::URI& uriPublic,
-                   const std::string& docKey, unsigned mobileAppDocId,
-                   std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo);
+                   const std::string& docKey, const std::string& configId,
+                   unsigned mobileAppDocId);
 
 protected:
     /// Used by derived classes.
     DocumentBroker(ChildType type, const std::string& uri, const Poco::URI& uriPublic,
-                   const std::string& docKey)
-        : DocumentBroker(type, uri, uriPublic, docKey, /*mobileAppDocId=*/0,
-                         /*wopiFileInfo=*/nullptr)
+                   const std::string& docKey, const std::string& configId)
+        : DocumentBroker(type, uri, uriPublic, docKey, configId, /*mobileAppDocId=*/0)
     {
     }
 
@@ -329,8 +272,8 @@ public:
                        SocketDisposition::MoveFunction transferFn);
 
     /// setup the transfer of a socket into this DocumentBroker poll.
-    void setupTransfer(const std::shared_ptr<StreamSocket>& socket,
-                       const SocketDisposition::MoveFunction& transferFn);
+    void setupTransfer(SocketPoll& from, const std::weak_ptr<StreamSocket>& socket,
+                       SocketDisposition::MoveFunction transferFn) const;
 
     /// Flag for termination. Note that this doesn't save any unsaved changes in the document
     void stop(const std::string& reason);
@@ -339,20 +282,20 @@ public:
     void finalRemoveSession(const std::shared_ptr<ClientSession>& session);
 
     /// Create new client session
-    std::shared_ptr<ClientSession> createNewClientSession(
-        const std::shared_ptr<ProtocolHandlerInterface> &ws,
-        const std::string& id,
-        const Poco::URI& uriPublic,
-        const bool isReadOnly,
-        const RequestDetails &requestDetails);
+    std::shared_ptr<ClientSession>
+    createNewClientSession(const std::shared_ptr<ProtocolHandlerInterface>& ws,
+                           const std::string& id, const Poco::URI& uriPublic, bool isReadOnly,
+                           const RequestDetails& requestDetails);
 
     /// Find or create a new client session for the PHP proxy
-    void handleProxyRequest(
-        const std::string& id,
-        const Poco::URI& uriPublic,
-        const bool isReadOnly,
-        const RequestDetails &requestDetails,
-        const std::shared_ptr<StreamSocket> &socket);
+    void handleProxyRequest(const std::string& id, const Poco::URI& uriPublic, bool isReadOnly,
+                            const RequestDetails& requestDetails,
+                            const std::shared_ptr<StreamSocket>& socket);
+
+    void proxyOpenRequest(const std::shared_ptr<StreamSocket>& socket,
+                          std::shared_ptr<ClientSession>& clientSession, const std::string& id,
+                          const Poco::URI& uriPublic, bool isReadOnly,
+                          const RequestDetails& requestDetails);
 
     /// Thread safe termination of this broker if it has a lingering thread
     void joinThread();
@@ -363,10 +306,13 @@ public:
     /// Notify that the document has dialogs before load
     virtual void setInteractive(bool value);
 
+    /// Called when a new view is loaded.
+    void onViewLoaded(const std::shared_ptr<ClientSession>& session);
+
     /// If not yet locked, try to lock
     bool attemptLock(ClientSession& session, std::string& failReason);
 
-    bool isDocumentChangedInStorage() { return _documentChangedInStorage; }
+    bool isDocumentChangedInStorage() const { return _documentChangedInStorage; }
 
     /// Invoked by the client to rename the document filename.
     /// Returns an error message in case of failure, otherwise an empty string.
@@ -389,7 +335,7 @@ public:
     /// @param uploadAsPath Absolute path to the jailed file.
     void uploadAsToStorage(const std::shared_ptr<ClientSession>& session,
                            const std::string& uploadAsPath, const std::string& uploadAsFilename,
-                           const bool isRename, const bool isExport);
+                           bool isRename, bool isExport);
 
     /// Uploads the document right after loading from a template.
     /// Template-loading requires special handling because the
@@ -397,7 +343,7 @@ public:
     void uploadAfterLoadingTemplate(const std::shared_ptr<ClientSession>& session);
 
     bool isModified() const { return _isModified; }
-    void setModified(const bool value);
+    void setModified(bool value);
 
     /// Save the document if the document is modified.
     /// @param force when true, will force saving if there
@@ -406,7 +352,7 @@ public:
     /// @param finalWrite this is our last write before exit, lets make it synchronous
     /// @return true if attempts to save or it also waits
     /// and receives save notification. Otherwise, false.
-    bool autoSave(const bool force, const bool dontSaveIfUnmodified, const bool finalWrite = false);
+    bool autoSave(bool force, bool dontSaveIfUnmodified, bool finalWrite = false);
 
     /// Saves the document and stops if there was nothing to autosave.
     void autoSaveAndStop(const std::string& reason);
@@ -414,8 +360,11 @@ public:
     bool isAsyncUploading() const;
 
     Poco::URI getPublicUri() const { return _uriPublic; }
+    const AdditionalFilePaths& getAdditionalFileUrisJailed() const { return _additionalFileUrisJailed; }
     const std::string& getJailId() const { return _jailId; }
     const std::string& getDocKey() const { return _docKey; }
+    // id of wopi shared config
+    const std::string& getConfigId() const { return _configId; }
     const std::string& getFilename() const { return _filename; };
     TileCache& tileCache() { return *_tileCache; }
     bool hasTileCache() { return _tileCache != nullptr; }
@@ -430,7 +379,7 @@ public:
 
     std::string getJailRoot() const;
 
-    /// Add a new session. Returns the new number of sessions.
+    /// Loads and adds a new session. Returns the new number of sessions.
     std::size_t addSession(const std::shared_ptr<ClientSession>& session,
                            std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo = nullptr);
 
@@ -443,9 +392,15 @@ public:
     /// Transfer this socket into our polling thread / loop.
     void addSocketToPoll(const std::shared_ptr<StreamSocket>& socket);
 
-    SocketPoll& getPoll();
+    std::weak_ptr<SocketPoll> getPoll() const;
 
     void alertAllUsers(const std::string& msg);
+
+#if !MOBILEAPP
+    void syncBrowserSettings(const std::string& userId, const std::string& json);
+
+    void uploadPresetsToWopiHost();
+#endif
 
     void alertAllUsers(const std::string& cmd, const std::string& kind)
     {
@@ -464,44 +419,61 @@ public:
         _cursorHeight = h;
     }
 
-    void invalidateTiles(const std::string& tiles, int normalizedViewId)
+    void clearCaches();
+
+    void invalidateTiles(const std::string& tiles, CanonicalViewId canonicalViewId)
     {
         // Remove from cache.
-        _tileCache->invalidateTiles(tiles, normalizedViewId);
+        _tileCache->invalidateTiles(tiles, canonicalViewId);
+        //Tiles invalidate also mean slidelayers are also invalid now
+        // slides modified so need to rerender on request
+        invalidateSlideLayerCache();
+    }
+
+    void invalidateSlideLayerCache()
+    {
+        // TODO:
+        // Currently can't detect which slide was modified and
+        // based on our key choice can't remove just cache for particular slide
+        _slideLayerCache.erase_all();
     }
 
     void handleTileRequest(const StringVector &tokens, bool forceKeyframe,
                            const std::shared_ptr<ClientSession>& session);
-    void handleTileCombinedRequest(TileCombined& tileCombined, bool forceKeyframe,
+    void handleTileCombinedRequest(TileCombined& tileCombined, bool canForceKeyframe,
                                    const std::shared_ptr<ClientSession>& session);
     void sendRequestedTiles(const std::shared_ptr<ClientSession>& session);
     void sendTileCombine(const TileCombined& tileCombined);
 
-    enum ClipboardRequest {
+    void handleGetSlideRequest(const StringVector& tokens,
+                               const std::shared_ptr<ClientSession>& session);
+
+    enum ClipboardRequest : std::uint8_t {
         CLIP_REQUEST_SET,
         CLIP_REQUEST_GET,
         CLIP_REQUEST_GET_RICH_HTML_ONLY,
         CLIP_REQUEST_GET_HTML_PLAIN_ONLY,
     };
+
+    std::shared_ptr<ClientSession> getSessionFromClipboardTag(const std::string &viewId, const std::string &tag);
+
     void handleClipboardRequest(ClipboardRequest type,  const std::shared_ptr<StreamSocket> &socket,
                                 const std::string &viewId, const std::string &tag,
-                                const std::shared_ptr<std::string> &data);
-    static bool lookupSendClipboardTag(const std::shared_ptr<StreamSocket> &socket,
-                                       const std::string &tag, bool sendError = false);
+                                const std::string &clipFile);
+    static bool handlePersistentClipboardRequest(ClipboardRequest type,
+                                                 const std::shared_ptr<StreamSocket> &socket,
+                                                 const std::string &tag, bool sendError = false);
 
-    void handleMediaRequest(std::string range, const std::shared_ptr<Socket>& socket, const std::string& tag);
+    void handleMediaRequest(std::string_view range, const std::shared_ptr<Socket>& socket,
+                            const std::string& tag);
 
-    /// True if any flag to unload or terminate is set.
-    bool isUnloading() const
-    {
-        return _docState.isMarkedToDestroy() || _stop || _docState.isUnloadRequested() ||
-               _docState.isCloseRequested() || SigUtil::getShutdownRequestFlag();
-    }
+    /// True if any flag to close, terminate, or to unload is set.
+    bool isUnloading() const { return isUnloadingUnrecoverably() || _docState.isUnloadRequested(); }
 
-    /// True if any flag to unload or terminate is set.
+    /// True if any flag to close or terminate is set.
     bool isUnloadingUnrecoverably() const
     {
-        return _docState.isMarkedToDestroy() || _stop || _docState.isCloseRequested() ||
+        return isMarkedToDestroy() || _docState.isCloseRequested() || _stop ||
                SigUtil::getShutdownRequestFlag();
     }
 
@@ -513,7 +485,7 @@ public:
     bool forwardToChild(const std::shared_ptr<ClientSession>& session, const std::string& message,
                         bool binary = false);
 
-    int getRenderedTileCount() { return _debugRenderedTileCount; }
+    int getRenderedTileCount() const { return _debugRenderedTileCount; }
 
     /// Ask the document broker to close. Makes sure that the document is saved.
     void closeDocument(const std::string& reason);
@@ -521,8 +493,8 @@ public:
     /// Flag that we have been disconnected from the Kit and request unloading.
     void disconnectedFromKit(bool unexpected);
 
-    /// Get the PID of the associated child process
-    pid_t getPid() const { return _childProcess ? _childProcess->getPid() : 0; }
+    /// Get the PID of the associated child process.
+    pid_t getPid() const;
 
     /// Update the last activity time to now.
     /// Best to be inlined as it's called frequently.
@@ -553,20 +525,15 @@ public:
     /// Returns the number of sessions sent the message to.
     std::size_t broadcastMessage(const std::string& message) const;
 
-    /// Sends a message to all sessions except for the session passed as the param
-    void broadcastMessageToOthers(const std::string& message, const std::shared_ptr<ClientSession>& _session) const;
+    /// Sends a message to all sessions except for the session passed as the param.
+    void broadcastMessageToOthers(const std::string& message,
+                                  const std::shared_ptr<ClientSession>& session) const;
 
     /// Broadcasts 'blockui' command to all users with an optional message.
-    void blockUI(const std::string& msg)
-    {
-        broadcastMessage("blockui: " + msg);
-    }
+    void blockUI(const std::string& msg) const { broadcastMessage("blockui: " + msg); }
 
     /// Broadcasts 'unblockui' command to all users.
-    void unblockUI()
-    {
-        broadcastMessage("unblockui: ");
-    }
+    void unblockUI() const { broadcastMessage("unblockui: "); }
 
     /// Returns true iff an initial setting by the given name is already initialized.
     bool isInitialSettingSet(const std::string& name) const;
@@ -591,9 +558,23 @@ public:
     /// Remove embedded media objects.
     void removeEmbeddedMedia(const std::string& json);
 
+    std::string getEmbeddedMediaPath(const std::string& id);
+    /// Returns the absolute media path given the local path of the media file.
+    std::string getAbsoluteMediaPath(std::string localPath);
+
     void onUrpMessage(const char* data, size_t len);
 
     void setMigrationMsgReceived() { _migrateMsgReceived = true; }
+
+
+    bool getIsFollowmeSlideShowOn() const {return _docState.getIsFollowmeSlideShowOn();}
+    void setIsFollowmeSlideShowOn(bool isSlideShowRunning)  { _docState.setIsFollowmeSlideShowOn(isSlideShowRunning);}
+
+    int getLeaderSlide() const {return _docState.getLeaderSlide();}
+    void setLeaderSlide(int leaderSlide)  { _docState.setLeaderSlide(leaderSlide);}
+
+    int getLeaderEffect() const {return _docState.getLeaderEffect();}
+    void setLeaderEffect(int leaderEffect)  { _docState.setLeaderEffect(leaderEffect);}
 
 #if !MOBILEAPP && !WASMAPP
     /// Get server audit util
@@ -608,20 +589,73 @@ public:
     void switchMode(const std::shared_ptr<ClientSession>& session, const std::string& mode);
 #endif // !MOBILEAPP && !WASMAPP
 
+    StorageBase* getStorage() { return _storage.get(); }
+
+    // mark as dead if poll is not running and no doc loaded after a reasonable
+    // time since construction
+    void timeoutNotLoaded(std::chrono::steady_clock::time_point now);
+
+#if !MOBILEAPP
+    void asyncInstallPresets(const std::shared_ptr<ClientSession>& session,
+                             const std::string& configId,
+                             const std::string& userSettingsUri,
+                             const std::string& presetsPath);
+
+    static void getBrowserSettingSync(const std::shared_ptr<ClientSession>& session,
+                                      const std::string& userSettingsUri);
+
+    static void sendBrowserSetting(const std::shared_ptr<ClientSession>& session);
+
+    // Return true if parsing of browsersetting is successful
+    static bool parseBrowserSettings(const std::shared_ptr<ClientSession>& session,
+                                     const std::string& responseBody);
+
+    /// Start an asynchronous Installation of the user presets, e.g. autotexts etc, as
+    /// described at userSettingsUri for installation into presetsPath
+    static std::shared_ptr<PresetsInstallTask> asyncInstallPresets(
+                                    const std::shared_ptr<SocketPoll>& poll,
+                                    const std::string& configId,
+                                    const std::string& userSettingsUri,
+                                    const std::string& presetsPath,
+                                    const std::shared_ptr<ClientSession>& session,
+                                    const std::function<void(bool)>& finishedCB);
+
+    /// Start an asynchronous Installation of a user preset resource, e.g. an autotext
+    /// file, to copy as presetFile
+    static void asyncInstallPreset(const std::shared_ptr<SocketPoll>& poll,
+                                   const std::string& configId,
+                                   const std::string& presetUri, const std::string& presetStamp,
+                                   const std::string& presetFile, const std::string& id,
+                                   const std::function<void(const std::string&, bool)>& finishedCB,
+                                   const std::shared_ptr<ClientSession>& session);
+
+    static Poco::URI getPresetUploadBaseUrl(const Poco::URI& uri);
+
+    static std::shared_ptr<const http::Response> sendHttpSyncRequest(const std::string& url,
+                                                                     const std::string& logContext);
+#endif // !MOBILEAPP
+
 private:
+    /// Checks if we really need to request tile rendering or it's in progress
+    /// returns true if all tiles are of the same part and size so can be grouped
+    inline bool requestTileRendering(TileDesc& tile, bool forceKeyFrame, int version,
+                                     std::chrono::steady_clock::time_point now,
+                                     std::vector<TileDesc>& tilesNeedsRendering,
+                                     const std::shared_ptr<ClientSession>& session);
+
     /// Get the session that can write the document for save / locking / uploading.
     /// Note that if there is no loaded and writable session, the first will be returned.
     std::shared_ptr<ClientSession> getWriteableSession() const;
 
-    void refreshLock();
+    /// Get the first session that has a valid authorization.
+    std::shared_ptr<ClientSession> getFirstAuthorizedSession() const;
 
-    /// Downloads the document ahead-of-time.
-    bool downloadAdvance(const std::string& jailId, const Poco::URI& uriPublic,
-                         std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo);
+    void refreshLock();
 
     /// Loads a document from the public URI into the jail.
     bool download(const std::shared_ptr<ClientSession>& session, const std::string& jailId,
                   const Poco::URI& uriPublic,
+                  const AdditionalFilePocoUris& additionalFileUrisPublic,
                   std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo);
 
     /// Actual document download and post-download processing.
@@ -639,30 +673,42 @@ private:
 
     /// Process the configured plugins, if any, after downloading the document file.
     bool processPlugins(std::string& localPath);
-#endif //!MOBILEAPP
+
+    /// Start an asynchronous CheckFileInfo request.
+    void checkFileInfo(const std::shared_ptr<ClientSession>& uri, int redirectLimit);
+#endif // !MOBILEAPP
 
     bool isLoaded() const { return _docState.hadLoaded(); }
     bool isInteractive() const { return _docState.isInteractive(); }
 
-    void lockIfEditing(const std::shared_ptr<ClientSession>& session, const Poco::URI& uriPublic,
-                       bool userCanWrite);
+    /// Before downloading the document, we lock if the document is loaded for editing.
+    void lockIfEditing(const std::shared_ptr<ClientSession>& session);
 
     /// Updates the document's lock in storage to either locked or unlocked.
     /// Returns true iff the operation was successful.
-    bool updateStorageLockState(ClientSession& session, bool lock, std::string& error);
+    bool updateStorageLockState(ClientSession& session, StorageBase::LockState lock,
+                                std::string& error);
 
-    /// Take the lock before loading the first session, if we know we can edit.
-    bool updateStorageLockState(const Authorization& auth, std::string& error);
+    /// Updates the document's lock in storage asynchronously to either locked or unlocked.
+    /// Returns false if an error prevented issuing the asynchronous request.
+    bool updateStorageLockStateAsync(const std::shared_ptr<ClientSession>& session,
+                                     StorageBase::LockState lock, std::string& error);
 
-    std::size_t getIdleTimeSecs() const
+    /// Handle the Un/Lock request result.
+    /// Returns false on failure/unauthorized.
+    bool handleLockResult(ClientSession& session, const StorageBase::LockUpdateResult& result);
+
+    /// Returns the time elapsed since the last user activity.
+    std::chrono::milliseconds getIdleTime() const
     {
         const auto duration = (std::chrono::steady_clock::now() - _lastActivityTime);
-        return std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(duration);
     }
 
     void handleTileResponse(const std::shared_ptr<Message>& message);
     void handleDialogPaintResponse(const std::vector<char>& payload, bool child);
     void handleTileCombinedResponse(const std::shared_ptr<Message>& message);
+    void handleSlideLayerResponse(const std::shared_ptr<Message>& message);
     void handleDialogRequest(const std::string& dialogCmd);
 
     /// Invoked to issue a save before renaming the document filename.
@@ -696,17 +742,17 @@ private:
     /// (regardless of whether we need to or not).
     STATE_ENUM(
         CanSave,
-        Yes, //< Saving is possible.
-        NoKit, //< There is no Kit.
-        NotLoaded, //< No document is loaded.
-        NoWriteSession, //< No available session can write.
+        Yes, ///< Saving is possible.
+        NoKit, ///< There is no Kit.
+        NotLoaded, ///< No document is loaded.
+        NoWriteSession, ///< No available session can write.
     );
 
     /// Returns the state of whether saving is possible.
     /// (regardless of whether we need to or not).
     CanSave canSaveToDisk() const
     {
-        if (_docState.isDisconnected() || getPid() <= 0)
+        if (_docState.isKitDisconnected() || getPid() <= 0)
         {
             return CanSave::NoKit;
         }
@@ -728,8 +774,8 @@ private:
     /// (regardless of whether we need to or not).
     STATE_ENUM(
         CanUpload,
-        Yes, //< Uploading is possible.
-        NoStorage, //< Storage instance missing.
+        Yes, ///< Uploading is possible.
+        NoStorage, ///< Storage instance missing.
     );
 
     /// Returns the state of whether uploading is possible.
@@ -741,8 +787,8 @@ private:
 
     /// Encodes whether or not uploading is needed.
     STATE_ENUM(NeedToUpload,
-               No, //< No need to upload, data up-to-date.
-               Yes, //< Data is out of date.
+               No, ///< No need to upload, data up-to-date.
+               Yes, ///< Data is out of date.
     );
 
     /// Returns the state of the need to upload.
@@ -756,10 +802,19 @@ private:
     /// Upload the doc to the storage.
     void uploadToStorageInternal(const std::shared_ptr<ClientSession>& session,
                                  const std::string& saveAsPath, const std::string& saveAsFilename,
-                                 const bool isRename, const bool isExport, const bool force);
+                                 bool isRename, bool isExport, bool force);
 
     /// Handles the completion of uploading to storage, both success and failure cases.
     void handleUploadToStorageResponse(const StorageBase::UploadResult& uploadResult);
+
+    /// Handles the completion of successful uploading to storage.
+    void handleUploadToStorageSuccessful(const StorageBase::UploadResult& uploadResult);
+
+    /// Handles the completion of failed uploading to storage.
+    void handleUploadToStorageFailed(const StorageBase::UploadResult& uploadResult);
+
+    /// Send the error message about failed upload
+    void reportUploadToStorageFailed();
 
     /// Sends the .uno:Save command to LoKit.
     bool sendUnoSave(const std::shared_ptr<ClientSession>& session, bool dontTerminateEdit = true,
@@ -772,8 +827,8 @@ private:
      * @param result: Short message why saving was (not) successful
      * @param errorMsg: Long error msg (Error message from WOPI host if any)
      */
-    void broadcastSaveResult(bool success, const std::string& result = std::string(),
-                             const std::string& errorMsg = std::string());
+    void broadcastSaveResult(bool success, std::string_view result,
+                             const std::string& errorMsg = std::string()) const;
 
     /// Broadcasts to all sessions the last modification time of the document.
     void broadcastLastModificationTime(const std::shared_ptr<ClientSession>& session = nullptr) const;
@@ -794,10 +849,10 @@ private:
 
     /// Encodes whether or not saving is needed.
     STATE_ENUM(NeedToSave,
-               No, //< No need to save, data up-to-date.
-               Maybe, //< We have activity post saving.
-               Yes_Modified, //< Data is out of date.
-               Yes_LastSaveFailed, //< Yes, need to produce file on disk.
+               No, ///< No need to save, data up-to-date.
+               Maybe, ///< We have activity post saving.
+               Yes_Modified, ///< Data is out of date.
+               Yes_LastSaveFailed, ///< Yes, need to produce file on disk.
     );
 
     /// Returns the state of the need to save.
@@ -836,9 +891,11 @@ private:
     /// This includes only those that are loaded and not waiting disconnection.
     std::size_t countActiveSessions() const;
 
-    /// Loads a new session and adds to the sessions container.
-    std::size_t addSessionInternal(const std::shared_ptr<ClientSession>& session,
-                                   std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo);
+    /// Returns the number of sessions still loading.
+    std::size_t countLoadingSessions() const;
+
+    /// Notify and remove the loading sessions that we're unloading.
+    void failLoadingSessions(bool remove);
 
     /// Starts the Kit <-> DocumentBroker shutdown handshake
     void disconnectSessionInternal(const std::shared_ptr<ClientSession>& session);
@@ -924,18 +981,37 @@ private:
         /// The minimum time to wait between requests.
         std::chrono::milliseconds minTimeBetweenRequests() const { return _minTimeBetweenRequests; }
 
+        /// Returns how long before we can issue a new request now.
+        /// Calculates based on time elapsed since the last request,
+        /// including that more time than half the last request's
+        /// duration has passed.
+        /// When unloading, we reduce throttling significantly.
+        std::chrono::milliseconds timeToNextRequest(bool unloading) const
+        {
+            std::chrono::milliseconds minTimeBetweenRequests =
+                std::max(_minTimeBetweenRequests, _lastRequestDuration);
+            if (unloading)
+            {
+                // More aggressive when unloading.
+                minTimeBetweenRequests /= 10;
+            }
+
+            const auto now = RequestManager::now();
+            const std::chrono::milliseconds timeSinceLastCommunication =
+                std::min(timeSinceLastRequest(now), timeSinceLastResponse(now));
+
+            return (timeSinceLastCommunication >= minTimeBetweenRequests)
+                       ? std::chrono::milliseconds::zero()
+                       : minTimeBetweenRequests - timeSinceLastCommunication;
+        }
+
         /// Checks whether or not we can issue a new request now.
         /// Returns true iff there is no active request and sufficient
-        /// time has elapsed since the last request, including that
-        /// more time than half the last request's duration has passed.
-        /// When unloading, we reduce throttling significantly.
+        /// time has elapsed since the last request.
+        /// See timeToNextRequest() for details.
         bool canRequestNow(bool unloading) const
         {
-            const std::chrono::milliseconds minTimeBetweenRequests =
-                unloading ? _minTimeBetweenRequests / 10 : _minTimeBetweenRequests;
-            const auto now = RequestManager::now();
-            return !isActive() && std::min(timeSinceLastRequest(now), timeSinceLastResponse(now)) >=
-                                      std::max(minTimeBetweenRequests, _lastRequestDuration / 2);
+            return !isActive() && timeToNextRequest(unloading) == std::chrono::milliseconds::zero();
         }
 
         /// Sets the last request's result, either to success or failure.
@@ -1024,7 +1100,7 @@ private:
         {
             if (Log::traceEnabled())
             {
-                std::ostringstream oss;
+                std::ostringstream oss(Util::makeDumpStateStream());
                 dumpState(oss, ", ");
                 LOG_TRC("Created SaveManager: " << oss.str());
             }
@@ -1114,15 +1190,15 @@ private:
         }
 
         /// Set the last modified time of the document.
-        void setLastModifiedTime(std::chrono::system_clock::time_point time)
+        void setLastModifiedLocalTime(std::chrono::system_clock::time_point time)
         {
-            _lastModifiedTime = time;
+            _lastModifiedLocalTime = time;
         }
 
         /// Returns the last modified time of the document.
-        std::chrono::system_clock::time_point getLastModifiedTime() const
+        std::chrono::system_clock::time_point getLastModifiedLocalTime() const
         {
-            return _lastModifiedTime;
+            return _lastModifiedLocalTime;
         }
 
         /// True iff a save is in progress (requested but not completed).
@@ -1171,6 +1247,12 @@ private:
         /// 0 for original, as-loaded version.
         std::size_t version() const { return _version.load(); }
 
+        /// Returns the time to next save, or 0 if we can save now.
+        std::chrono::milliseconds timeToNextSave(bool unloading) const
+        {
+            return _request.timeToNextRequest(unloading);
+        }
+
         /// True if we aren't saving and the minimum time since last save has elapsed.
         bool canSaveNow(bool unloading) const { return _request.canRequestNow(unloading); }
 
@@ -1178,15 +1260,15 @@ private:
         {
             const auto now = std::chrono::steady_clock::now();
             os << indent << "version: " << version();
-            os << indent << "isSaving now: " << std::boolalpha << isSaving();
-            os << indent << "idle-save enabled: " << std::boolalpha << isIdleSaveEnabled();
+            os << indent << "isSaving now: " << isSaving();
+            os << indent << "idle-save enabled: " << isIdleSaveEnabled();
             os << indent << "idle-save interval: " << idleSaveInterval();
-            os << indent << "auto-save enabled: " << std::boolalpha << isAutoSaveEnabled();
+            os << indent << "auto-save enabled: " << isAutoSaveEnabled();
             os << indent << "auto-save interval: " << autoSaveInterval();
             os << indent << "check interval: " << _checkInterval;
             os << indent
                << "last auto-save check time: " << Util::getTimeForLog(now, _lastAutosaveCheckTime);
-            os << indent << "auto-save check needed: " << std::boolalpha << needAutoSaveCheck();
+            os << indent << "auto-save check needed: " << needAutoSaveCheck();
 
             os << indent
                << "last save request: " << Util::getTimeForLog(now, lastSaveRequestTime());
@@ -1196,9 +1278,9 @@ private:
             os << indent << "min time between saves: " << minTimeBetweenSaves();
 
             os << indent
-               << "file last modified time: " << Util::getTimeForLog(now, _lastModifiedTime);
+               << "file last modified time: " << Util::getTimeForLog(now, _lastModifiedLocalTime);
             os << indent << "saving-timeout: " << getSavingTimeout();
-            os << indent << "last save timed-out: " << std::boolalpha << hasSavingTimedOut();
+            os << indent << "last save timed-out: " << hasSavingTimedOut();
             os << indent << "last save successful: " << lastSaveSuccessful();
             os << indent << "save failure count: " << saveFailureCount();
         }
@@ -1208,7 +1290,7 @@ private:
         RequestManager _request;
 
         /// The document's last-modified time.
-        std::chrono::system_clock::time_point _lastModifiedTime;
+        std::chrono::system_clock::time_point _lastModifiedLocalTime;
 
         /// The number of milliseconds between idlesave checks for modification.
         const std::chrono::milliseconds _idleSaveInterval;
@@ -1234,29 +1316,26 @@ private:
     {
     public:
         UploadRequest(std::string uriAnonym,
-                      std::chrono::system_clock::time_point newFileModifiedTime,
+                      std::chrono::system_clock::time_point newFileModifiedLocalTime,
                       const std::shared_ptr<class ClientSession>& session, bool isSaveAs,
                       bool isExport, bool isRename)
             : _startTime(std::chrono::steady_clock::now())
             , _uriAnonym(std::move(uriAnonym))
-            , _newFileModifiedTime(newFileModifiedTime)
+            , _newFileModifiedLocalTime(newFileModifiedLocalTime)
             , _session(session)
             , _isSaveAs(isSaveAs)
             , _isExport(isExport)
             , _isRename(isRename)
+            , _completed(false)
         {
         }
 
-        const std::chrono::milliseconds timeSinceRequest() const
-        {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - _startTime);
-        }
+        std::chrono::steady_clock::time_point startTime() const { return _startTime; }
 
         const std::string& uriAnonym() const { return _uriAnonym; }
-        const std::chrono::system_clock::time_point& newFileModifiedTime() const
+        const std::chrono::system_clock::time_point& newFileModifiedLocalTime() const
         {
-            return _newFileModifiedTime;
+            return _newFileModifiedLocalTime;
         }
 
         std::shared_ptr<class ClientSession> session() const { return _session.lock(); }
@@ -1264,14 +1343,19 @@ private:
         bool isExport() const { return _isExport; }
         bool isRename() const { return _isRename; }
 
+        /// When the callback fires, we set this request as completed, so we destroy it.
+        bool isComplete() const { return _completed; }
+        void setComplete() { _completed = true; }
+
     private:
-        const std::chrono::steady_clock::time_point _startTime; //< The time we made the request.
+        const std::chrono::steady_clock::time_point _startTime; ///< The time we made the request.
         const std::string _uriAnonym;
-        const std::chrono::system_clock::time_point _newFileModifiedTime;
+        const std::chrono::system_clock::time_point _newFileModifiedLocalTime;
         const std::weak_ptr<class ClientSession> _session;
         const bool _isSaveAs;
         const bool _isExport;
         const bool _isRename;
+        bool _completed;
     };
 
     /// Responsible for managing document uploading into storage.
@@ -1280,6 +1364,8 @@ private:
     public:
         StorageManager(std::chrono::milliseconds minTimeBetweenUploads)
             : _request(minTimeBetweenUploads)
+            , _sizeOnServer(0)
+            , _sizeAsUploaded(0)
         {
             if (Log::traceEnabled())
             {
@@ -1322,22 +1408,43 @@ private:
         std::size_t uploadFailureCount() const { return _request.lastRequestFailureCount(); }
 
         /// Get the modified-timestamp of the local file on disk we last uploaded.
-        std::chrono::system_clock::time_point getLastUploadedFileModifiedTime() const
+        std::chrono::system_clock::time_point getLastUploadedFileModifiedLocalTime() const
         {
-            return _lastUploadedFileModifiedTime;
+            return _lastUploadedFileModifiedLocalTime;
         }
 
         /// Set the modified-timestamp of the local file on disk we last uploaded.
-        void setLastUploadedFileModifiedTime(std::chrono::system_clock::time_point modifiedTime)
+        void
+        setLastUploadedFileModifiedLocalTime(std::chrono::system_clock::time_point modifiedTime)
         {
-            _lastUploadedFileModifiedTime = modifiedTime;
+            _lastUploadedFileModifiedLocalTime = modifiedTime;
         }
 
         /// Set the last modified time of the document.
-        void setLastModifiedTime(const std::string& time) { _lastModifiedTime = time; }
+        void setLastModifiedServerTimeString(const std::string& time)
+        {
+            _lastModifiedServerTimeString = time;
+        }
 
         /// Returns the last modified time of the document.
-        const std::string& getLastModifiedTime() const { return _lastModifiedTime; }
+        const std::string& getLastModifiedServerTimeString() const
+        {
+            return _lastModifiedServerTimeString;
+        }
+
+        /// Set size of the document as we've downloaded it, or after a successful upload.
+        void setSizeOnServer(std::size_t size) { _sizeOnServer = size; }
+
+        /// Get size of the document as we've downloaded it, or after a successful upload.
+        std::size_t getSizeOnServer() const { return _sizeOnServer; }
+
+        /// Set size of the document as we've uploaded.
+        /// Used to resynchronize after an upload failure that break reliance on the LastModifiedTime.
+        void setSizeAsUploaded(std::size_t size) { _sizeAsUploaded = size; }
+
+        /// Get size of the document as we've set in our PutFile header.
+        /// Used to resynchronize after an upload failure that break reliance on the LastModifiedTime.
+        std::size_t getSizeAsUploaded() const { return _sizeAsUploaded; }
 
         /// Returns how long the last upload took.
         std::chrono::milliseconds lastUploadDuration() const
@@ -1351,25 +1458,32 @@ private:
             return _request.minTimeBetweenRequests();
         }
 
+        /// Returns the time to next upload, or 0 if we can upload now.
+        std::chrono::milliseconds timeToNextUpload(bool unloading) const
+        {
+            return _request.timeToNextRequest(unloading);
+        }
+
         /// True if we aren't uploading and the minimum time since last upload has elapsed.
         bool canUploadNow(bool unloading) const { return _request.canRequestNow(unloading); }
 
         void dumpState(std::ostream& os, const std::string& indent = "\n  ") const
         {
             const auto now = std::chrono::steady_clock::now();
-            os << indent << "isUploading now: " << std::boolalpha << isUploading();
+            os << indent << "isUploading now: " << isUploading();
             os << indent << "last upload request time: "
                << Util::getTimeForLog(now, _request.lastRequestTime());
             os << indent << "last upload response time: "
                << Util::getTimeForLog(now, _request.lastResponseTime());
             os << indent << "last upload duration: " << lastUploadDuration();
             os << indent << "min time between uploads: " << minTimeBetweenUploads();
-            os << indent << "last modified time (on server): " << getLastModifiedTime();
-            os << indent
-               << "file last modified: " << Util::getTimeForLog(now, _lastUploadedFileModifiedTime);
-            os << indent << "last upload was successful: " << std::boolalpha
-               << lastUploadSuccessful();
+            os << indent << "last modified time (on server): " << getLastModifiedServerTimeString();
+            os << indent << "file last modified: "
+               << Util::getTimeForLog(now, _lastUploadedFileModifiedLocalTime);
+            os << indent << "last upload was successful: " << lastUploadSuccessful();
             os << indent << "upload failure count: " << uploadFailureCount();
+            os << indent << "size on server: " << _sizeOnServer;
+            os << indent << "last upload size: " << _sizeAsUploaded;
         }
 
     private:
@@ -1377,36 +1491,65 @@ private:
         RequestManager _request;
 
         /// The modified-timestamp of the local file on disk we uploaded last.
-        std::chrono::system_clock::time_point _lastUploadedFileModifiedTime;
+        std::chrono::system_clock::time_point _lastUploadedFileModifiedLocalTime;
 
         /// The modified time of the document in storage, as reported by the server.
-        std::string _lastModifiedTime;
+        std::string _lastModifiedServerTimeString;
+
+        /// The size of the document, as we downloaded from the server,
+        /// and after successfully uploading.
+        /// Used to help resynchronize the LastModifiedTime after an upload failure.
+        std::size_t _sizeOnServer;
+
+        /// The size of the document as we uploaded to the server.
+        /// Used to help resynchronize the LastModifiedTime after an upload failure.
+        std::size_t _sizeAsUploaded;
     };
 
-protected:
-    /// Seconds to live for, or 0 forever
-    std::chrono::seconds _limitLifeSeconds;
-    std::string _uriOrig;
+    /// Represents a lock-state update request.
+    class LockStateUpdateRequest final
+    {
+    public:
+        LockStateUpdateRequest(StorageBase::LockState requestedLockState,
+                               const std::shared_ptr<class ClientSession>& session)
+            : _session(session)
+            , _startTime(std::chrono::steady_clock::now())
+            , _requestedLockState(requestedLockState)
+        {
+        }
+
+        const std::chrono::milliseconds timeSinceRequest() const
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - _startTime);
+        }
+
+        /// The requested new lock state.
+        StorageBase::LockState requestedLockState() const { return _requestedLockState; }
+
+        /// The ClientSession that requested this lock-state update, if any.
+        /// Might be issued before a client is connected, or the client might have left later.
+        std::shared_ptr<class ClientSession> session() const { return _session.lock(); }
+
+    private:
+        const std::weak_ptr<class ClientSession> _session; ///< Allows for cleanup, if it's closed.
+        const std::chrono::steady_clock::time_point _startTime; ///< The time we made the request.
+        const StorageBase::LockState _requestedLockState;
+    };
 
 private:
-    /// What type are we: affects priority.
-    ChildType _type;
-    const Poco::URI _uriPublic;
-    /// URL-based key. May be repeated during the lifetime of WSD.
-    const std::string _docKey;
-    /// Short numerical ID. Unique during the lifetime of WSD.
-    const std::string _docId;
-    std::shared_ptr<ChildProcess> _childProcess;
-    std::string _uriJailed;
-    std::string _uriJailedAnonym;
-    std::string _jailId;
-    std::string _filename;
-    std::atomic<bool> _migrateMsgReceived = false;
+    // First member.
+    /// The UnitWSD instance. We capture it here since
+    /// this is our instance, but the test framework
+    /// has a single global instance via UnitWSD::get().
+    UnitWSD* const _unitWsd;
 
-    /// The WopiFileInfo of the initial request loading the document for the first time.
-    /// This has a single-use, and then it's reset.
-    std::unique_ptr<WopiStorage::WOPIFileInfo> _initialWopiFileInfo;
+protected:
+    std::string _uriOrig;
+    /// Seconds to live for, or 0 forever
+    std::chrono::seconds _limitLifeSeconds;
 
+private:
     /// The state of the document.
     /// This regulates all other primary operations.
     class DocumentState final
@@ -1416,34 +1559,35 @@ private:
         /// A document starts as New and progresses towards Unloaded.
         /// Upon error, intermediary states may be skipped.
         STATE_ENUM(Status,
-                   None, //< Doesn't exist, pending downloading.
-                   Downloading, //< Download from Storage to disk. Synchronous.
-                   Loading, //< Loading the document in Core.
-                   Live, //< General availability for viewing/editing.
-                   Destroying, //< End-of-life, marked to destroy.
-                   Destroyed //< Unloading complete, destruction pending.
+                   None, ///< Doesn't exist, pending downloading.
+                   Downloading, ///< Download from Storage to disk. Synchronous.
+                   Loading, ///< Loading the document in Core.
+                   Live, ///< General availability for viewing/editing.
+                   Destroying, ///< End-of-life, marked to destroy.
+                   Destroyed ///< Unloading complete, destruction pending.
         );
 
         /// The current activity taking place.
         /// Meaningful only when Status is Status::Live, but
         /// we may Save and Upload during Status::Destroying.
         STATE_ENUM(Activity,
-                   None, //< No particular activity.
-                   Rename, //< The document is being renamed.
-                   SaveAs, //< The document format is being converted.
-                   Conflict, //< The document is conflicted in storaged.
-                   Save, //< The document is being saved, manually or auto-save.
-                   Upload, //< The document is being uploaded to storage.
+                   None, ///< No particular activity.
+                   Rename, ///< The document is being renamed.
+                   SaveAs, ///< The document format is being converted.
+                   Conflict, ///< The document is conflicted in storaged.
+                   Save, ///< The document is being saved, manually or auto-save.
+                   Upload, ///< The document is being uploaded to storage.
+                   SyncFileTimestamp, ///< Need to CheckFileInfo and get the modified timestamp.
 #if !MOBILEAPP && !WASMAPP
-                   SwitchingToOffline, //< The document will switch to Offline mode.
-                   SwitchingToOnline, //< The document will switch to Online mode.
+                   SwitchingToOffline, ///< The document will switch to Offline mode.
+                   SwitchingToOnline, ///< The document will switch to Online mode.
 #endif // !MOBILEAPP && !WASMAPP
         );
 
-        STATE_ENUM(Disconnected,
-                   No, //< No, not disconnected
-                   Normal, //< Yes, normal disconnection
-                   Unexpected, //< Yes, unexpected disconnection from Kit
+        STATE_ENUM(KitDisconnected,
+                   No, ///< No, kit is not disconnected
+                   Normal, ///< Yes, normal kit disconnection
+                   Unexpected, ///< Yes, unexpected disconnection from Kit
         );
 
         DocumentState()
@@ -1452,7 +1596,7 @@ private:
             , _loaded(false)
             , _closeRequested(false)
             , _unloadRequested(false)
-            , _disconnected(Disconnected::No)
+            , _kitDisconnected(KitDisconnected::No)
             , _interactive(false)
         {
         }
@@ -1460,8 +1604,7 @@ private:
         DocumentState::Status status() const { return _status; }
         void setStatus(Status newStatus)
         {
-            LOG_TRC("Setting DocumentState from " << toString(_status) << " to "
-                                                  << toString(newStatus));
+            LOG_TRC("Setting DocumentState from " << name(_status) << " to " << name(newStatus));
             assert(newStatus >= _status && "The document status cannot regress");
             _status = newStatus;
         }
@@ -1469,8 +1612,8 @@ private:
         DocumentState::Activity activity() const { return _activity; }
         void setActivity(Activity newActivity)
         {
-            LOG_TRC("Setting Document Activity from " << toString(_activity) << " to "
-                                                      << toString(newActivity));
+            LOG_TRC("Setting Document Activity from " << name(_activity) << " to "
+                                                      << name(newActivity));
             _activity = newActivity;
         }
 
@@ -1483,7 +1626,7 @@ private:
         /// Transitions to Status::Live, implying the document has loaded.
         void setLive()
         {
-            LOG_TRC("Setting DocumentState to Status::Live from " << toString(_status));
+            LOG_TRC("Setting DocumentState to Loaded and Live");
             // assert(_status == Status::Loading
             //        && "Document wasn't in Loading state to transition to Status::Live");
             _loaded = true;
@@ -1507,29 +1650,42 @@ private:
         bool isUnloadRequested() const { return _unloadRequested; }
 
         /// Flag that we are disconnected from the Kit. Irreversible.
-        void setDisconnected(Disconnected disconnected) { _disconnected = disconnected; }
-        DocumentState::Disconnected disconnected() const { return _disconnected; }
-        bool isDisconnected() const { return disconnected() != Disconnected::No; }
+        void setKitDisconnected(KitDisconnected disconnected) { _kitDisconnected = disconnected; }
+        DocumentState::KitDisconnected kitDisconnected() const { return _kitDisconnected; }
+        bool isKitDisconnected() const { return kitDisconnected() != KitDisconnected::No; }
+
+        bool getIsFollowmeSlideShowOn() const {return _isFollowmeSlideShowOn;}
+        void setIsFollowmeSlideShowOn(bool isSlideShowRunning)  { _isFollowmeSlideShowOn = isSlideShowRunning;}
+
+        int getLeaderSlide() const {return _currentLeaderSlide;}
+        void setLeaderSlide(int leaderSlide)  { _currentLeaderSlide = leaderSlide;}
+
+        int getLeaderEffect() const {return _currentLeaderEffect;}
+        void setLeaderEffect(int leaderEffect)  { _currentLeaderEffect = leaderEffect;}
 
         void dumpState(std::ostream& os, const std::string& indent = "\n  ") const
         {
-            os << indent << "doc state: " << toString(status());
-            os << indent << "doc activity: " << toString(activity());
+            os << indent << "doc state: " << name(status());
+            os << indent << "doc activity: " << name(activity());
             os << indent << "doc loaded: " << _loaded;
             os << indent << "interactive: " << _interactive;
             os << indent << "close requested: " << _closeRequested;
             os << indent << "unload requested: " << _unloadRequested;
-            os << indent << "disconnected from kit: " << toString(_disconnected);
+            os << indent << "disconnected from kit: " << name(_kitDisconnected);
         }
 
     private:
         Status _status;
         Activity _activity;
-        std::atomic<bool> _loaded; //< If the document ever loaded (check isLive to see if it still is).
-        std::atomic<bool> _closeRequested; //< Owner-Termination flag.
-        std::atomic<bool> _unloadRequested; //< Unload-Requested flag, which may be reset.
-        std::atomic<Disconnected> _disconnected; //< Disconnected from the Kit. Implies unloading.
-        bool _interactive; //< If the document has interactive dialogs before load
+        std::atomic<bool> _loaded; ///< If the document ever loaded (check isLive to see if it still is).
+        std::atomic<bool> _closeRequested; ///< Owner-Termination flag.
+        std::atomic<bool> _unloadRequested; ///< Unload-Requested flag, which may be reset.
+        std::atomic<KitDisconnected>
+            _kitDisconnected; ///< Disconnected from the Kit. Implies unloading.
+        bool _interactive; ///< If the document has interactive dialogs before load
+        bool _isFollowmeSlideShowOn = false;
+        int _currentLeaderEffect = -1;
+        int _currentLeaderSlide = -1;
     };
 
     /// Transition to a given activity. Returns false if an activity exists.
@@ -1545,12 +1701,13 @@ private:
         if (_docState.activity() != DocumentState::Activity::None)
         {
             LOG_DBG("Error: Cannot start new activity ["
-                    << DocumentState::toString(activity) << "] while executing ["
-                    << DocumentState::toString(_docState.activity()) << ']');
+                    << DocumentState::name(activity) << "] while executing ["
+                    << DocumentState::name(_docState.activity()) << ']');
             assert(!"Cannot start new activity while executing another.");
             return false;
         }
 
+        LOG_DBG("Starting [" << DocumentState::name(activity) << "] activity");
         _docState.setActivity(activity);
         return true;
     }
@@ -1558,7 +1715,7 @@ private:
     /// Ends the current activity.
     void endActivity()
     {
-        LOG_DBG("Ending [" << DocumentState::toString(_docState.activity()) << "] activity.");
+        LOG_DBG("Ending [" << DocumentState::name(_docState.activity()) << "] activity");
         _docState.setActivity(DocumentState::Activity::None);
     }
 
@@ -1567,23 +1724,25 @@ private:
     /// Performs aggregated work after servicing all client sessions
     void processBatchUpdates();
 
-    /// The main state of the document.
-    DocumentState _docState;
+    /// Called when document conflict is detected (i.e. it changed in storage).
+    void handleDocumentConflict();
 
-    /// Set to true when document changed in storage and we are waiting
-    /// for user's command to act.
-    bool _documentChangedInStorage;
+    std::string applyBrowserAccessibility(const std::string& message,
+                                       const std::string& viewId);
 
-    /// True for file that COOLWSD::IsViewFileExtension return true.
-    /// These files, such as PDF, don't have a reliable ModifiedStatus.
-    bool _isViewFileExtension;
+    /// Apply signature view settings to the message
+    std::string applySignViewSettings(const std::string& message,
+                                      const std::shared_ptr<ClientSession>& session) const;
+
+    /// Apply all view settings (signature and accessibility) to the message
+    std::string applyViewSetting(const std::string& message, const std::string& viewId,
+                                 const std::shared_ptr<ClientSession>& session);
+
+    /// What type are we: affects priority.
+    const Poco::URI _uriPublic;
 
     /// Manage saving in Core.
     SaveManager _saveManager;
-
-    /// The current upload request, if any.
-    /// For now we can only have one at a time.
-    std::unique_ptr<UploadRequest> _uploadRequest;
 
     /// Manage uploading to Storage.
     StorageManager _storageManager;
@@ -1591,10 +1750,23 @@ private:
     /// All session of this DocBroker by ID.
     SessionMap<ClientSession> _sessions;
 
+#if !MOBILEAPP && !WASMAPP
+    ServerAuditUtil _serverAudit;
+#endif
+
+    // Maps download id -> URL
+    std::map<std::string, std::string> _registeredDownloadLinks;
+
+    /// Embedded media map [id, json].
+    std::map<std::string, std::string> _embeddedMedia;
+
+#if !MOBILEAPP
+    /// stores timestamps of preset files when they get installed to compare later to check if they are modified
+    std::map<std::string, std::filesystem::file_time_type> _presetTimestamp;
+#endif
+
     /// If we set the user-requested initial (on load) settings to be forced.
     std::set<std::string> _isInitialStateSet;
-
-    std::unique_ptr<StorageBase> _storage;
 
     /// The next upload request's attributes, used during uno:Save only.
     /// Updated right before saving and when saving is completed.
@@ -1606,32 +1778,55 @@ private:
     /// Updated right before uploading.
     StorageBase::Attributes _lastStorageAttrs;
 
+    /// URL-based key. May be repeated during the lifetime of WSD.
+    const std::string _docKey;
+    /// Short numerical ID. Unique during the lifetime of WSD.
+    const std::string _docId;
+    std::string _uriJailed;
+    std::string _uriJailedAnonym;
+    AdditionalFilePaths _additionalFileUrisJailed;
+    std::string _jailId;
+    std::string _filename;
+
+    std::string _closeReason;
+    std::string _renameFilename; ///< The new filename to rename to.
+    std::string _renameSessionId; ///< The sessionId used for renaming.
+    std::string _lastEditingSessionId; ///< The last session edited, for auto-saving.
+
+    std::string _configId;
+
+    std::shared_ptr<ChildProcess> _childProcess;
+
+#if !MOBILEAPP
+    /// The current CheckFileInfo request, if any.
+    std::shared_ptr<CheckFileInfo> _checkFileInfo;
+    std::shared_ptr<PresetsInstallTask> _asyncInstallTask;
+#endif
+
+    std::shared_ptr<DocumentBrokerPoll> _poll;
+
+    /// The current upload request, if any.
+    /// For now we can only have one at a time.
+    std::unique_ptr<UploadRequest> _uploadRequest;
+
+    /// The current lock-state update request, if any.
+    std::unique_ptr<LockStateUpdateRequest> _lockStateUpdateRequest;
+
+    std::unique_ptr<StorageBase> _storage;
+
     /// The Quarantine manager.
     std::unique_ptr<Quarantine> _quarantine;
 
-#if !MOBILEAPP && !WASMAPP
-    ServerAuditUtil _serverAudit;
-#endif
-
     std::unique_ptr<TileCache> _tileCache;
-    std::atomic<bool> _isModified;
-    int _cursorPosX;
-    int _cursorPosY;
-    int _cursorWidth;
-    int _cursorHeight;
-    std::unique_ptr<DocumentBrokerPoll> _poll;
-    std::atomic<bool> _stop;
-    std::string _closeReason;
+
+    /// Cached slide layer for slideshow
+    SlideLayerCacheMap _slideLayerCache;
+
     std::unique_ptr<LockContext> _lockCtx;
-    std::string _renameFilename; //< The new filename to rename to.
-    std::string _renameSessionId; //< The sessionId used for renaming.
-    std::string _lastEditingSessionId; //< The last session edited, for auto-saving.
 
-    /// Versioning is used to prevent races between
-    /// painting and invalidation.
-    std::atomic<std::size_t> _tileVersion;
-
-    int _debugRenderedTileCount;
+#if !MOBILEAPP
+    Admin& _admin;
+#endif
 
     std::chrono::steady_clock::time_point _lastNotifiedActivityTime;
 
@@ -1641,21 +1836,44 @@ private:
     /// Time of the last interactive event that very likely modified the document.
     std::chrono::steady_clock::time_point _lastModifyActivityTime;
 
-    std::chrono::steady_clock::time_point _threadStart;
+    std::chrono::steady_clock::time_point _createTime;
     std::chrono::milliseconds _loadDuration;
     std::chrono::milliseconds _wopiDownloadDuration;
 
-    /// Unique DocBroker ID for tracing and debugging.
-    static std::atomic<unsigned> DocBrokerId;
+    /// Versioning is used to prevent races between
+    /// painting and invalidation.
+    std::atomic<std::size_t> _tileVersion;
+
+    int _cursorPosX;
+    int _cursorPosY;
+    int _cursorWidth;
+    int _cursorHeight;
+
+    int _debugRenderedTileCount;
 
     // Relevant only in the mobile apps
     const unsigned _mobileAppDocId;
 
-    // Maps download id -> URL
-    std::map<std::string, std::string> _registeredDownloadLinks;
+    ChildType _type;
 
-    /// Embedded media map [id, json].
-    std::map<std::string, std::string> _embeddedMedia;
+    /// The main state of the document.
+    DocumentState _docState;
+
+    std::atomic<bool> _migrateMsgReceived = false;
+
+    std::atomic<bool> _isModified;
+
+    std::atomic<bool> _stop;
+
+    /// Set to true when document changed in storage and we are waiting
+    /// for user's command to act.
+    bool _documentChangedInStorage;
+
+    /// True for file that COOLWSD::IsViewFileExtension return true.
+    /// These files, such as PDF, don't have a reliable ModifiedStatus.
+    bool _isViewFileExtension;
+
+    bool _isViewSettingsUpdated;
 
     /// True iff the config per_document.always_save_on_exit is true.
     const bool _alwaysSaveOnExit : 1;
@@ -1665,195 +1883,8 @@ private:
 
     const bool _backgroundManualSave : 1;
 
-#if !MOBILEAPP
-    Admin& _admin;
-#endif
-
-    // Last member.
-    /// The UnitWSD instance. We capture it here since
-    /// this is our instance, but the test framework
-    /// has a single global instance via UnitWSD::get().
-    UnitWSD* const _unitWsd;
+    /// Unique DocBroker ID for tracing and debugging.
+    static std::atomic<unsigned> DocBrokerId;
 };
-
-#if !MOBILEAPP
-class StatelessBatchBroker : public DocumentBroker
-{
-protected:
-    std::shared_ptr<ClientSession> _clientSession;
-
-public:
-    StatelessBatchBroker(const std::string& uri,
-                   const Poco::URI& uriPublic,
-                   const std::string& docKey)
-        : DocumentBroker(ChildType::Batch, uri, uriPublic, docKey)
-    {}
-
-    virtual ~StatelessBatchBroker()
-    {}
-
-    /// Cleanup path and its parent
-    static void removeFile(const std::string &uri);
-};
-
-class ConvertToBroker : public StatelessBatchBroker
-{
-    const std::string _format;
-    const std::string _sOptions;
-    const std::string _lang;
-
-public:
-    /// Construct DocumentBroker with URI and docKey
-    ConvertToBroker(const std::string& uri,
-                    const Poco::URI& uriPublic,
-                    const std::string& docKey,
-                    const std::string& format,
-                    const std::string& sOptions,
-                    const std::string& lang);
-    virtual ~ConvertToBroker();
-
-    /// _lang accessors
-    const std::string& getLang() { return _lang; }
-
-    /// Move socket to this broker for response & do conversion
-    bool startConversion(SocketDisposition &disposition, const std::string &id);
-
-    /// When the load completes - lets start saving
-    void setLoaded() override;
-
-    /// Called when removed from the DocBrokers list
-    void dispose() override;
-
-    /// How many live conversions are running.
-    static std::size_t getInstanceCount();
-
-protected:
-    bool isConvertTo() const override { return true; }
-
-    virtual bool isReadOnly() const { return true; }
-
-    virtual bool isGetThumbnail() const { return false; }
-
-    virtual void sendStartMessage(const std::shared_ptr<ClientSession>& clientSession,
-                                  const std::string& encodedFrom);
-};
-
-class ExtractLinkTargetsBroker final : public ConvertToBroker
-{
-public:
-    /// Construct DocumentBroker with URI and docKey
-    ExtractLinkTargetsBroker(const std::string& uri,
-                    const Poco::URI& uriPublic,
-                    const std::string& docKey,
-                    const std::string& lang)
-                    : ConvertToBroker(uri, uriPublic, docKey, "", "", lang)
-                    {}
-
-private:
-    void sendStartMessage(const std::shared_ptr<ClientSession>& clientSession,
-                          const std::string& encodedFrom) override;
-};
-
-class ExtractDocumentStructureBroker final : public ConvertToBroker
-{
-public:
-    const std::string _filter;
-    /// Construct DocumentBroker with URI and docKey
-    ExtractDocumentStructureBroker(const std::string& uri,
-                    const Poco::URI& uriPublic,
-                    const std::string& docKey,
-                    const std::string& lang,
-                    const std::string& filter)
-                    : ConvertToBroker(uri, uriPublic, docKey, Poco::Path(uri).getExtension(), "",
-                                      lang)
-                    , _filter(filter)
-                    {}
-
-private:
-    void sendStartMessage(const std::shared_ptr<ClientSession>& clientSession,
-                          const std::string& encodedFrom) override;
-};
-
-class TransformDocumentStructureBroker final : public ConvertToBroker
-{
-public:
-    const std::string _transformJSON;
-    /// Construct DocumentBroker with URI and docKey
-    TransformDocumentStructureBroker(const std::string& uri,
-                    const Poco::URI& uriPublic,
-                    const std::string& docKey,
-                    const std::string& format,
-                    const std::string& lang,
-                    const std::string& transformJSON)
-                    : ConvertToBroker(uri, uriPublic, docKey, format, "", lang)
-                    , _transformJSON(transformJSON)
-                    {}
-
-private:
-    virtual bool isReadOnly() const override { return false; }
-
-    void sendStartMessage(const std::shared_ptr<ClientSession>& clientSession,
-                          const std::string& encodedFrom) override;
-};
-
-class GetThumbnailBroker final : public ConvertToBroker
-{
-    std::string _target;
-
-public:
-    /// Construct DocumentBroker with URI and docKey
-    GetThumbnailBroker(const std::string& uri,
-                    const Poco::URI& uriPublic,
-                    const std::string& docKey,
-                    const std::string& lang,
-                    const std::string& target)
-                    : ConvertToBroker(uri, uriPublic, docKey, std::string(), std::string(), lang)
-                    , _target(target)
-                    {}
-
-protected:
-    bool isGetThumbnail() const override { return true; }
-
-private:
-    void sendStartMessage(const std::shared_ptr<ClientSession>& clientSession,
-                          const std::string& encodedFrom) override;
-};
-
-class RenderSearchResultBroker final : public StatelessBatchBroker
-{
-    std::shared_ptr<std::vector<char>> _pSearchResultContent;
-    std::vector<char> _aResposeData;
-    std::shared_ptr<StreamSocket> _socket;
-
-public:
-    RenderSearchResultBroker(std::string const& uri,
-                             Poco::URI const& uriPublic,
-                             std::string const& docKey,
-                             std::shared_ptr<std::vector<char>> const& pSearchResultContent);
-
-    virtual ~RenderSearchResultBroker();
-
-    void setResponseSocket(std::shared_ptr<StreamSocket> const & socket)
-    {
-        _socket = socket;
-    }
-
-    /// Execute command(s) and move the socket to this broker
-    bool executeCommand(SocketDisposition& disposition, std::string const& id);
-
-    /// Override method to start executing when the document is loaded
-    void setLoaded() override;
-
-    /// Called when removed from the DocBrokers list
-    void dispose() override;
-
-    /// Override to filter out the data that is returned by a command
-    bool handleInput(const std::shared_ptr<Message>& message) override;
-
-    /// How many instances are running.
-    static std::size_t getInstanceCount();
-};
-
-#endif
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

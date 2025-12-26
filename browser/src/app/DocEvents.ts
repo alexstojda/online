@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -34,16 +37,18 @@ class DocEvents {
     }
 
     public fire(eventType: string, details: any) {
-        const newEvent = new CustomEvent(eventType, details);
+        const newEvent = new CustomEvent(eventType, { detail: details });
         this.container.dispatchEvent(newEvent);
     }
 
     public on(eventType: string, callback: eventCallback) {
         this.container.addEventListener(eventType, callback);
     }
-}
 
-app.definitions.events = DocEvents;
+    public off(eventType: string, callback: eventCallback) {
+        this.container.removeEventListener(eventType, callback);
+    }
+}
 
 // Initiate
 app.events = new DocEvents();

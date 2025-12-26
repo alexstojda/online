@@ -15,21 +15,45 @@
 
 #include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <string>
 
-#include <Protocol.hpp>
-#include <net/WebSocketHandler.hpp>
 #include <Log.hpp>
+#include <Protocol.hpp>
 #include <Unit.hpp>
 #include <Util.hpp>
+#include <common/ConfigUtil.hpp>
+#include <net/WebSocketHandler.hpp>
 #include <wsd/COOLWSD.hpp>
 #include <wsd/Exceptions.hpp>
 
 #include <fnmatch.h>
 #include <dirent.h>
+
+namespace
+{
+std::ostream& print(std::ostream& oss, const std::string_view prefix, const std::string_view name,
+                    const std::string_view suffix)
+{
+    oss << prefix << (prefix.empty() ? "" : "_") << name << (suffix.empty() ? "" : "_") << suffix;
+    return oss;
+}
+
+
+std::string concat(const std::string_view &prefix, const std::string_view name,
+                    const std::string_view suffix)
+{
+    std::ostringstream oss;
+    print(oss, prefix, name, suffix);
+    return oss.str();
+}
+
+} // namespace
 
 void Document::addView(const std::string& sessionId, const std::string& userName,
                        const std::string& userId, bool readOnly)
@@ -68,12 +92,11 @@ void Document::setViewLoadDuration(const std::string& sessionId, std::chrono::mi
         it->second.setLoadDuration(viewLoadDuration);
 }
 
-std::pair<std::time_t, std::string> Document::getSnapshot() const
+std::string Document::getSnapshot(std::time_t now) const
 {
-    std::time_t ct = std::time(nullptr);
     std::ostringstream oss;
     oss << '{';
-    oss << "\"creationTime\"" << ':' << ct << ',';
+    oss << "\"creationTime\"" << ':' << now << ',';
     oss << "\"memoryDirty\"" << ':' << getMemoryDirty() << ',';
     oss << "\"activeViews\"" << ':' << getActiveViews() << ',';
 
@@ -93,7 +116,7 @@ std::pair<std::time_t, std::string> Document::getSnapshot() const
 
     oss << "\"lastActivity\"" << ':' << _lastActivity;
     oss << '}';
-    return std::make_pair(ct, oss.str());
+    return oss.str();
 }
 
 const std::string Document::getHistory() const
@@ -109,7 +132,7 @@ const std::string Document::getHistory() const
     std::string separator;
     for (const auto& s : _snapshots)
     {
-        oss << separator << s.second;
+        oss << separator << s;
         separator = ",";
     }
     oss << "]}";
@@ -118,9 +141,11 @@ const std::string Document::getHistory() const
 
 void Document::takeSnapshot()
 {
-    std::pair<std::time_t, std::string> p = getSnapshot();
-    auto insPoint = _snapshots.upper_bound(p.first);
-    _snapshots.insert(insPoint, p);
+    std::time_t now = std::time(nullptr);
+    if (now == _lastSnapshotTime)
+        return;
+    _snapshots.push_back(getSnapshot(now));
+    _lastSnapshotTime = now;
 }
 
 std::string Document::to_string() const
@@ -144,7 +169,8 @@ void Document::updateMemoryDirty()
     if (now - _lastTimeSMapsRead >= 5)
     {
         size_t lastMemDirty = _memoryDirty;
-        _memoryDirty = _procSMaps  ? Util::getPssAndDirtyFromSMaps(_procSMaps).second : 0;
+        auto procSMaps = _procSMaps.lock();
+        _memoryDirty = procSMaps ? Util::getPssAndDirtyFromSMaps(procSMaps.get()).second : 0;
         _lastTimeSMapsRead = now;
         if (lastMemDirty != _memoryDirty)
             _hasMemDirtyChanged = true;
@@ -215,17 +241,19 @@ std::string AdminModel::getAllHistory() const
     for (const auto& d : _documents)
     {
         oss << separator1;
-        oss << d.second->getHistory();
+        oss << d.second.getHistory();
         separator1 = ",";
     }
+
     oss << "], \"expiredDocuments\" : [";
-    separator1.clear();
-    for (const auto& ed : _expiredDocuments)
+
+    long count = 0;
+    for (const std::string& history : _expiredDocumentsHistories)
     {
-        oss << separator1;
-        oss << ed.second->getHistory();
-        separator1 = ",";
+        oss << (count ? "," : "") << history;
+        ++count;
     }
+
     oss << "]}";
     return oss.str();
 }
@@ -275,12 +303,20 @@ std::string AdminModel::query(const std::string& command)
     {
         return std::to_string(std::max(_sentStatsSize, _recvStatsSize));
     }
+    else if (token == "connection_activity")
+    {
+        return getConnectionActivity();
+    }
+    else if (token == "connection_stats_size")
+    {
+        return std::to_string(_connStatsSize);
+    }
 
     return std::string("");
 }
 
 /// Returns memory consumed by all active coolkit processes
-unsigned AdminModel::getKitsMemoryUsage()
+unsigned AdminModel::getKitsMemoryUsage() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -288,9 +324,9 @@ unsigned AdminModel::getKitsMemoryUsage()
     unsigned docs = 0;
     for (const auto& it : _documents)
     {
-        if (!it.second->isExpired())
+        if (!it.second.isExpired())
         {
-            const int bytes = it.second->getMemoryDirty();
+            const int bytes = it.second.getMemoryDirty();
             if (bytes > 0)
             {
                 totalMem += bytes;
@@ -308,24 +344,24 @@ unsigned AdminModel::getKitsMemoryUsage()
     return totalMem;
 }
 
-size_t AdminModel::getKitsJiffies()
+size_t AdminModel::getKitsJiffies() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
     size_t totalJ = 0;
     for (auto& it : _documents)
     {
-        if (!it.second->isExpired())
+        if (!it.second.isExpired())
         {
-            const int pid = it.second->getPid();
+            const int pid = it.second.getPid();
             if (pid > 0)
             {
                 unsigned newJ = Util::getCpuUsage(pid);
-                unsigned prevJ = it.second->getLastJiffies();
+                unsigned prevJ = it.second.getLastJiffies();
                 if(newJ >= prevJ)
                 {
                     totalJ += (newJ - prevJ);
-                    it.second->setLastJiffies(newJ);
+                    const_cast<Document&>(it.second).setLastJiffies(newJ);
                 }
             }
         }
@@ -408,6 +444,17 @@ void AdminModel::addRecvStats(uint64_t recv)
     notify("recv_activity " + std::to_string(recv));
 }
 
+void AdminModel::addConnectionStats(size_t connections)
+{
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
+    _connStats.push_back(connections);
+    if (_connStats.size() > _connStatsSize)
+        _connStats.pop_front();
+
+    notify("connection_activity " + std::to_string(connections));
+}
+
 void AdminModel::setCpuStatsSize(unsigned size)
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
@@ -457,6 +504,7 @@ void AdminModel::notify(const std::string& message)
         {
             if (!it->second.notify(message))
             {
+                LOG_INF("Failed to notify admin [" << it->first << "]; unsubscribing");
                 it = _subscribers.erase(it);
             }
             else
@@ -473,7 +521,7 @@ void AdminModel::addBytes(const std::string& docKey, uint64_t sent, uint64_t rec
 
     auto doc = _documents.find(docKey);
     if(doc != _documents.end())
-        doc->second->addBytes(sent, recv);
+        doc->second.addBytes(sent, recv);
 
     _sentBytesTotal += sent;
     _recvBytesTotal += recv;
@@ -485,7 +533,7 @@ void AdminModel::modificationAlert(const std::string& docKey, pid_t pid, bool va
 
     auto doc = _documents.find(docKey);
     if (doc != _documents.end())
-        doc->second->setModified(value);
+        doc->second.setModified(value);
 
     std::ostringstream oss;
     oss << "modifications "
@@ -501,7 +549,7 @@ void AdminModel::uploadedAlert(const std::string& docKey, pid_t pid, bool value)
 
     auto doc = _documents.find(docKey);
     if (doc != _documents.end())
-        doc->second->setUploaded(value);
+        doc->second.setUploaded(value);
 
     std::ostringstream oss;
     oss << "uploaded " << pid << ' ' << (value ? "Yes" : "No");
@@ -511,14 +559,14 @@ void AdminModel::uploadedAlert(const std::string& docKey, pid_t pid, bool value)
 void AdminModel::addDocument(const std::string& docKey, pid_t pid,
                              const std::string& filename, const std::string& sessionId,
                              const std::string& userName, const std::string& userId,
-                             const int smapsFD, const Poco::URI& wopiSrc, bool isViewReadOnly)
+                             const std::weak_ptr<FILE>& smapsFp, const Poco::URI& wopiSrc, bool isViewReadOnly)
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
     const auto ret =
-        _documents.emplace(docKey, std::make_unique<Document>(docKey, pid, filename, wopiSrc));
-    ret.first->second->setProcSMapsFD(smapsFD);
-    ret.first->second->takeSnapshot();
-    ret.first->second->addView(sessionId, userName, userId, isViewReadOnly);
+        _documents.emplace(docKey, Document(docKey, pid, filename, wopiSrc));
+    ret.first->second.setProcSMapsFp(smapsFp);
+    ret.first->second.takeSnapshot();
+    ret.first->second.addView(sessionId, userName, userId, isViewReadOnly);
     LOG_DBG("Added admin document [" << docKey << "].");
 
     std::string memoryAllocated;
@@ -554,44 +602,22 @@ void AdminModel::addDocument(const std::string& docKey, pid_t pid,
     }
     else
     {
-        memoryAllocated = std::to_string(_documents.begin()->second->getMemoryDirty());
+        memoryAllocated = std::to_string(_documents.begin()->second.getMemoryDirty());
     }
 
     const std::string& wopiHost = wopiSrc.getHost();
-    oss << memoryAllocated << ' ' << wopiHost << ' ' << isViewReadOnly << ' ' << wopiSrc.toString();
-    if (COOLWSD::getConfigValue<bool>("logging.docstats", false))
-    {
-        std::string docstats = "docstats : adding a document : " + filename
-                            + ", created by : " + COOLWSD::anonymizeUsername(userName)
-                            + ", using WopiHost : " + COOLWSD::anonymizeUrl(wopiHost)
-                            + ", allocating memory of : " + memoryAllocated;
+    oss << memoryAllocated << ' ' << wopiHost << ' ' << isViewReadOnly << ' ' << wopiSrc.toString()
+        << ' ' << docKey;
 
-        LOG_ANY(docstats);
+    CONFIG_STATIC const bool log = ConfigUtil::getConfigValue<bool>("logging.docstats", false);
+    if (log)
+    {
+        LOG_ANY("docstats : adding a document : "
+                << filename << ", created by : " << COOLWSD::anonymizeUsername(userName)
+                << ", using WopiHost : " << COOLWSD::anonymizeUrl(wopiHost)
+                << ", allocating memory of : " << memoryAllocated);
     }
     notify(oss.str());
-}
-
-void AdminModel::doRemove(std::map<std::string, std::unique_ptr<Document>>::iterator &docIt)
-{
-    std::string docItKey = docIt->first;
-    // don't send the routing_rmdoc if document is migrating
-    if (getCurrentMigDoc() != docItKey)
-    {
-        std::ostringstream ostream;
-        ostream << "routing_rmdoc " << docIt->second->getWopiSrc();
-        notify(ostream.str());
-    }
-    else
-    {
-        resetMigratingInfo();
-    }
-
-    std::unique_ptr<Document> doc;
-    std::swap(doc, docIt->second);
-    _documents.erase(docIt);
-    _expiredDocuments.emplace(docItKey + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                            std::chrono::steady_clock::now().time_since_epoch()).count()),
-                              std::move(doc));
 }
 
 void AdminModel::removeDocument(const std::string& docKey, const std::string& sessionId)
@@ -599,19 +625,19 @@ void AdminModel::removeDocument(const std::string& docKey, const std::string& se
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
     auto docIt = _documents.find(docKey);
-    if (docIt != _documents.end() && !docIt->second->isExpired())
+    if (docIt != _documents.end() && !docIt->second.isExpired())
     {
         // Notify the subscribers
         std::ostringstream oss;
         oss << "rmdoc "
-            << docIt->second->getPid() << ' '
+            << docIt->second.getPid() << ' '
             << sessionId;
         notify(oss.str());
 
         // The idea is to only expire the document and keep the history
         // of documents open and close, to be able to give a detailed summary
         // to the admin console with views.
-        if (docIt->second->expireView(sessionId) == 0)
+        if (docIt->second.expireView(sessionId) == 0)
             doRemove(docIt);
     }
 }
@@ -625,14 +651,14 @@ void AdminModel::removeDocument(const std::string& docKey)
     {
         std::ostringstream oss;
         oss << "rmdoc "
-            << docIt->second->getPid() << ' ';
+            << docIt->second.getPid() << ' ';
         const std::string msg = oss.str();
 
-        for (const auto& pair : docIt->second->getViews())
+        for (const auto& pair : docIt->second.getViews())
         {
             // Notify the subscribers
             notify(msg + pair.first);
-            docIt->second->expireView(pair.first);
+            docIt->second.expireView(pair.first);
         }
 
         LOG_DBG("Removed admin document [" << docKey << "].");
@@ -640,7 +666,7 @@ void AdminModel::removeDocument(const std::string& docKey)
     }
 }
 
-std::string AdminModel::getMemStats()
+std::string AdminModel::getMemStats() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -653,7 +679,7 @@ std::string AdminModel::getMemStats()
     return oss.str();
 }
 
-std::string AdminModel::getCpuStats()
+std::string AdminModel::getCpuStats() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -666,7 +692,7 @@ std::string AdminModel::getCpuStats()
     return oss.str();
 }
 
-std::string AdminModel::getSentActivity()
+std::string AdminModel::getSentActivity() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -679,7 +705,7 @@ std::string AdminModel::getSentActivity()
     return oss.str();
 }
 
-std::string AdminModel::getRecvActivity()
+std::string AdminModel::getRecvActivity() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -692,16 +718,29 @@ std::string AdminModel::getRecvActivity()
     return oss.str();
 }
 
-unsigned AdminModel::getTotalActiveViews()
+std::string AdminModel::getConnectionActivity() const
+{
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
+    std::ostringstream oss;
+    for (const auto& i: _connStats)
+    {
+        oss << i << ',';
+    }
+
+    return oss.str();
+}
+
+unsigned AdminModel::getTotalActiveViews() const
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
     unsigned numTotalViews = 0;
     for (const auto& it: _documents)
     {
-        if (!it.second->isExpired())
+        if (!it.second.isExpired())
         {
-            numTotalViews += it.second->getActiveViews();
+            numTotalViews += it.second.getActiveViews();
         }
     }
 
@@ -710,21 +749,23 @@ unsigned AdminModel::getTotalActiveViews()
 
 std::vector<DocBasicInfo> AdminModel::getDocumentsSortedByIdle() const
 {
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
     std::vector<DocBasicInfo> docs;
     docs.reserve(_documents.size());
     for (const auto& it: _documents)
     {
-        docs.emplace_back(it.second->getDocKey(),
-                          it.second->getIdleTime(),
-                          it.second->getMemoryDirty(),
-                          !it.second->getModifiedStatus());
+        docs.emplace_back(it.second.getDocKey(),
+                          it.second.getIdleTime(),
+                          it.second.getMemoryDirty(),
+                          !it.second.getModifiedStatus());
     }
 
     // Sort the list by idle times;
     std::sort(std::begin(docs), std::end(docs),
               [](const DocBasicInfo& a, const DocBasicInfo& b)
               {
-                return a.getIdleTime() >= b.getIdleTime();
+                return a.getIdleTime() > b.getIdleTime();
               });
 
     return docs;
@@ -732,28 +773,30 @@ std::vector<DocBasicInfo> AdminModel::getDocumentsSortedByIdle() const
 
 void AdminModel::cleanupResourceConsumingDocs()
 {
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
     DocCleanupSettings& settings = _defDocProcSettings.getCleanupSettings();
 
-    for (const auto& it: _documents)
+    for (auto& it: _documents)
     {
-        Document *doc = it.second.get();
-        if (!doc->isExpired())
+        Document& doc = it.second;
+        if (!doc.isExpired())
         {
-            size_t idleTime = doc->getIdleTime();
-            size_t memDirty = doc->getMemoryDirty();
-            unsigned cpuPercentage = doc->getLastCpuPercentage();
+            size_t idleTime = doc.getIdleTime();
+            size_t memDirty = doc.getMemoryDirty();
+            unsigned cpuPercentage = doc.getLastCpuPercentage();
 
             if (idleTime >= settings.getIdleTime() &&
                 (memDirty >= settings.getLimitDirtyMem() * 1024 ||
                  cpuPercentage >= settings.getLimitCpu()))
             {
                 time_t now = std::time(nullptr);
-                const size_t badBehaviorDuration = now - doc->getBadBehaviorDetectionTime();
-                if (!doc->getBadBehaviorDetectionTime())
+                const size_t badBehaviorDuration = now - doc.getBadBehaviorDetectionTime();
+                if (!doc.getBadBehaviorDetectionTime())
                 {
-                    LOG_WRN("Detected resource consuming doc [" << doc->getDocKey() << "]: idle="
+                    LOG_WRN("Detected resource consuming doc [" << doc.getDocKey() << "]: idle="
                             << idleTime << " s, memory=" << memDirty << " KB, CPU=" << cpuPercentage << "%.");
-                    doc->setBadBehaviorDetectionTime(now);
+                    doc.setBadBehaviorDetectionTime(now);
                 }
                 else if (badBehaviorDuration >= settings.getBadBehaviorPeriod())
                 {
@@ -764,18 +807,18 @@ void AdminModel::cleanupResourceConsumingDocs()
                     // Also, try first to SIGABRT the kit process so that a stack trace
                     // could be dumped. If the process is still alive then, at next
                     // iteration, try to SIGKILL it.
-                    if (SigUtil::killChild(doc->getPid(), doc->getAbortTime() ? SIGKILL : SIGABRT))
-                        LOG_ERR((doc->getAbortTime() ? "Killed" : "Aborted") << " resource consuming doc [" << doc->getDocKey() << "]");
+                    if (SigUtil::killChild(doc.getPid(), doc.getAbortTime() ? SIGKILL : SIGABRT))
+                        LOG_ERR((doc.getAbortTime() ? "Killed" : "Aborted") << " resource consuming doc [" << doc.getDocKey() << "]");
                     else
-                        LOG_ERR("Cannot " << (doc->getAbortTime() ? "kill" : "abort") << " resource consuming doc [" << doc->getDocKey() << "]");
-                    if (!doc->getAbortTime())
-                        doc->setAbortTime(std::time(nullptr));
+                        LOG_ERR("Cannot " << (doc.getAbortTime() ? "kill" : "abort") << " resource consuming doc [" << doc.getDocKey() << "]");
+                    if (!doc.getAbortTime())
+                        doc.setAbortTime(std::time(nullptr));
                 }
             }
-            else if (doc->getBadBehaviorDetectionTime())
+            else if (doc.getBadBehaviorDetectionTime())
             {
-                doc->setBadBehaviorDetectionTime(0);
-                LOG_WRN("Removed doc [" << doc->getDocKey() << "] from resource consuming monitoring list: idle="
+                doc.setBadBehaviorDetectionTime(0);
+                LOG_WRN("Removed doc [" << doc.getDocKey() << "] from resource consuming monitoring list: idle="
                         << idleTime << " s, memory=" << memDirty << " KB, CPU=" << cpuPercentage << "%.");
             }
         }
@@ -791,24 +834,24 @@ std::string AdminModel::getDocuments() const
     std::string separator1;
     for (const auto& it: _documents)
     {
-        if (!it.second->isExpired())
+        if (!it.second.isExpired())
         {
             std::string encodedFilename;
-            Poco::URI::encode(it.second->getFilename(), " ", encodedFilename); // Is encoded name needed?
+            Poco::URI::encode(it.second.getFilename(), " ", encodedFilename); // Is encoded name needed?
             oss << separator1 << '{' << ' '
-                << "\"pid\"" << ':' << it.second->getPid() << ','
-                << "\"docKey\"" << ':' << '"' << it.second->getDocKey() << '"' << ','
+                << "\"pid\"" << ':' << it.second.getPid() << ','
+                << "\"docKey\"" << ':' << '"' << it.second.getDocKey() << '"' << ','
                 << "\"fileName\"" << ':' << '"' << encodedFilename << '"' << ','
-                << "\"wopiHost\"" << ':' << '"' << it.second->getHostName() << '"' << ','
-                << "\"activeViews\"" << ':' << it.second->getActiveViews() << ','
-                << "\"memory\"" << ':' << it.second->getMemoryDirty() << ','
-                << "\"elapsedTime\"" << ':' << it.second->getElapsedTime() << ','
-                << "\"idleTime\"" << ':' << it.second->getIdleTime() << ','
-                << "\"modified\"" << ':' << '"' << (it.second->getModifiedStatus() ? "Yes" : "No") << '"' << ','
-                << "\"uploaded\"" << ':' << '"' << (it.second->getUploadedStatus() ? "Yes" : "No") << '"' << ','
-                << "\"wopiSrc\"" << ':' << '"' << it.second->getWopiSrc() << '"' << ','
+                << "\"wopiHost\"" << ':' << '"' << it.second.getHostName() << '"' << ','
+                << "\"activeViews\"" << ':' << it.second.getActiveViews() << ','
+                << "\"memory\"" << ':' << it.second.getMemoryDirty() << ','
+                << "\"elapsedTime\"" << ':' << it.second.getElapsedTime() << ','
+                << "\"idleTime\"" << ':' << it.second.getIdleTime() << ','
+                << "\"modified\"" << ':' << '"' << (it.second.getModifiedStatus() ? "Yes" : "No") << '"' << ','
+                << "\"uploaded\"" << ':' << '"' << (it.second.getUploadedStatus() ? "Yes" : "No") << '"' << ','
+                << "\"wopiSrc\"" << ':' << '"' << it.second.getWopiSrc() << '"' << ','
                 << "\"views\"" << ':' << '[';
-            std::map<std::string, View> viewers = it.second->getViews();
+            std::map<std::string, View> viewers = it.second.getViews();
             std::string separator;
             for(const auto& viewIt: viewers)
             {
@@ -835,14 +878,16 @@ void AdminModel::updateLastActivityTime(const std::string& docKey)
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
+    _lastActivity = std::time(nullptr);
+
     auto docIt = _documents.find(docKey);
     if (docIt != _documents.end())
     {
-        if (docIt->second->getIdleTime() >= 10)
+        if (docIt->second.getIdleTime() >= 10)
         {
-            docIt->second->takeSnapshot(); // I would like to keep the idle time
-            docIt->second->updateLastActivityTime();
-            notify("resetidle " + std::to_string(docIt->second->getPid()));
+            docIt->second.takeSnapshot(); // I would like to keep the idle time
+            docIt->second.updateLastActivityTime(_lastActivity);
+            notify("resetidle " + std::to_string(docIt->second.getPid()));
         }
     }
 }
@@ -859,26 +904,29 @@ void AdminModel::setViewLoadDuration(const std::string& docKey, const std::strin
 {
     auto it = _documents.find(docKey);
     if (it != _documents.end())
-        it->second->setViewLoadDuration(sessionId, viewLoadDuration);
+        it->second.setViewLoadDuration(sessionId, viewLoadDuration);
 }
 
 void AdminModel::setDocWopiDownloadDuration(const std::string& docKey, std::chrono::milliseconds wopiDownloadDuration)
 {
     auto it = _documents.find(docKey);
     if (it != _documents.end())
-        it->second->setWopiDownloadDuration(wopiDownloadDuration);
+        it->second.setWopiDownloadDuration(wopiDownloadDuration);
 }
 
 void AdminModel::setDocWopiUploadDuration(const std::string& docKey, const std::chrono::milliseconds wopiUploadDuration)
 {
     auto it = _documents.find(docKey);
     if (it != _documents.end())
-        it->second->setWopiUploadDuration(wopiUploadDuration);
+        it->second.setWopiUploadDuration(wopiUploadDuration);
 }
 
-void AdminModel::addSegFaultCount(unsigned segFaultCount)
+void AdminModel::addErrorExitCounters(unsigned segFaultCount, unsigned killedCount,
+                                      unsigned oomKilledCount)
 {
     _segFaultCount += segFaultCount;
+    _killedCount += killedCount;
+    _oomKilledCount += oomKilledCount;
 }
 
 void AdminModel::addLostKitsTerminated(unsigned lostKitsTerminated)
@@ -891,6 +939,7 @@ int filterNumberName(const struct dirent *dir)
     return !fnmatch("[0-9]*", dir->d_name, 0);
 }
 
+// coverity[ -taint_source : arg-1 ] 2024.6.1
 int AdminModel::getPidsFromProcName(const std::regex& procNameRegEx, std::vector<int> *pids)
 {
     struct dirent **namelist = NULL;
@@ -942,19 +991,20 @@ int AdminModel::getUnassignedKitPids(std::vector<int> *pids)
     return getPidsFromProcName(std::regex("kit_spare_.*"), pids);
 }
 
-int AdminModel::getKitPidsFromSystem(std::vector<int> *pids)
+void AdminModel::getKitPidsFromSystem(std::vector<int> *pids)
 {
-    int count = getAssignedKitPids(pids);
-    count += getUnassignedKitPids(pids);
-
-    return count;
+    getAssignedKitPids(pids);
+    getUnassignedKitPids(pids);
 }
 
-class AggregateStats
+class AggregateStats final
 {
 public:
     AggregateStats()
-    : _total(0), _min(0xFFFFFFFFFFFFFFFF), _max(0), _count(0)
+        : _total(0)
+        , _min(std::numeric_limits<uint64_t>::max())
+        , _max(0)
+        , _count(0)
     {}
 
     void Update(uint64_t value)
@@ -966,33 +1016,30 @@ public:
     }
 
     uint64_t getIntAverage() const { return _count ? std::round(_total / (double)_count) : 0; }
-    double getDoubleAverage() const { return _count ? _total / (double) _count : 0; }
-    uint64_t getMin() const { return _min == 0xFFFFFFFFFFFFFFFF ? 0 : _min; }
+    uint64_t getMin() const { return _count == 0 ? 0 : _min; }
     uint64_t getMax() const { return _max; }
     uint64_t getTotal() const { return _total; }
     uint64_t getCount() const { return _count; }
 
-    void Print(std::ostringstream &oss, const char *prefix, const char* unit) const
+    void Print(std::ostream& oss, const std::string_view prefix, const std::string_view unit) const
     {
-        std::string newUnit = std::string(unit && unit[0] ? "_" : "") + unit;
-        std::string newPrefix = prefix + std::string(prefix && prefix[0] ? "_" : "");
-
-        oss << newPrefix << "total" << newUnit << ' ' << _total << std::endl;
-        oss << newPrefix << "average" << newUnit << ' ' << getIntAverage() << std::endl;
-        oss << newPrefix << "min" << newUnit << ' ' << getMin() << std::endl;
-        oss << newPrefix << "max" << newUnit << ' ' << _max << std::endl;
+        print(oss, prefix, "total", unit) << ' ' << _total << '\n';
+        print(oss, prefix, "average", unit) << ' ' << getIntAverage() << '\n';
+        print(oss, prefix, "min", unit) << ' ' << getMin() << '\n';
+        print(oss, prefix, "max", unit) << ' ' << getMax() << '\n';
     }
 
 private:
     uint64_t _total;
     uint64_t _min;
     uint64_t _max;
-    uint32_t _count;
+    uint64_t _count; ///< The number of samples. We are 8-byte aligned, so make this 64-bits.
 };
 
-struct ActiveExpiredStats
+class ActiveExpiredStats final
 {
 public:
+    const AggregateStats& active() const { return _active; }
 
     void Update(uint64_t value, bool active)
     {
@@ -1003,28 +1050,20 @@ public:
             _expired.Update(value);
     }
 
-    void Print(std::ostringstream &oss, const char *prefix, const char* name, const char* unit) const
+    void Print(std::ostream& oss, const char* prefix, const char* name, const char* unit) const
     {
-        std::ostringstream ossTmp;
-        std::string newName = std::string(name && name[0] ? "_" : "") + name;
-        std::string newPrefix = prefix + std::string(prefix && prefix[0] ? "_" : "");
-
-        ossTmp << newPrefix << "all" << newName;
-        _all.Print(oss, ossTmp.str().c_str(), unit);
-        ossTmp.str(std::string());
-        ossTmp << newPrefix << "active" << newName;
-        _active.Print(oss, ossTmp.str().c_str(), unit);
-        ossTmp.str(std::string());
-        ossTmp << newPrefix << "expired" << newName;
-        _expired.Print(oss, ossTmp.str().c_str(), unit);
+        _all.Print(oss, concat(prefix, "all", name), unit);
+        _active.Print(oss, concat(prefix, "active", name), unit);
+        _expired.Print(oss, concat(prefix, "expired", name), unit);
     }
 
+private:
     AggregateStats _all;
     AggregateStats _active;
     AggregateStats _expired;
 };
 
-struct DocumentAggregateStats
+struct DocumentAggregateStats final
 {
     DocumentAggregateStats()
     : _resConsCount(0), _resConsAbortCount(0), _resConsAbortPendingCount(0)
@@ -1090,13 +1129,43 @@ struct KitProcStats
     AggregateStats _cpuTime;
 };
 
-void AdminModel::CalcDocAggregateStats(DocumentAggregateStats& stats)
-{
-    for (auto& d : _documents)
-        stats.Update(*d.second, true);
+/// The aggregate stats of expired documents.
+/// Since expired documents don't change their stats,
+/// we don't need to keep the Document instances around.
+static DocumentAggregateStats ExpiredDocStats;
 
-    for (auto& d : _expiredDocuments)
-        stats.Update(*d.second, false);
+void AdminModel::doRemove(std::map<std::string, Document>::iterator& docIt)
+{
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
+    // don't send the routing_rmdoc if document is migrating
+    if (getCurrentMigDoc() != docIt->first)
+    {
+        std::ostringstream ostream;
+        ostream << "routing_rmdoc " << docIt->second.getWopiSrc();
+        notify(ostream.str());
+    }
+    else
+    {
+        resetMigratingInfo();
+    }
+
+    // Update the expired-documents' stats.
+    ExpiredDocStats.Update(docIt->second, false);
+
+    // Serialize the history of the expired document.
+    _expiredDocumentsHistories.emplace_back(docIt->second.getHistory());
+
+    // We have no need for the document anymore.
+    _documents.erase(docIt);
+}
+
+void AdminModel::CalcDocAggregateStats(DocumentAggregateStats& stats) const
+{
+    stats = ExpiredDocStats;
+
+    for (auto& d : _documents)
+        stats.Update(d.second, true);
 }
 
 void CalcKitStats(KitProcStats& stats)
@@ -1104,29 +1173,34 @@ void CalcKitStats(KitProcStats& stats)
     std::vector<int> childProcs;
     stats.unassignedCount = AdminModel::getUnassignedKitPids(&childProcs);
     stats.assignedCount = AdminModel::getAssignedKitPids(&childProcs);
-    for (int& pid : childProcs)
+    for (int pid : childProcs)
     {
         stats.UpdateAggregateStats(pid);
     }
 }
 
-void PrintDocActExpMetrics(std::ostringstream &oss, const char* name, const char* unit, const ActiveExpiredStats &values)
+void PrintDocActExpMetrics(std::ostream& oss, const char* name, const char* unit,
+                           const ActiveExpiredStats& values)
 {
     values.Print(oss, "document", name, unit);
 }
 
-void PrintKitAggregateMetrics(std::ostringstream &oss, const char* name, const char* unit, const AggregateStats &values)
+void PrintKitAggregateMetrics(std::ostream& oss, const char* name, const char* unit,
+                              const AggregateStats& values)
 {
-    std::string prefix = std::string("kit_") + name;
-    values.Print(oss, prefix.c_str(), unit);
+    const std::string prefix = std::string("kit_") + name;
+    values.Print(oss, prefix, unit);
 }
 
-void AdminModel::getMetrics(std::ostringstream &oss)
+void AdminModel::getMetrics(std::ostream& oss) const
 {
+    ASSERT_CORRECT_THREAD_OWNER(_owner);
+
     oss << "coolwsd_count " << getPidsFromProcName(std::regex("coolwsd"), nullptr) << std::endl;
-    oss << "coolwsd_thread_count " << Util::getStatFromPid(getpid(), 19) << std::endl;
-    oss << "coolwsd_cpu_time_seconds " << Util::getCpuUsage(getpid()) / sysconf (_SC_CLK_TCK) << std::endl;
-    oss << "coolwsd_memory_used_bytes " << Util::getMemoryUsagePSS(getpid()) * 1024 << std::endl;
+    oss << "coolwsd_thread_count " << Util::getStatFromPid(Util::getProcessId(), 19) << std::endl;
+    oss << "coolwsd_cpu_time_seconds " << Util::getCpuUsage(Util::getProcessId()) / sysconf (_SC_CLK_TCK) << std::endl;
+    oss << "coolwsd_memory_used_bytes " << Util::getMemoryUsagePSS(Util::getProcessId()) * 1024 << std::endl;
+    oss << "coolwsd_tcp_connections_used " << StreamSocket::getExternalConnectionCount() << std::endl;
     oss << std::endl;
 
     oss << "forkit_count " << getPidsFromProcName(std::regex("forkit"), nullptr) << std::endl;
@@ -1146,8 +1220,10 @@ void AdminModel::getMetrics(std::ostringstream &oss)
     oss << "kit_assigned_count " << kitStats.assignedCount << std::endl;
     oss << "kit_segfault_count " << _segFaultCount << std::endl;
     oss << "kit_lost_terminated_count " << _lostKitsTerminatedCount << std::endl;
+    oss << "kit_killed_count " << _killedCount << std::endl;
+    oss << "kit_killed_oom_count " << _oomKilledCount << std::endl;
     PrintKitAggregateMetrics(oss, "thread_count", "", kitStats._threadCount);
-    PrintKitAggregateMetrics(oss, "memory_used", "bytes", docStats._kitUsedMemory._active);
+    PrintKitAggregateMetrics(oss, "memory_used", "bytes", docStats._kitUsedMemory.active());
     PrintKitAggregateMetrics(oss, "cpu_time", "seconds", kitStats._cpuTime);
     oss << std::endl;
 
@@ -1157,8 +1233,8 @@ void AdminModel::getMetrics(std::ostringstream &oss)
     oss << std::endl;
 
     PrintDocActExpMetrics(oss, "views_all_count", "", docStats._viewsCount);
-    docStats._activeViewsCount._active.Print(oss, "document_active_views_active_count", "");
-    docStats._expiredViewsCount._active.Print(oss, "document_active_views_expired_count", "");
+    docStats._activeViewsCount.active().Print(oss, "document_active_views_active_count", "");
+    docStats._expiredViewsCount.active().Print(oss, "document_active_views_expired_count", "");
     oss << std::endl;
 
     PrintDocActExpMetrics(oss, "opened_time", "seconds", docStats._openedTime);
@@ -1187,7 +1263,7 @@ void AdminModel::getMetrics(std::ostringstream &oss)
     // dump document data
     for (const auto& it : _documents)
     {
-        const Document &doc = *it.second;
+        const Document &doc = it.second;
         std::string pid = std::to_string(doc.getPid());
 
         std::string encodedFilename;
@@ -1201,7 +1277,7 @@ void AdminModel::getMetrics(std::ostringstream &oss)
         oss << "doc_views" << suffix << doc.getViews().size() << "\n";
         oss << "doc_views_active" << suffix << doc.getActiveViews() << "\n";
         oss << "doc_is_modified" << suffix << doc.getModifiedStatus() << "\n";
-        oss << "doc_memory_used_bytes" << suffix << doc.getMemoryDirty() << "\n";
+        oss << "doc_memory_used_bytes" << suffix << doc.getMemoryDirty() * 1024 << "\n";
         oss << "doc_cpu_used_seconds" << suffix << ((double)doc.getLastJiffies()/tick_per_sec) << "\n";
         oss << "doc_open_time_seconds" << suffix << doc.getOpenTime() << "\n";
         oss << "doc_idle_time_seconds" << suffix << doc.getIdleTime() << "\n";
@@ -1216,28 +1292,29 @@ std::set<pid_t> AdminModel::getDocumentPids() const
     std::set<pid_t> pids;
 
     for (const auto& it : _documents)
-        pids.insert(it.second->getPid());
+        pids.insert(it.second.getPid());
 
     return pids;
 }
 
 void AdminModel::UpdateMemoryDirty()
 {
-    for (const auto& it: _documents)
+    for (auto& it: _documents)
     {
-        it.second->updateMemoryDirty();
+        it.second.updateMemoryDirty();
     }
 }
 
 void AdminModel::notifyDocsMemDirtyChanged()
 {
-    for (const auto& it: _documents)
+    for (auto& [name, doc] : _documents)
     {
-        int memoryDirty = it.second->getMemoryDirty();
-        if (it.second->hasMemDirtyChanged())
+        if (doc.hasMemDirtyChanged())
         {
-            notify("propchange " + std::to_string(it.second->getPid()) + " mem " + std::to_string(memoryDirty));
-            it.second->setMemDirtyChanged(false);
+            std::ostringstream msg;
+            msg << "propchange " << doc.getPid() << " mem " << doc.getMemoryDirty();
+            notify(msg.str());
+            doc.setMemDirtyChanged(false);
         }
     }
 }
@@ -1246,7 +1323,7 @@ bool AdminModel::isDocSaved(const std::string& docKey)
 {
     auto doc = _documents.find(docKey);
     if (doc != _documents.end())
-        return !doc->second->getModifiedStatus();
+        return !doc->second.getModifiedStatus();
     LOG_DBG("cannot find document with docKey " << docKey);
     return false;
 }
@@ -1257,7 +1334,7 @@ bool AdminModel::isDocReadOnly(const std::string& docKey)
     if (doc != _documents.end())
     {
         bool isReadOnly = true;
-        for (const auto& view : doc->second->getViews())
+        for (const auto& view : doc->second.getViews())
         {
             if (!view.second.isReadOnly())
             {
@@ -1297,7 +1374,7 @@ void AdminModel::sendMigrateMsgAfterSave(bool lastSaveSuccessful, const std::str
     COOLWSD::alertUserInternal(docKey, oss.str());
 }
 
-std::string AdminModel::getWopiSrcMap()
+std::string AdminModel::getWopiSrcMap() const
 {
     std::ostringstream oss;
     oss << "wopiSrcMap: {";
@@ -1306,9 +1383,9 @@ std::string AdminModel::getWopiSrcMap()
     size_t count = 0;
     for (const auto& it : _documents)
     {
-        if (!it.second->isExpired())
+        if (!it.second.isExpired())
         {
-            oss << "\"" << it.second->getWopiSrc() << "\"";
+            oss << "\"" << it.second.getWopiSrc() << "\"";
             if (count < _documents.size() - 1)
             {
                 oss << ',';
@@ -1334,13 +1411,13 @@ void AdminModel::resetMigratingInfo()
     _targetMigServerId = std::string();
 }
 
-std::string AdminModel::getFilename(int pid)
+std::string AdminModel::getFilename(int pid) const
 {
-    for (auto& it : _documents)
+    for (const auto& it : _documents)
     {
-        if (it.second->getPid() == pid)
+        if (it.second.getPid() == pid)
         {
-            return it.second->getFilename();
+            return it.second.getFilename();
         }
     }
     return std::string();

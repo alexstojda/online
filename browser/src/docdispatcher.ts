@@ -1,4 +1,6 @@
-/* global Proxy _ */
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -20,12 +22,12 @@ class Dispatcher {
 	private actionsMap: any = {};
 
 	private addGeneralCommands() {
-		this.actionsMap['save'] = function () {
+		this.actionsMap['save'] = function (source?: string) {
 			// Save only when not read-only.
-			if (!app.map.isReadOnlyMode()) {
+			if (!app.map.isReadOnlyMode() && !app.map['wopi'].HideSaveOption) {
 				app.map.fire('postMessage', {
 					msgId: 'UI_Save',
-					args: { source: 'toolbar' },
+					args: { source: source || 'toolbar' },
 				});
 				if (!app.map._disableDefaultAction['UI_Save']) {
 					app.map.save(
@@ -34,6 +36,31 @@ class Dispatcher {
 					);
 				}
 			}
+		};
+
+		this.actionsMap['closeapp'] = () => {
+			if ((window as any).ThisIsAMobileApp) {
+				window.postMobileMessage('BYE');
+			} else {
+				if (
+					app.map &&
+					app.map.formulabar &&
+					(app.map.formulabar.hasFocus() || app.map.formulabar.isInEditMode())
+				) {
+					this.dispatch('acceptformula'); // save data from the edited cell on exit
+				}
+
+				window.prefs.sendPendingBrowserSettingsUpdate();
+				app.map.fire('postMessage', {
+					msgId: 'close',
+					args: { EverModified: app.map._everModified, Deprecated: true },
+				});
+				app.map.fire('postMessage', {
+					msgId: 'UI_Close',
+					args: { EverModified: app.map._everModified },
+				});
+			}
+			if (!app.map._disableDefaultAction['UI_Close']) app.map.remove();
 		};
 
 		this.actionsMap['userlist'] = () => {
@@ -66,14 +93,15 @@ class Dispatcher {
 		this.actionsMap['remotelink'] = function () {
 			app.map.fire('postMessage', { msgId: 'UI_PickLink' });
 		};
+		this.actionsMap['remoteaicontent'] = function () {
+			app.map.fire('postMessage', { msgId: 'UI_InsertAIContent' });
+		};
 		// TODO: deduplicate
 		this.actionsMap['hyperlinkdialog'] = function () {
-			app.map.showHyperlinkDialog();
+			app.map.sendUnoCommand('.uno:HyperlinkDialog');
 		};
 		this.actionsMap['inserthyperlink'] = () => {
-			if (app.map.getDocType() == 'spreadsheet')
-				app.map.sendUnoCommand('.uno:HyperlinkDialog');
-			else app.map.showHyperlinkDialog();
+			app.map.sendUnoCommand('.uno:HyperlinkDialog');
 		};
 		this.actionsMap['rev-history'] = function () {
 			app.map.openRevisionHistory();
@@ -91,6 +119,19 @@ class Dispatcher {
 			}
 		};
 
+		this.actionsMap['insertmultimedia'] = function () {
+			window.L.DomUtil.get('insertmultimedia').click();
+		};
+		this.actionsMap['remotemultimedia'] = function () {
+			app.map.fire('postMessage', {
+				msgId: 'UI_InsertFile',
+				args: {
+					callback: 'Action_InsertMultimedia',
+					mimeTypeFilter: app.LOUtil.mediaMimeFilter,
+				},
+			});
+		};
+
 		this.actionsMap['charmapcontrol'] = function () {
 			app.map.sendUnoCommand('.uno:InsertSymbol');
 		};
@@ -102,7 +143,7 @@ class Dispatcher {
 			app.map.uiManager.toggleDarkMode();
 		};
 		this.actionsMap['invertbackground'] = function () {
-			app.map.uiManager.invertBackground();
+			app.map.uiManager.toggleInvert();
 		};
 		this.actionsMap['home-search'] = function () {
 			app.map.uiManager.focusSearch();
@@ -127,7 +168,7 @@ class Dispatcher {
 			app.map.fire('morelanguages', { applyto: 'all' });
 		};
 		this.actionsMap['localgraphic'] = function () {
-			L.DomUtil.get('insertgraphic').click();
+			window.L.DomUtil.get('insertgraphic').click();
 		};
 		this.actionsMap['remotegraphic'] = this.actionsMap['insertremotegraphic'] =
 			function () {
@@ -169,6 +210,19 @@ class Dispatcher {
 			app.map.insertComment();
 		};
 
+		this.actionsMap['showcommentsnavigator'] = function (data?: any) {
+			if (
+				!document
+					.getElementById('navigation-sidebar')
+					.classList.contains('visible')
+			)
+				app.map.sendUnoCommand('.uno:Navigator');
+			app.map.sendUnoCommand(
+				'.uno:NavigatorSelectComment?CommentId:short=' +
+					(data ? (data as number) : 0),
+			);
+		};
+
 		this.actionsMap['zoomin'] = () => {
 			app.map.zoomIn(1, null, true /* animate? */);
 		};
@@ -180,10 +234,10 @@ class Dispatcher {
 		};
 
 		this.actionsMap['searchprev'] = () => {
-			app.map.search(L.DomUtil.get('search-input').value, true);
+			app.searchService.searchPrevious();
 		};
 		this.actionsMap['searchnext'] = () => {
-			app.map.search(L.DomUtil.get('search-input').value);
+			app.searchService.searchNext();
 		};
 		this.actionsMap['cancelsearch'] = () => {
 			app.map.cancelSearch();
@@ -192,14 +246,16 @@ class Dispatcher {
 			$('#toolbar-down').hide();
 			$('#showsearchbar').removeClass('over');
 			$('#toolbar-search').show();
-			L.DomUtil.get('search-input').focus();
+			if (!app.isReadOnly() && app.map.isReadOnlyMode())
+				$('#mobile-edit-button').hide();
+			window.L.DomUtil.get('search-input').focus();
 		};
 		this.actionsMap['hidesearchbar'] = () => {
 			$('#toolbar-search').hide();
 			if (app.map.isEditMode()) $('#toolbar-down').show();
 			/** show edit button if only we are able to edit but in readonly mode */
 			if (!app.isReadOnly() && app.map.isReadOnlyMode())
-				$('#mobile-edit-button').show();
+				$('#mobile-edit-button').css('display', 'flex');
 		};
 
 		this.actionsMap['prev'] = () => {
@@ -218,7 +274,7 @@ class Dispatcher {
 			app.map.insertComment();
 		};
 
-		this.actionsMap['fold'] = this.actionsMap['hamburger-tablet'] = () => {
+		this.actionsMap['fold'] = () => {
 			app.map.uiManager.toggleMenubar();
 		};
 
@@ -228,6 +284,39 @@ class Dispatcher {
 
 		this.actionsMap['serveraudit'] = () => {
 			app.map.serverAuditDialog.open();
+		};
+
+		this.actionsMap['togglea11ystate'] = () => {
+			if (app.map._lockAccessibilityOn) {
+				return;
+			}
+			var prevAccessibilityState =
+				window.prefs.getBoolean('accessibilityState');
+			app.map.setAccessibilityState(!prevAccessibilityState);
+		};
+
+		this.actionsMap['toggleuimode'] = () => {
+			if (app.map.uiManager.shouldUseNotebookbarMode()) {
+				app.map.uiManager.onChangeUIMode({ mode: 'classic', force: true });
+			} else {
+				app.map.uiManager.onChangeUIMode({ mode: 'notebookbar', force: true });
+			}
+		};
+
+		this.actionsMap['showruler'] = () => {
+			app.map.uiManager.toggleRuler();
+		};
+
+		this.actionsMap['showstylelistdeck'] = () => {
+			app.map.uiManager.showStyleListDeck();
+		};
+
+		this.actionsMap['showstatusbar'] = () => {
+			app.map.uiManager.toggleStatusBar();
+		};
+
+		this.actionsMap['collapsenotebookbar'] = () => {
+			app.map.uiManager.collapseNotebookbar();
 		};
 	}
 
@@ -329,7 +418,7 @@ class Dispatcher {
 			app.map.sendUnoCommand('.uno:ToggleRelative');
 		};
 		this.actionsMap['focusonaddressinput'] = function () {
-			document.getElementById('addressInput-input').focus();
+			document.getElementById('#addressInput input').focus();
 		};
 
 		// sheets toolbar
@@ -355,7 +444,22 @@ class Dispatcher {
 		this.actionsMap['lastrecord'] = function () {
 			// Set a very high value, so that scroll is set to the maximum possible value internally.
 			// https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollLeft
-			L.DomUtil.get('spreadsheet-tab-scroll').scrollLeft = 100000;
+			window.L.DomUtil.get('spreadsheet-tab-scroll').scrollLeft = 100000;
+		};
+		this.actionsMap['columnrowhighlight'] = function () {
+			var newState = !app.map.uiManager.getHighlightMode();
+			app.map.uiManager.setHighlightMode(newState);
+
+			if (newState) FocusCellSection.showFocusCellSection();
+			else FocusCellSection.hideFocusCellSection();
+
+			app.sectionContainer.requestReDraw();
+		};
+
+		this.actionsMap['defaultborderstyle'] = () => {
+			app.map.sendUnoCommand(
+				window.getBorderStyleUNOCommand(0, 0, 1, 0, 0, 0, 0),
+			);
 		};
 	}
 
@@ -363,18 +467,53 @@ class Dispatcher {
 		this.actionsMap['presentation'] = this.actionsMap[
 			'fullscreen-presentation'
 		] = () => {
-			if (app.map._debug.debugOn) app.map.fire('newfullscreen');
+			if ((window as any).canvasSlideshowEnabled) app.map.fire('newfullscreen');
 			else app.map.fire('fullscreen');
+		};
+
+		this.actionsMap['presentation-currentslide'] = this.actionsMap[
+			'presentation-currentslide'
+		] = () => {
+			if ((window as any).canvasSlideshowEnabled)
+				app.map.fire('newfullscreen', {
+					startSlideNumber: app.map.getCurrentPartNumber(),
+				});
+			else
+				app.map.fire('fullscreen', {
+					startSlideNumber: app.map.getCurrentPartNumber(),
+				});
 		};
 
 		this.actionsMap['presentinwindow'] = this.actionsMap['present-in-window'] =
 			() => {
-				if (app.map._debug.debugOn) app.map.fire('newpresentinwindow');
+				if ((window as any).canvasSlideshowEnabled)
+					app.map.fire('newpresentinwindow');
 				else app.map.fire('presentinwindow');
 			};
 
+		this.actionsMap['followmepresentation'] = this.actionsMap[
+			'presentation-follow-me'
+		] = () => {
+			app.map.slideShowPresenter.setLeader(true);
+			app.map.fire('newpresentinwindow');
+		};
+
+		this.actionsMap['followpresentation'] = this.actionsMap[
+			'presentation-follow'
+		] = () => {
+			app.map.slideShowPresenter.setLeader(false);
+			app.map.slideShowPresenter.setFollower(true);
+			app.map.slideShowPresenter.setFollowing(true);
+			app.map.fire('newfollowmepresentation');
+		};
+
+		this.actionsMap['presenterconsole'] = () => {
+			if ((window as any).canvasSlideshowEnabled)
+				app.map.fire('newpresentinconsole');
+		};
+
 		this.actionsMap['fullscreen-drawing'] = () => {
-			L.toggleFullScreen();
+			app.util.toggleFullScreen();
 		};
 
 		this.actionsMap['deletepage'] = function () {
@@ -401,19 +540,16 @@ class Dispatcher {
 
 		this.actionsMap['previouspart'] = function () {
 			app.map._docLayer._preview._scrollViewByDirection('prev');
-			if (app.file.fileBasedView) app.map._docLayer._checkSelectedPart();
 		};
 
 		this.actionsMap['nextpart'] = function () {
 			app.map._docLayer._preview._scrollViewByDirection('next');
-			if (app.file.fileBasedView) app.map._docLayer._checkSelectedPart();
 		};
 
 		this.actionsMap['lastpart'] = function () {
 			if (app && app.file.fileBasedView === true) {
 				const partToSelect = app.map._docLayer._parts - 1;
 				app.map._docLayer._preview._scrollViewToPartPosition(partToSelect);
-				app.map._docLayer._checkSelectedPart();
 			}
 		};
 
@@ -421,7 +557,6 @@ class Dispatcher {
 			if (app && app.file.fileBasedView === true) {
 				const partToSelect = 0;
 				app.map._docLayer._preview._scrollViewToPartPosition(partToSelect);
-				app.map._docLayer._checkSelectedPart();
 			}
 		};
 
@@ -465,6 +600,24 @@ class Dispatcher {
 				}),
 			);
 		};
+
+		this.actionsMap['selectbackground'] = function () {
+			window.L.DomUtil.get('selectbackground').click();
+		};
+
+		this.actionsMap['notesmode'] = function () {
+			if (app.impress.notesMode)
+				app.map.sendUnoCommand('.uno:NormalMultiPaneGUI');
+			else app.map.sendUnoCommand('.uno:NotesMode');
+		};
+
+		this.actionsMap['animationdeck'] = () => {
+			app.map.sidebarFromNotebookbar.openAnimationsSidebar();
+		};
+
+		this.actionsMap['transitiondeck'] = () => {
+			app.map.sidebarFromNotebookbar.openTransitionsSidebar();
+		};
 	}
 
 	private addZoteroCommands() {
@@ -496,6 +649,13 @@ class Dispatcher {
 			app.map.showResolvedComments(!val);
 		};
 
+		this.actionsMap['showannotations'] = function () {
+			const items = app.map['stateChangeHandler'];
+			let val = items.getItemValue('showannotations');
+			val = val === 'true' || val === true;
+			app.map.showComments(!val);
+		};
+
 		this.actionsMap['.uno:AcceptAllTrackedChanges'] = function () {
 			app.map.sendUnoCommand('.uno:AcceptAllTrackedChanges');
 			app.socket.sendMessage('commandvalues command=.uno:ViewAnnotations');
@@ -504,9 +664,47 @@ class Dispatcher {
 		this.actionsMap['.uno:RejectAllTrackedChanges'] = function () {
 			app.map.sendUnoCommand('.uno:RejectAllTrackedChanges');
 			const commentSection = app.sectionContainer.getSectionWithName(
-				L.CSections.CommentList.name,
+				app.CSections.CommentList.name,
 			);
 			commentSection.rejectAllTrackedCommentChanges();
+		};
+
+		this.actionsMap['toggletracking'] = () => {
+			const TrackChangesCurrentState =
+				app.map['stateChangeHandler'].getItemValue('.uno:TrackChanges');
+			if (
+				TrackChangesCurrentState === 'true' ||
+				TrackChangesCurrentState === true
+			)
+				app.map.sendUnoCommand('.uno:TrackChanges?TrackChanges:bool=false');
+			else app.map.sendUnoCommand('.uno:TrackChangesInAllViews');
+		};
+
+		this.actionsMap['acceptTrackedChangeToNext'] = function () {
+			app.map.sendUnoCommand('.uno:AcceptTrackedChangeToNext');
+		};
+
+		this.actionsMap['rejectTrackedChangeToNext'] = function () {
+			app.map.sendUnoCommand('.uno:RejectTrackedChangeToNext');
+		};
+
+		this.actionsMap['multipageview'] = function () {
+			if (app.activeDocument && app.activeDocument.activeLayout) {
+				let commandState = false;
+				if (app.activeDocument.activeLayout.type === 'ViewLayoutMultiPage') {
+					app.activeDocument.activeLayout = new ViewLayoutWriter();
+				} else {
+					app.activeDocument.activeLayout = new ViewLayoutMultiPage();
+					commandState = true;
+				}
+
+				app.map.fire('commandstatechanged', {
+					commandName: 'multipageview',
+					state: commandState ? 'true' : 'false',
+				});
+				app.activeDocument.activeLayout.sendClientVisibleArea();
+				app.sectionContainer.requestReDraw();
+			}
 		};
 	}
 
@@ -516,7 +714,7 @@ class Dispatcher {
 			if (configuration.commentWizard) {
 				configuration.commentWizard = false;
 				app.sectionContainer
-					.getSectionWithName(L.CSections.CommentList.name)
+					.getSectionWithName(app.CSections.CommentList.name)
 					.removeHighlighters();
 				app.map.fire('closemobilewizard');
 				app.map.mobileTopBar.selectItem('comment_wizard', false);
@@ -589,25 +787,26 @@ class Dispatcher {
 		// }
 	}
 
-	constructor() {
+	/// optional docType specifies which commands should we load
+	constructor(docType: string = undefined) {
+		docType = docType ? docType : app.map._docLayer._docType;
+
 		this.addGeneralCommands();
 		this.addExportCommands();
 
-		if (app.map._docLayer._docType === 'text') {
+		if (docType === 'text') {
 			this.addWriterCommands();
 			this.addZoteroCommands();
-		} else if (app.map._docLayer._docType === 'spreadsheet') {
+		} else if (docType === 'spreadsheet') {
 			this.addCalcCommands();
-		} else if (
-			['presentation', 'drawing'].includes(app.map._docLayer._docType)
-		) {
+		} else if (['presentation', 'drawing'].includes(docType)) {
 			this.addImpressAndDrawCommands();
 		}
 
 		if (window.mode.isMobile()) this.addMobileCommands();
 	}
 
-	public dispatch(action: string) {
+	public dispatch(action: string, data?: any) {
 		// Don't allow to execute new actions while any dialog is visible.
 		// It prevents launching multiple instances of the same dialog.
 		if (
@@ -645,10 +844,11 @@ class Dispatcher {
 			action === '.uno:PasteSpecial'
 		) {
 			app.map._clip.filterExecCopyPaste(action);
+			return;
 		}
 
 		if (this.actionsMap[action] !== undefined) {
-			this.actionsMap[action]();
+			this.actionsMap[action](data);
 			return;
 		}
 

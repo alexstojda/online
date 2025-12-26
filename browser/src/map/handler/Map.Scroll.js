@@ -1,10 +1,10 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Handler.Scroll is used by L.Map to enable mouse scroll wheel zoom on the map.
+ * window.L.Handler.Scroll is used by window.L.Map to enable mouse scroll wheel zoom on the map.
  */
 
-/* global app */
-L.Map.mergeOptions({
+/* global app OtherViewCellCursorSection */
+window.L.Map.mergeOptions({
 	scrollHandler: true,
 	wheelDebounceTime: 40,
 	// Max idle time w.r.t ctrl+wheel events before invoking "zoomStepEnd".
@@ -13,10 +13,10 @@ L.Map.mergeOptions({
 	zoomLevelStepSize: 0.3,
 });
 
-L.Map.Scroll = L.Handler.extend({
-	_mouseOnlyPreventDefault: window.touch.mouseOnly(L.DomEvent.preventDefault),
+window.L.Map.Scroll = window.L.Handler.extend({
+	_mouseOnlyPreventDefault: window.touch.mouseOnly(window.L.DomEvent.preventDefault),
 	addHooks: function () {
-		L.DomEvent.on(this._map._container, {
+		window.L.DomEvent.on(this._map._container, {
 			wheel: this._onWheelScroll,
 			mousewheel: this._onWheelScroll,
 			MozMousePixelScroll: this._mouseOnlyPreventDefault
@@ -29,14 +29,14 @@ L.Map.Scroll = L.Handler.extend({
 	},
 
 	removeHooks: function () {
-		L.DomEvent.off(this._map._container, {
+		window.L.DomEvent.off(this._map._container, {
 			mousewheel: this._onWheelScroll,
 			MozMousePixelScroll: this._mouseOnlyPreventDefault
 		}, this);
 	},
 
 	_onWheelScroll: window.touch.mouseOnly(function (e) {
-		var delta =  -1 * e.deltaY; // L.DomEvent.getWheelDelta(e);
+		var delta =  -1 * e.deltaY; // window.L.DomEvent.getWheelDelta(e);
 		var debounce = this._map.options.wheelDebounceTime;
 
 		this._delta = delta;
@@ -49,7 +49,7 @@ L.Map.Scroll = L.Handler.extend({
 		} else if (docLayer && docLayer.isWriter()) {
 			// Preserve the y coordinate position of the document where the mouse is.
 			// Also preserve x coordinate if the current view does not have margins.
-			//  If view has margins, we cannot center w.r.t arbitary position in the page because
+			//  If view has margins, we cannot center w.r.t arbitrary position in the page because
 			//  writer will eventually re-adjust page to the view's center after setting map zoom.
 			var part = docLayer._currentPage;
 			var rectangle = app.file.writer.pageRectangleList[part];
@@ -58,7 +58,7 @@ L.Map.Scroll = L.Handler.extend({
 			var viewBounds = this._map.getPixelBoundsCore();
 			var useMouseXCenter = viewBounds.min.x >= 0 && viewBounds.max.x <= maxX;
 
-			this._zoomCenter = new L.LatLng(mousePos.lat, useMouseXCenter ? mousePos.lng : viewCenter.lng);
+			this._zoomCenter = new window.L.LatLng(mousePos.lat, useMouseXCenter ? mousePos.lng : viewCenter.lng);
 
 		} else {
 			this._zoomCenter = viewCenter;
@@ -72,13 +72,16 @@ L.Map.Scroll = L.Handler.extend({
 
 		clearTimeout(this._timer);
 		if (e.ctrlKey) {
-			this._timer = setTimeout(L.bind(this._performZoom, this), left);
+			this._timer = setTimeout(window.L.bind(this._performZoom, this), left);
 		}
 
-		L.DomEvent.stop(e);
+		window.L.DomEvent.stop(e);
 	}),
 
 	_performZoom: function () {
+		if (this._map.getDocType() === 'spreadsheet')
+			OtherViewCellCursorSection.closePopups();
+
 		var lastScrollTime = this._zoomScrollTime;
 		this._zoomScrollTime = new Date();
 		var map = this._map;
@@ -146,7 +149,7 @@ L.Map.Scroll = L.Handler.extend({
 	_stopZoomAnimation: function () {
 		cancelAnimationFrame(this._zoomInterpolateRAF); // Already cancelled by now ?
 		var zoom = this._zoom;
-		var lastCenter = new L.LatLng(this._zoomCenter.lat, this._zoomCenter.lng);
+		var lastCenter = new window.L.LatLng(this._zoomCenter.lat, this._zoomCenter.lng);
 		var map = this._map;
 		map._docLayer.zoomStepEnd(zoom, lastCenter,
 			// mapUpdater

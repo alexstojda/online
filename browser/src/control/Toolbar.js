@@ -8,12 +8,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 /*
  * Toolbar handler
  */
 
-/* global app $ window brandProductName _ */
-L.Map.include({
+/* global app $ window brandProductName DocUtil GraphicSelection _ */
+
+window.L.Map.include({
 
 	// a mapping of uno commands to more readable toolbar items
 	unoToolbarCommands: [
@@ -59,7 +61,7 @@ L.Map.include({
 			var commandValues = that.getToolbarCommandValues('.uno:CharFontName');
 
 			var data = []; // reset data in order to avoid that the font select box is populated with styles, too.
-			// Old browsers like IE11 et al don't like Object.keys with
+			// Old browsers don't like Object.keys with
 			// empty arguments
 			if (typeof commandValues === 'object') {
 				data = data.concat(Object.keys(commandValues));
@@ -102,6 +104,7 @@ L.Map.include({
 			}
 
 			fontcombobox.val(state).trigger('change');
+			this['stateChangeHandler'].setItemValue('.uno:CharFontName', state);
 		};
 
 		var onFontListChanged = function(e) {
@@ -181,6 +184,7 @@ L.Map.include({
 			}
 
 			fontsizecombobox.val(state).trigger('change');
+			this['stateChangeHandler'].setItemValue('.uno:FontHeight', state);
 		};
 
 		this.off('commandstatechanged', onCommandStateChanged);
@@ -327,6 +331,8 @@ L.Map.include({
 	},
 
 	save: function(dontTerminateEdit, dontSaveIfUnmodified, extendedData) {
+		this.fire('updatemodificationindicator', { status: 'SAVING' });
+
 		var msg = 'save' +
 					' dontTerminateEdit=' + (dontTerminateEdit ? 1 : 0) +
 					' dontSaveIfUnmodified=' + (dontSaveIfUnmodified ? 1 : 0);
@@ -340,8 +346,7 @@ L.Map.include({
 
 	messageNeedsToBeRedirected: function(command) {
 		if (command === '.uno:EditHyperlink') {
-			var that = this;
-			setTimeout(function () { that.showHyperlinkDialog(); }, 500);
+			this.sendUnoCommand('.uno:HyperlinkDialog');
 			return true;
 		}
 		else {
@@ -354,9 +359,9 @@ L.Map.include({
 			console.error('Trying to send uno command without prefix: "' + command + '"');
 
 		if ((command.startsWith('.uno:Sidebar') && !command.startsWith('.uno:SidebarShow')) ||
-			command.startsWith('.uno:SlideChangeWindow') || command.startsWith('.uno:CustomAnimation') ||
-			command.startsWith('.uno:MasterSlidesPanel') || command.startsWith('.uno:ModifyPage') ||
-			command.startsWith('.uno:Navigator')) {
+			command.startsWith('.uno:CustomAnimation') || command.startsWith('.uno:ModifyPage') ||
+			command.startsWith('.uno:MasterSlidesPanel') || command.startsWith('.uno:SidebarDeck') || 
+			command.startsWith('.uno:EditStyle')) {
 
 			// sidebar control is present only in desktop/tablet case
 			if (this.sidebar) {
@@ -374,14 +379,29 @@ L.Map.include({
 
 		var isAllowedInReadOnly = false;
 		var allowedCommands = ['.uno:Save', '.uno:WordCountDialog',
-			'.uno:Signature', '.uno:ShowResolvedAnnotations',
+			'.uno:Signature', '.uno:PrepareSignature', '.uno:DownloadSignature', '.uno:InsertSignatureLine',
+			'.uno:ShowResolvedAnnotations',
 			'.uno:ToolbarMode?Mode:string=notebookbar_online.ui', '.uno:ToolbarMode?Mode:string=Default',
-			'.uno:ExportToEPUB', '.uno:ExportToPDF', '.uno:ExportDirectToPDF', '.uno:MoveKeepInsertMode', '.uno:ShowRuler'];
+			'.uno:ExportToEPUB', '.uno:ExportToPDF', '.uno:ExportDirectToPDF', '.uno:MoveKeepInsertMode', '.uno:ShowRuler',
+			'.uno:Navigator'];
 		if (app.isCommentEditingAllowed()) {
 			allowedCommands.push('.uno:InsertAnnotation','.uno:DeleteCommentThread', '.uno:DeleteAnnotation', '.uno:DeleteNote',
-				'.uno:DeleteComment', '.uno:ReplyComment', '.uno:ReplyToAnnotation', '.uno:ResolveComment',
+				'.uno:DeleteComment', '.uno:ReplyComment', '.uno:ReplyToAnnotation', '.uno:PromoteComment', '.uno:ResolveComment',
 				'.uno:ResolveCommentThread', '.uno:ResolveComment', '.uno:EditAnnotation', '.uno:ExportToEPUB', '.uno:ExportToPDF',
 				'.uno:ExportDirectToPDF');
+
+			const graphicInfo = GraphicSelection.extraInfo;
+			if (graphicInfo && graphicInfo.isSignature)
+			{
+				// If the just added signature line shape is selected, allow
+				// moving/resizing it.
+				allowedCommands.push('.uno:TransformDialog', '.uno:MoveShapeHandle');
+			}
+		}
+		if (app.isRedlineManagementAllowed()) {
+			allowedCommands.push('.uno:ShowTrackedChanges', '.uno:AcceptTrackedChanges', '.uno:AcceptTrackedChange', '.uno:RejectTrackedChange',
+				'.uno:AcceptAllTrackedChanges', '.uno:RejectAllTrackedChanges', '.uno:AcceptTrackedChangeToNext', '.uno:RejectTrackedChangeToNext',
+				'.uno:CommentChangeTracking', '.uno:PreviousTrackedChange', '.uno:NextTrackedChange');
 		}
 
 		for (var i in allowedCommands) {
@@ -390,15 +410,17 @@ L.Map.include({
 				break;
 			}
 		}
+
+		var map = this;
+
 		if (command.startsWith('.uno:SpellOnline')) {
-			var map = this;
 			var val = map['stateChangeHandler'].getItemValue('.uno:SpellOnline');
 
 			// proceed if the toggle button is pressed
 			if (val && (json === undefined || json === null)) {
 				 // because it is toggle, state has to be the opposite
 				var state = !(val === 'true');
-				window.prefs.set('SpellOnline', state);
+				window.prefs.set('spellOnline', state);
 			}
 		}
 
@@ -408,9 +430,11 @@ L.Map.include({
 			&& !command.startsWith('.uno:ToolbarMode') && !force) {
 			console.debug('Cannot execute: ' + command + ' when dialog is opened.');
 			this.dialog.blinkOpenDialog();
-		} else if (this.isEditMode() || isAllowedInReadOnly) {
-			if (!this.messageNeedsToBeRedirected(command))
-				app.socket.sendMessage('uno ' + command + (json ? ' ' + JSON.stringify(json) : ''));
+		} else if ((this.isEditMode() || isAllowedInReadOnly) && !this.messageNeedsToBeRedirected(command)) {
+			app.socket.sendMessage('uno ' + command + (json ? ' ' + JSON.stringify(json) : ''));
+			// user interaction turns off the following of other users
+			if (map.userList && map._docLayer && map._docLayer._viewId)
+				map.userList.followUser(map._docLayer._viewId, /* do instant scroll */ false);
 		}
 	},
 
@@ -423,12 +447,16 @@ L.Map.include({
 		}
 	},
 
-	insertFile: function (file) {
-		this.fire('insertfile', {file: file});
+	insertGraphic: function (file) {
+		this.fire('insertgraphic', {file: file});
 	},
 
-	insertURL: function (url) {
-		this.fire('inserturl', {url: url});
+	insertMultimedia: function (file) {
+		this.fire('insertmultimedia', {file: file});
+	},
+
+	insertURL: function (url, urltype) {
+		this.fire('inserturl', {url: url, urltype: urltype});
 	},
 
 	selectBackground: function (file) {
@@ -439,22 +467,22 @@ L.Map.include({
 		var i;
 		// Display keyboard shortcut or online help
 		if (id === 'keyboard-shortcuts-content') {
-			document.getElementById('online-help-content').style.display='none';
+			document.getElementById('online-help-content').classList.add('hide');
 			// Display help according to document opened
 			if (map.getDocType() === 'text') {
-				document.getElementById('text-shortcuts').style.display='block';
+				document.getElementById('text-shortcuts').classList.add('show');
 			}
 			else if (map.getDocType() === 'spreadsheet') {
-				document.getElementById('spreadsheet-shortcuts').style.display='block';
+				document.getElementById('spreadsheet-shortcuts').classList.add('show');
 			}
 			else if (map.getDocType() === 'presentation') {
-				document.getElementById('presentation-shortcuts').style.display='block';
+				document.getElementById('presentation-shortcuts').classList.add('show');
 			}
 			else if (map.getDocType() === 'drawing') {
-				document.getElementById('drawing-shortcuts').style.display='block';
+				document.getElementById('drawing-shortcuts').classList.add('show');
 			}
 		} else /* id === 'online-help' */ {
-			document.getElementById('keyboard-shortcuts-content').style.display='none';
+			document.getElementById('keyboard-shortcuts-content').classList.add('hide');
 			if (window.socketProxy) {
 				var helpdiv = document.getElementById('online-help-content');
 				var imgList = helpdiv.querySelectorAll('img');
@@ -468,19 +496,19 @@ L.Map.include({
 			if (map.getDocType() === 'text') {
 				var x = document.getElementsByClassName('text');
 				for (i = 0; i < x.length; i++) {
-					x[i].style.display = 'block';
+					x[i].classList.add('show');
 				}
 			}
 			else if (map.getDocType() === 'spreadsheet') {
 				x = document.getElementsByClassName('spreadsheet');
 				for (i = 0; i < x.length; i++) {
-					x[i].style.display = 'block';
+					x[i].classList.add('show');
 				}
 			}
 			else if (map.getDocType() === 'presentation' || map.getDocType() === 'drawing') {
 				x = document.getElementsByClassName('presentation');
 				for (i = 0; i < x.length; i++) {
-					x[i].style.display = 'block';
+					x[i].classList.add('show');
 				}
 			}
 		}
@@ -545,13 +573,14 @@ L.Map.include({
 			for (i = 0, max = productNameContent.length; i < max; i++) {
 				productNameContent[i].innerHTML = productNameContent[i].innerHTML.replace('{productname}', productName);
 			}
-			document.getElementById('online-help-content').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('online-help-content').innerHTML);
+			document.getElementById('online-help-content').innerHTML = app.util.replaceCtrlAltInMac(document.getElementById('online-help-content').innerHTML);
 		}
 		if (id === 'keyboard-shortcuts-content') {
-			document.getElementById('keyboard-shortcuts-content').innerHTML = L.Util.replaceCtrlAltInMac(document.getElementById('keyboard-shortcuts-content').innerHTML);
+			document.getElementById('keyboard-shortcuts-content').innerHTML = app.util.replaceCtrlAltInMac(document.getElementById('keyboard-shortcuts-content').innerHTML);
 		}
 		var searchInput = document.getElementById('online-help-search-input');
 		searchInput.setAttribute('placeholder',_('Search'));
+		searchInput.setAttribute('aria-label',_('Search'));
 		searchInput.focus(); // auto focus on user input field
 		var helpContentParent = document.getElementsByClassName('ui-dialog-content')[0];
 		var startFilter = false;
@@ -559,7 +588,7 @@ L.Map.include({
 		searchInput.addEventListener('input', function () {
 			// Hide all elements within the #online-help-content on first key stroke/at start of filter content
 			if (!startFilter || !isAnyMatchingContent) {
-				helpContentParent.setAttribute('style', 'background-color: var(--color-background-dark) !important');
+				helpContentParent.style.backgroundColor = 'var(--color-background-dark) !important';
 				// Hide all <p> tags within .text, .spreadsheet, or .presentation sections
 				document.querySelectorAll('#online-help-content > *:not(a), .link-section p, .product-header').forEach(function (element) {
 					// Check if the element has class text, spreadsheet, or presentation
@@ -580,6 +609,22 @@ L.Map.include({
 				this.filterResults(searchTerm, isAnyMatchingContent, id);
 			}
 		}.bind(this));
+
+
+		const onlineHelpContent = document.getElementById('online-help-content');
+		const buttons = onlineHelpContent.querySelectorAll('.scroll-button');
+
+		buttons.forEach((button) => {
+			button.addEventListener('click', () => {
+				const targetId = button.dataset.target;
+				if (targetId) {
+					const targetElement = document.getElementById(`${targetId}`);
+					if (targetElement) {
+						targetElement.scrollIntoView();
+					}
+				}
+			});
+		});
 	},
 
 
@@ -591,7 +636,7 @@ L.Map.include({
 		var docType = this.getDocType() === 'drawing' ? 'presentation' : this.getDocType();
 		mainSectionsQuery += ', div.' + docType + ' .section';
 
-		// Select nain sections elements within the mainDiv
+		// Select main sections elements within the mainDiv
 		var mainSections = mainDiv.querySelectorAll(mainSectionsQuery);
 		isAnyMatchingContent = false;
 
@@ -693,7 +738,7 @@ L.Map.include({
 	},
 
 	_doOpenHelpFile: function(data, id, map) {
-		var productName;
+		let productName;
 		if (window.ThisIsAMobileApp) {
 			productName = window.MobileAppName;
 		} else {
@@ -701,12 +746,14 @@ L.Map.include({
 		}
 
 		map.uiManager.showYesNoButton(id + '-box', productName, '', _('OK'), null, null, null, true);
-		var box = document.getElementById(id + '-box');
-		var innerDiv = L.DomUtil.create('div', '', null);
-		box.insertBefore(innerDiv, box.firstChild);
-		innerDiv.innerHTML = data;
+		app.layoutingService.appendLayoutingTask(() => {
+			const box = document.getElementById(id + '-box');
+			const innerDiv = window.L.DomUtil.create('div', '', null);
+			box.insertBefore(innerDiv, box.firstChild);
+			innerDiv.innerHTML = data;
 
-		this.onHelpOpen(id, map, productName);
+			this.onHelpOpen(id, map, productName);
+		});
 	},
 
 	showHelp: function(id) {
@@ -728,6 +775,7 @@ L.Map.include({
 	},
 
 	extractContent: function(html) {
+		html = DocUtil.stripHTML(html);
 		var parser = new DOMParser;
 		return parser.parseFromString(html, 'text/html').documentElement.getElementsByTagName('body')[0].textContent;
 	},
@@ -748,85 +796,6 @@ L.Map.include({
 		return str;
 	},
 
-	_createAndRunHyperlinkDialog: function(defaultText, defaultLink) {
-		var map = this;
-		var id = 'hyperlink';
-		var title = _('Insert hyperlink');
-
-		var dialogId = 'modal-dialog-' + id;
-		var json = map.uiManager._modalDialogJSON(id, title, true, [
-			{
-				id: 'hyperlink-text-box-label',
-				type: 'fixedtext',
-				text: _('Text'),
-				labelFor: 'hyperlink-text-box'
-			},
-			{
-				id: 'hyperlink-text-box',
-				type: 'multilineedit',
-				text: defaultText,
-				labelledBy: 'hyperlink-text-box-label'
-			},
-			{
-				id: 'hyperlink-link-box-label',
-				type: 'fixedtext',
-				text: _('Link'),
-				labelFor: 'hyperlink-link-box'
-			},
-			{
-				id: 'hyperlink-link-box',
-				type: 'edit',
-				text: defaultLink,
-				labelledBy: 'hyperlink-link-box-label'
-			},
-			{
-				type: 'buttonbox',
-				enabled: true,
-				children: [
-					{
-						id: 'response-cancel',
-						type: 'pushbutton',
-						text: _('Cancel'),
-					},
-					{
-						id: 'response-ok',
-						type: 'pushbutton',
-						text: _('OK'),
-						'has_default': true,
-					}
-				],
-				vertical: false,
-				layoutstyle: 'end'
-			},
-		], 'hyperlink-link-box-input');
-
-		map.uiManager.showModal(json, [
-			{id: 'response-ok', func: function() {
-				var text = document.getElementById('hyperlink-text-box');
-				var link = document.getElementById('hyperlink-link-box-input');
-
-				if (link.value != '') {
-					if (!text.value || text.value === '')
-						text.value = link.value;
-
-					var command = {
-						'Hyperlink.Text': {
-							type: 'string',
-							value: text.value
-						},
-						'Hyperlink.URL': {
-							type: 'string',
-							value: map.makeURLFromStr(link.value)
-						}
-					};
-					map.sendUnoCommand('.uno:SetHyperlink', command, true);
-				}
-
-				map.uiManager.closeModal(dialogId);
-			}}
-		]);
-	},
-
 	getTextForLink: function() {
 		var map = this;
 		var text = '';
@@ -834,7 +803,7 @@ L.Map.include({
 			text = this.hyperlinkUnderCursor.text;
 		} else if (this._clip && this._clip._selectionType == 'text') {
 			if (map['stateChangeHandler'].getItemValue('.uno:Copy') === 'enabled') {
-				if (L.Browser.hasNavigatorClipboardWrite) {
+				if (window.L.Browser.clipboardApiAvailable) {
 					// Async copy, trigger fetching the text selection.
 					app.socket.sendMessage('gettextselection mimetype=text/html,text/plain;charset=utf-8');
 				} else {
@@ -847,56 +816,24 @@ L.Map.include({
 		return text;
 	},
 
-	showHyperlinkDialog: function() {
-		if (this.getDocType() === 'spreadsheet') {
-			// show native core dialog
-			// in case we try to edit email EditHyperlink doesn't work
-			this.sendUnoCommand('.uno:HyperlinkDialog');
-			return;
-		}
-
-		var text = this.getTextForLink();
-		var link = '';
-		if (this.hyperlinkUnderCursor && this.hyperlinkUnderCursor.link)
-			link = this.hyperlinkUnderCursor.link;
-
-		this._createAndRunHyperlinkDialog(text ? text.replace(/^[\n\r]+|[\n\r]+$/g, '') : '', link);
-	},
-
 	cancelSearch: function() {
 		var toolbar = window.mode.isMobile() ? app.map.mobileSearchBar: app.map.statusBar;
-		var searchInput = L.DomUtil.get('search-input');
-		this.resetSelection();
+		var searchInput = window.L.DomUtil.get('search-input');
+		app.searchService.resetSelection();
 		if (toolbar) {
-			toolbar.showItem('cancelsearch', false);
+			if (!window.mode.isMobile()) {
+				toolbar.showItem('cancelsearch', false);
+			}
 			toolbar.enableItem('searchprev', false);
 			toolbar.enableItem('searchnext', false);
 		}
 		searchInput.value = '';
 		if (window.mode.isMobile()) {
 			searchInput.focus();
-			// odd, but on mobile we need to invoke it twice
-			toolbar.showItem('cancelsearch', false);
+			toolbar.enableItem('cancelsearch', false);
 		}
 
 		this._onGotFocus();
-	},
-
-	preventKeyboardPopup: function (id) {
-		// In the iOS app we don't want clicking on the toolbar to pop up the keyboard.
-		if (!window.ThisIsTheiOSApp && id !== 'zoomin' && id !== 'zoomout' && id !== 'mobile_wizard' && id !== 'insertion_mobile_wizard') {
-			this.focus(this.canAcceptKeyboardInput()); // Maintain same keyboard state.
-		}
-	},
-
-	// used in onClick method of w2ui toolbar
-	executeUnoAction: function (item) {
-		if (item.unosheet && this.getDocType() === 'spreadsheet') {
-			this.toggleCommandState(item.unosheet);
-		}
-		else {
-			this.toggleCommandState(window.getUNOCommand(item.uno));
-		}
 	},
 
 	openRevisionHistory: function () {
@@ -952,7 +889,7 @@ L.Map.include({
 		$('#AutoSumMenu .unoarrow').css('margin', '0');
 
 		map.formulabar.blurField();
-		$('#addressInput-input').blur();
+		$('#addressInput input').blur();
 	},
 
 	formulabarBlur: function() {
@@ -967,20 +904,5 @@ L.Map.include({
 	formulabarSetDirty: function() {
 		if (this.formulabar)
 			this.formulabar.dirty = true;
-	},
-
-	setAccessibilityState: function(enable) {
-		if (this._accessibilityState === enable)
-			return;
-		this._accessibilityState = enable;
-		app.socket.sendMessage('a11ystate ' + enable);
-
-		this.removeLayer(this._textInput);
-		this._textInput = enable ? L.a11yTextInput() : L.textInput();
-		this.addLayer(this._textInput);
-		if (enable) {
-			this._textInput._requestFocusedParagraph();
-		}
-		this._textInput.showCursor();
 	},
 });

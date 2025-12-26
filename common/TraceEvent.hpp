@@ -13,7 +13,6 @@
 #include <string>
 
 #include <sys/types.h>
-#include <unistd.h>
 
 #ifdef TEST_TRACEEVENT_EXE
 #include <iostream>
@@ -34,7 +33,7 @@ private:
     static void emitInstantEvent(const std::string& name, const std::string& args);
 
     const std::string _args;
-    int _pid; //< -1 when not recording, or done recording.
+    int _pid; ///< -1 when not recording, or done recording.
 
 protected:
     static std::atomic<bool> recordingOn; // True during recoding/emission
@@ -89,7 +88,7 @@ protected:
 
     explicit TraceEvent(std::string args)
         : _args(std::move(args))
-        , _pid(recordingOn ? getpid() : -1)
+        , _pid(recordingOn ? Util::getProcessId() : -1)
     {
     }
 
@@ -183,7 +182,7 @@ private:
             if (_nesting != threadLocalNesting)
             {
 #ifdef TEST_TRACEEVENT_EXE
-                std::cerr << "Incorrect ProfileZone nesting for " << name() << "\n";
+                std::cerr << "Incorrect ProfileZone nesting for " << name() << '\n';
 #else
                 LOG_WRN("Incorrect ProfileZone nesting for " << name());
 #endif

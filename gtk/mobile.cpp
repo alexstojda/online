@@ -103,7 +103,15 @@ static void send2JS(const std::vector<char>& buffer)
     g_idle_add([](gpointer data)
                {
                    char *jscopy = (char*) data;
-                   webkit_web_view_run_javascript(webView, jscopy, nullptr, send2JS_ready_callback, jscopy);
+#if WEBKIT_CHECK_VERSION(2,40,0) // unclear when this API changed ...
+                   webkit_web_view_evaluate_javascript(
+                       webView, jscopy, strlen(jscopy),
+                       nullptr, nullptr, nullptr,
+                       send2JS_ready_callback, jscopy);
+#else
+                   webkit_web_view_evaluate_javascript(
+                       webView, jscopy, nullptr, send2JS_ready_callback, jscopy);
+#endif
                    return FALSE;
                }, jscopy);
 }
@@ -174,62 +182,52 @@ static void handle_cool_message(WebKitUserContentManager *manager,
 
             // Start another thread to read responses and forward them to the JavaScript
             std::thread([]
+            {
+                Util::setThreadName("app2js");
+                while (true)
+                {
+                    struct pollfd pollfd[2];
+                    pollfd[0].fd = fakeClientFd;
+                    pollfd[0].events = POLLIN;
+                    pollfd[1].fd = closeNotificationPipeForForwardingThread[1];
+                    pollfd[1].events = POLLIN;
+                    if (fakeSocketPoll(pollfd, 2, -1) > 0)
+                    {
+                        if (pollfd[1].revents == POLLIN)
                         {
-                            Util::setThreadName("app2js");
-                            while (true)
-                            {
-                               struct pollfd pollfd[2];
-                               pollfd[0].fd = fakeClientFd;
-                               pollfd[0].events = POLLIN;
-                               pollfd[1].fd = closeNotificationPipeForForwardingThread[1];
-                               pollfd[1].events = POLLIN;
-                               if (fakeSocketPoll(pollfd, 2, -1) > 0)
-                               {
-                                   if (pollfd[1].revents == POLLIN)
-                                   {
-                                       // The code below handling the "BYE" fake Websocket
-                                       // message has closed the other end of the
-                                       // closeNotificationPipeForForwardingThread. Let's close
-                                       // the other end too just for cleanliness, even if a
-                                       // FakeSocket as such is not a system resource so nothing
-                                       // is saved by closing it.
-                                       fakeSocketClose(closeNotificationPipeForForwardingThread[1]);
+                            // The code below handling the "BYE" fake Websocket message has closed
+                            // the other end of the closeNotificationPipeForForwardingThread. Let's
+                            // close the other end too just for cleanliness, even if a FakeSocket as
+                            // such is not a system resource so nothing is saved by closing it.
+                            fakeSocketClose(closeNotificationPipeForForwardingThread[1]);
 
-                                       // Close our end of the fake socket connection to the
-                                       // ClientSession thread, so that it terminates
-                                       fakeSocketClose(fakeClientFd);
+                            // Close our end of the fake socket connection to the
+                            // ClientSession thread, so that it terminates
+                            fakeSocketClose(fakeClientFd);
 
-                                       return;
-                                   }
-                                   if (pollfd[0].revents == POLLIN)
-                                   {
-                                       int n = fakeSocketAvailableDataLength(fakeClientFd);
-                                       if (n == 0)
-                                           return;
-                                       std::vector<char> buf(n);
-                                       n = fakeSocketRead(fakeClientFd, buf.data(), n);
-                                       send2JS(buf);
-                                   }
-                               }
-                               else
-                                   break;
-                           }
-                           assert(false);
-                        }).detach();
+                            return;
+                        }
+                        if (pollfd[0].revents == POLLIN)
+                        {
+                            int n = fakeSocketAvailableDataLength(fakeClientFd);
+                            if (n == 0)
+                                return;
+                            std::vector<char> buf(n);
+                            n = fakeSocketRead(fakeClientFd, buf.data(), n);
+                            send2JS(buf);
+                        }
+                    }
+                    else
+                        break;
+                }
+                assert(false);
+            }).detach();
 
             // First we simply send it the URL. This corresponds to the GET request with Upgrade to
             // WebSocket.
             LOG_TRC_NOFILE("Actually sending to Online:" << fileURL);
 
-            // Must do this in a thread, too, so that we can return to the GTK+ main loop
-            std::thread([]
-                        {
-                            struct pollfd pollfd;
-                            pollfd.fd = fakeClientFd;
-                            pollfd.events = POLLOUT;
-                            fakeSocketPoll(&pollfd, 1, -1);
-                            fakeSocketWrite(fakeClientFd, fileURL.c_str(), fileURL.size());
-                        }).detach();
+            fakeSocketWriteQueue(fakeClientFd, fileURL.c_str(), fileURL.size());
         }
         else if (strcmp(string_value, "BYE") == 0)
         {
@@ -242,17 +240,7 @@ static void handle_cool_message(WebKitUserContentManager *manager,
         }
         else
         {
-            // As above
-            char *string_copy = strdup(string_value);
-            std::thread([=]
-                        {
-                            struct pollfd pollfd;
-                            pollfd.fd = fakeClientFd;
-                            pollfd.events = POLLOUT;
-                            fakeSocketPoll(&pollfd, 1, -1);
-                            fakeSocketWrite(fakeClientFd, string_copy, strlen(string_copy));
-                            free(string_copy);
-                        }).detach();
+            fakeSocketWriteQueue(fakeClientFd, string_value, strlen(string_value));
         }
         g_free(string_value);
     }
@@ -274,6 +262,28 @@ static void handle_error_message(WebKitUserContentManager *manager,
     handle_message("error", js_result);
 }
 
+static gboolean enable_inspector(gpointer user_data)
+{
+    if (false) // Set this to true to try to enable developer console.
+    {
+        // Attempt to show the inspector
+        WebKitWebInspector *inspector = webkit_web_view_get_inspector (WEBKIT_WEB_VIEW(webView));
+        const char *url = webkit_web_inspector_get_inspected_uri(inspector);
+        LOG_TRC("Inspecting: can attach? " << webkit_web_inspector_get_can_attach(inspector) <<
+                " to URL: '" << (url?url:"<null>") << "'");
+        webkit_web_inspector_show (WEBKIT_WEB_INSPECTOR(inspector));
+    }
+    return FALSE; // do it just once.
+}
+
+static void disable_a11y()
+{
+    // reduce test matrix for now
+    setenv("WEBKIT_A11Y_BUS_ADDRESS", "", 1);
+    setenv("GTK_A11Y","none", 1);
+    setenv("NO_AT_BRIDGE", "1", 1);
+}
+
 int main(int argc, char* argv[])
 {
     if (argc != 2)
@@ -282,7 +292,7 @@ int main(int argc, char* argv[])
         _exit(1); // avoid log cleanup
     }
 
-    Log::initialize("Mobile", "trace", false, false, {});
+    Log::initialize("Mobile", "trace", false, false, {}, false, {});
     Util::setThreadName("main");
 
     fakeSocketSetLoggingCallback([](const std::string& line)
@@ -291,30 +301,39 @@ int main(int argc, char* argv[])
                                  });
 
     std::thread([]
-                {
-                    assert(coolwsd == nullptr);
-                    char *argv[2];
-                    argv[0] = strdup("mobile");
-                    argv[1] = nullptr;
-                    Util::setThreadName("app");
-                    while (true)
-                    {
-                        coolwsd = new COOLWSD();
-                        coolwsd->run(1, argv);
-                        delete coolwsd;
-                        LOG_TRC("One run of COOLWSD completed");
-                    }
-                }).detach();
+    {
+        assert(coolwsd == nullptr);
+        char *argv[2];
+        argv[0] = strdup("mobile");
+        argv[1] = nullptr;
+        Util::setThreadName("app");
+        while (true)
+        {
+            coolwsd = new COOLWSD();
+            coolwsd->run(1, argv);
+            delete coolwsd;
+            LOG_TRC("One run of COOLWSD completed");
+        }
+    }).detach();
 
     fakeClientFd = fakeSocketSocket();
+
+    disable_a11y();
 
     gtk_init(&argc, &argv);
 
     GtkWidget *mainWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_default_size(GTK_WINDOW(mainWindow), 1000, 800);
+    gtk_window_set_default_size(GTK_WINDOW(mainWindow), 720, 1600);
     g_signal_connect(mainWindow, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
 
-    WebKitUserContentManager *userContentManager = WEBKIT_USER_CONTENT_MANAGER(webkit_user_content_manager_new());
+    // Not good: https://bugs.webkit.org/show_bug.cgi?id=261874
+    if (!strcmp(G_OBJECT_TYPE_NAME(gdk_display_get_default()), "GdkX11Display"))
+        setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 1);
+
+    webView = WEBKIT_WEB_VIEW(webkit_web_view_new());
+    g_object_ref_sink(G_OBJECT(webView));
+
+    WebKitUserContentManager *userContentManager = webkit_web_view_get_user_content_manager(webView);
 
     g_signal_connect(userContentManager, "script-message-received::debug", G_CALLBACK(handle_debug_message), nullptr);
     g_signal_connect(userContentManager, "script-message-received::cool",  G_CALLBACK(handle_cool_message), nullptr);
@@ -324,9 +343,24 @@ int main(int argc, char* argv[])
     webkit_user_content_manager_register_script_message_handler(userContentManager, "cool");
     webkit_user_content_manager_register_script_message_handler(userContentManager, "error");
 
-    webView = WEBKIT_WEB_VIEW(webkit_web_view_new_with_user_content_manager(userContentManager));
-
     gtk_container_add(GTK_CONTAINER(mainWindow), GTK_WIDGET(webView));
+    gtk_widget_set_visible(GTK_WIDGET(webView), TRUE);
+
+    WebKitSettings *settings = webkit_web_view_get_settings(webView);
+
+    // trigger mobile UI with 'Mobile' in plausible user agent.
+    webkit_settings_set_user_agent(
+        settings, "Mozilla/5.0 (Linux; U; Android 2.3.5; en-us; HTC Vision Build/GRI40)"
+        "AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1");
+
+    webkit_settings_set_javascript_can_access_clipboard(settings, TRUE);
+
+    webkit_settings_set_enable_write_console_messages_to_stdout(settings, TRUE);
+    webkit_settings_set_enable_developer_extras(settings, TRUE);
+    g_object_set (G_OBJECT(settings), "enable-developer-extras", TRUE, NULL);
+
+    gtk_widget_grab_focus(GTK_WIDGET(webView));
+    gtk_widget_set_visible(GTK_WIDGET(mainWindow), TRUE);
 
     fileURL = "file://" + FileUtil::realpath(argv[1]);
 
@@ -335,21 +369,14 @@ int main(int argc, char* argv[])
         "?file_path=" + fileURL +
         "&closebutton=1"
         "&permission=edit"
-        "&lang=en"
+        "&lang=en-US"
         "&userinterfacemode=notebookbar";
+
+    LOG_TRC("Open URL: " << urlAndQuery);
 
     webkit_web_view_load_uri(webView, urlAndQuery.c_str());
 
-    if (true) // Set this to false to disable developer console.
-    {
-        // Enable the developer extras
-        WebKitSettings *settings = webkit_web_view_get_settings (WEBKIT_WEB_VIEW(webView));
-        g_object_set (G_OBJECT(settings), "enable-developer-extras", TRUE, NULL);
-
-        // Show the inspector
-        WebKitWebInspector *inspector = webkit_web_view_get_inspector (WEBKIT_WEB_VIEW(webView));
-        webkit_web_inspector_show (WEBKIT_WEB_INSPECTOR(inspector));
-    }
+    g_timeout_add(5000 /* ms */, enable_inspector, webView);
 
     gtk_widget_grab_focus(GTK_WIDGET(webView));
     gtk_widget_show_all(mainWindow);
@@ -357,3 +384,5 @@ int main(int argc, char* argv[])
 
     return 0;
 }
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

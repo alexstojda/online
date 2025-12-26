@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -27,13 +30,23 @@ class CursorHeaderSection extends HTMLObjectSection {
         div.style.backgroundColor = color;
     }
 
-    deleteThis() { // Also resets the timer if it is initiated.
+    deleteThis(force: boolean = false) { // Also resets the timer if it is initiated.
         if (this.sectionProperties.deletionTimeout)
             clearTimeout(this.sectionProperties.deletionTimeout);
 
         this.sectionProperties.deletionTimeout = setTimeout(() => {
             app.sectionContainer.removeSection(this.name);
-        }, CursorHeaderSection.duration);
+        }, (force ? 10: CursorHeaderSection.duration));
+    }
+
+    // This section is for text cursor username popups in Calc. When we want to remove the popup before it times out, we use this function.
+    public static deletePopUpNow(viewId: number) {
+        // If cursor header is also shown, delete it.
+        const name = CursorHeaderSection.namePrefix + viewId;
+        if (app.sectionContainer.doesSectionExist(name)) {
+            const section: CursorHeaderSection = app.sectionContainer.getSectionWithName(name) as CursorHeaderSection;
+            section.deleteThis(true);
+        }
     }
 
     public static showCursorHeader(viewId: number, username: string, documentPosition: cool.SimplePoint, color: string) {
@@ -59,7 +72,7 @@ class CursorHeaderSection extends HTMLObjectSection {
 
         // If this is calc and cell cursor username popup is shown, hide it.
         if (app.map._docLayer._docType === 'spreadsheet') {
-            const cellCursorSection = app.definitions.otherViewCellCursorSection.getViewCursorSection(viewId);
+            const cellCursorSection = OtherViewCellCursorSection.getViewCursorSection(viewId) as OtherViewCellCursorSection;
             if (cellCursorSection)
                 cellCursorSection.hideUsernamePopUp();
         }

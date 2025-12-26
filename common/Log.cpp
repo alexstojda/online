@@ -11,11 +11,14 @@
 
 #include <config.h>
 
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/syscall.h>
-#endif
-#include <unistd.h>
+#include "Log.hpp"
+#include "StaticLogHelper.hpp"
+#include "Util.hpp"
+
+#include <Poco/AutoPtr.h>
+#include <Poco/FileChannel.h>
+#include <Poco/Logger.h>
+#include <Poco/Version.h>
 
 #include <atomic>
 #include <cassert>
@@ -26,32 +29,25 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 #include <unordered_map>
-
-#include <Poco/AutoPtr.h>
-#include <Poco/FileChannel.h>
-#include <Poco/Logger.h>
-
-#include "Log.hpp"
-#include "Util.hpp"
 
 namespace
 {
 /// Tracks the number of thread-local buffers (for debugging purposes).
 std::atomic_int32_t ThreadLocalBufferCount(0);
 
-#if WASMAPP
-/// In WASM, stdout works best.
-constexpr int LOG_FILE_FD = STDOUT_FILENO;
-#else
-/// By default, write to stderr.
-constexpr int LOG_FILE_FD = STDERR_FILENO;
-#endif
-
-} // namespace
+#ifndef NDEBUG
+// In debug builds, we track the thread-ids to list the ones still running at exist.
+thread_local std::int32_t OwnThreadIdIndex = 0;
+std::int32_t ThreadIdArray[256];
+std::atomic_int32_t NextThreadIdIndex(0);
+#endif // !NDEBUG
 
 /// Which log areas should be disabled
 bool AreasDisabled[Log::AreaMax] = { false, };
+
+} // namespace
 
 /// Wrapper to expose protected 'log' and genericise
 class GenericLogger : public Poco::Logger
@@ -70,7 +66,7 @@ public:
         // loggers and we can't access the internal mutex.
         if (find(name))
             throw Poco::ExistsException();
-        auto log = new GenericLogger(name, std::move(chan), lvl);
+        auto* log = new GenericLogger(name, std::move(chan), lvl);
         add(log);
         return *log;
     }
@@ -92,7 +88,17 @@ public:
             break;
 #undef MAP
         }
-        log(text, prio);
+
+        if (getLevel() < prio)
+            return;
+#if POCO_VERSION >= 0x010C0501
+        Poco::Channel* channel = getChannel().get();
+#else
+        auto channel = getChannel();
+#endif
+        if (!channel)
+            return;
+        channel->log(Poco::Message(name(), text, prio));
     }
 
     static Log::Level mapToLevel(Poco::Message::Priority prio)
@@ -126,25 +132,33 @@ namespace Log
         void close() override { flush(); }
 
         /// Write the given buffer to stderr directly.
-        static inline int writeRaw(const char* data, std::size_t size)
+        static inline std::size_t writeRaw(const char* data, std::size_t count)
         {
-            std::size_t i = 0;
-            for (; i < size;)
+#if WASMAPP
+            // In WASM, stdout works best.
+            constexpr int LOG_FILE_FD = STDOUT_FILENO;
+#else
+            // By default, write to stderr.
+            constexpr int LOG_FILE_FD = STDERR_FILENO;
+#endif
+
+            const char *ptr = data;
+            while (count > 0)
             {
-                int wrote;
-                while ((wrote = ::write(LOG_FILE_FD, data + i, size - i)) < 0 && errno == EINTR)
+                ssize_t wrote;
+                while ((wrote = ::write(LOG_FILE_FD, ptr, count)) < 0 && errno == EINTR)
                 {
                 }
 
                 if (wrote < 0)
                 {
-                    return i;
+                    break;
                 }
 
-                i += wrote;
+                ptr += wrote;
+                count -= wrote;
             }
-
-            return i;
+            return ptr - data;
         }
 
         template <std::size_t N> inline void writeRaw(const char (&data)[N])
@@ -184,11 +198,17 @@ namespace Log
         }
     };
 
+    void preFork() { flush(); }
+
     void postFork()
     {
         /// after forking we can end up with threads that
         /// logged in the parent confusing our counting.
         ThreadLocalBufferCount = 0;
+#ifndef NDEBUG
+        NextThreadIdIndex = 0;
+        memset(ThreadIdArray, 0, sizeof(ThreadIdArray));
+#endif // !NDEBUG
     }
 
     class BufferedConsoleChannel : public ConsoleChannel
@@ -206,17 +226,25 @@ namespace Log
                 , _oldest_time_us(0)
             {
                 ++ThreadLocalBufferCount;
+#ifndef NDEBUG
+                OwnThreadIdIndex = NextThreadIdIndex++;
+                ThreadIdArray[OwnThreadIdIndex] = Util::getThreadId();
+#endif // !NDEBUG
             }
 
             ~ThreadLocalBuffer()
             {
                 flush();
                 --ThreadLocalBufferCount;
+#ifndef NDEBUG
+                ThreadIdArray[OwnThreadIdIndex] = 0;
+#endif // !NDEBUG
             }
 
             std::size_t size() const { return _size; }
             std::size_t available() const { return BufferSize - _size; }
 
+            /// Flush internal buffers, if any.
             inline void flush()
             {
                 if (_size)
@@ -266,38 +294,27 @@ namespace Log
                 assert(_size <= BufferSize && "Buffer overflow");
             }
 
-        template <std::size_t N> inline void buffer(const char (&data)[N])
-        {
-            buffer(data, N - 1); // Minus the null.
-        }
-
-        inline void buffer(const std::string& string) { buffer(string.data(), string.size()); }
-
-    private:
-        char _buffer[BufferSize];
-        std::size_t _size;
-        std::int64_t _oldest_time_us; //< The timestamp of the oldest buffered entry.
+        private:
+            char _buffer[BufferSize];
+            std::size_t _size;
+            std::int64_t _oldest_time_us; ///< The timestamp of the oldest buffered entry.
         };
 
     protected:
         inline std::size_t size() const { return _tlb.size(); }
         inline std::size_t available() const { return _tlb.available(); }
 
-        inline void flush() { _tlb.flush(); }
-
         inline void buffer(const char* data, std::size_t size) { _tlb.buffer(data, size); }
 
-        template <std::size_t N> inline void buffer(const char (&data)[N])
-        {
-            buffer(data, N - 1); // Minus the null.
-        }
-
-        inline void buffer(const std::string& string) { buffer(string.data(), string.size()); }
+        inline void buffer(const std::string_view string) { buffer(string.data(), string.size()); }
 
     public:
         ~BufferedConsoleChannel() { flush(); }
 
         void close() override { flush(); }
+
+        /// Flush buffers, if any.
+        static inline void flush() { _tlb.flush(); }
 
         void log(const Poco::Message& msg) override
         {
@@ -372,58 +389,11 @@ namespace Log
         std::unordered_map<Poco::Message::Priority, std::string> _colorByPriority;
     };
 
-    /// Helper to avoid destruction ordering issues.
-    static struct StaticHelper
+    extern StaticHelper Static;
+    extern StaticUIHelper StaticUILog;
+
+    namespace
     {
-    private:
-        GenericLogger* _logger;
-        static thread_local GenericLogger* _threadLocalLogger;
-        std::string _name;
-        std::string _logLevel;
-        std::string _id;
-        std::atomic<bool> _inited;
-    public:
-        StaticHelper() :
-            _logger(nullptr),
-            _inited(true)
-        {
-        }
-        ~StaticHelper()
-        {
-            _inited = false;
-        }
-
-        bool getInited() const { return _inited; }
-
-        void setId(const std::string& id) { _id = id; }
-
-        const std::string& getId() const { return _id; }
-
-        void setName(const std::string& name) { _name = name; }
-
-        const std::string& getName() const { return _name; }
-
-        void setLevel(const std::string& logLevel) { _logLevel = logLevel; }
-
-        const std::string& getLevel() const { return _logLevel; }
-
-        void setLogger(GenericLogger* logger) { _logger = logger; };
-
-        void setThreadLocalLogger(GenericLogger* logger)
-        {
-            // FIXME: What to do with the previous thread-local logger, if any? Will deleting it
-            // destroy also its channel? That won't be good as we use the same channel for all
-            // loggers. Best to just leak it?
-            _threadLocalLogger = logger;
-        }
-
-        GenericLogger* getLogger() const { return _logger; }
-
-        GenericLogger* getThreadLocalLogger() const { return _threadLocalLogger; }
-
-    } Static;
-
-    thread_local GenericLogger* StaticHelper::_threadLocalLogger = nullptr;
 
     bool IsShutdown = false;
 
@@ -476,6 +446,7 @@ namespace Log
         return out;
     }
 
+#if defined(__linux__)
     /// Convert unsigned long num to base-10 ascii in place.
     /// Returns the *end* position.
     char* to_ascii(char* buf, std::size_t num)
@@ -497,12 +468,22 @@ namespace Log
 
         return buf + i;
     }
+#endif
+    } // namespace
 
-    char* prefix(const timeval& tv, char* buffer, const char* level)
+    char* prefix(const std::chrono::time_point<std::chrono::system_clock>& tp,
+                 char* buffer,
+                 const char* level)
     {
 #if defined(IOS) || defined(__FreeBSD__)
-        // Don't bother with the "Source" which would be just "Mobile" always and non-informative as
-        // there is just one process in the app anyway.
+        // Don't bother with the "Source" which would be just "Mobile" always (or whatever the app
+        // process is called depending on platform and configuration) and non-informative as there
+        // is just one process in the app anyway.
+
+        // FIXME: Not sure why FreeBSD is here, too. Surely on FreeBSD COOL runs just like on Linux,
+        // as a set of separate processes, so it would be useful to see from which process a log
+        // line is?
+
         char *pos = buffer;
 
         // Don't bother with the thread identifier either. We output the thread name which is much
@@ -541,9 +522,9 @@ namespace Log
         *pos++ = ' ';
 #endif
 
-        const time_t tv_sec = tv.tv_sec;
-        struct tm tm;
-        localtime_r(&tv_sec, &tm);
+        auto t = std::chrono::system_clock::to_time_t(tp);
+        std::tm tm;
+        Util::time_t_to_localtime(t, tm);
 
         // YYYY-MM-DD.
         to_ascii_fixed<4>(pos, tm.tm_year + 1900);
@@ -566,7 +547,9 @@ namespace Log
         to_ascii_fixed<2>(pos, tm.tm_sec);
         pos[2] = '.';
         pos += 3;
-        to_ascii_fixed<6>(pos, tv.tv_usec);
+        auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch());
+        auto fractional_seconds = microseconds.count() % 1000000;
+        to_ascii_fixed<6>(pos, fractional_seconds);
         pos[6] = ' ';
         pos += 7;
 
@@ -596,13 +579,15 @@ namespace Log
                     const std::string& logLevel,
                     const bool withColor,
                     const bool logToFile,
-                    const std::map<std::string, std::string>& config)
+                    const std::map<std::string, std::string>& config,
+                    const bool logToFileUICmd,
+                    const std::map<std::string, std::string>& configUICmd)
     {
         Static.setName(name);
         std::ostringstream oss;
         oss << Static.getName();
-        if (!Util::isMobileApp())
-            oss << '-' << std::setw(5) << std::setfill('0') << getpid();
+        if constexpr (!Util::isMobileApp())
+            oss << '-' << std::setw(5) << std::setfill('0') << Util::getProcessId();
         Static.setId(oss.str());
 
         // Configure the logger.
@@ -622,7 +607,17 @@ namespace Log
         }
         else
         {
-            channel = static_cast<Poco::Channel*>(new Log::BufferedConsoleChannel());
+            const auto it = config.find("flush");
+            if (it == config.end() || Util::toLower(it->second) != "false")
+            {
+                // Buffered logging, reduces number of write(2) syscalls.
+                channel = static_cast<Poco::Channel*>(new Log::BufferedConsoleChannel());
+            }
+            else
+            {
+                // Unbuffered logging, directly writes each entry (to stderr).
+                channel = static_cast<Poco::Channel*>(new Log::ConsoleChannel());
+            }
         }
 
         /**
@@ -634,16 +629,16 @@ namespace Log
 
         try
         {
-            auto& logger = GenericLogger::create(Static.getName(), channel, Poco::Message::PRIO_TRACE);
+            auto& logger = GenericLogger::create(Static.getName(), std::move(channel), Poco::Message::PRIO_TRACE);
             Static.setLogger(&logger);
         }
         catch (ExistsException&)
         {
-            auto logger = static_cast<GenericLogger *>(&Poco::Logger::get(Static.getName()));
+            auto* logger = static_cast<GenericLogger*>(&Poco::Logger::get(Static.getName()));
             Static.setLogger(logger);
         }
 
-        auto logger = Static.getLogger();
+        auto* logger = Static.getLogger();
 
         const std::string level = logLevel.empty() ? std::string("trace") : logLevel;
         logger->setLevel(level);
@@ -652,20 +647,88 @@ namespace Log
         const std::time_t t = std::time(nullptr);
         struct tm tm;
         LOG_INF("Initializing " << name << ". Local time: "
-                                << std::put_time(localtime_r(&t, &tm), "%a %F %T %z")
+                                << std::put_time(Util::time_t_to_localtime(t, tm), "%a %F %T %z")
                                 << ". Log level is [" << logger->getLevel() << ']');
+
+        StaticUILog.setName(name+"_ui");
+        AutoPtr<Channel> channelUILog;
+        if (logToFileUICmd)
+        {
+            channelUILog = static_cast<Poco::Channel*>(new Poco::FileChannel("coolwsd-ui-cmd.log"));
+            for (const auto& pair : configUICmd)
+            {
+                channelUILog->setProperty(pair.first, pair.second);
+            }
+
+            channelUILog->open();
+            try
+            {
+                auto& loggerUILog = GenericLogger::create(StaticUILog.getName(), std::move(channelUILog), Poco::Message::PRIO_TRACE);
+                StaticUILog.setLogger(&loggerUILog);
+            }
+            catch (ExistsException&)
+            {
+                auto* loggerUILog =
+                    static_cast<GenericLogger*>(&Poco::Logger::get(StaticUILog.getName()));
+                StaticUILog.setLogger(loggerUILog);
+            }
+        }
     }
+
+    namespace
+    {
 
     GenericLogger& logger()
     {
-        GenericLogger* pLogger = Static.getThreadLocalLogger();
-        if (pLogger != nullptr)
-            return *pLogger;
+        GenericLogger* logger = Static.getThreadLocalLogger();
+        if (logger != nullptr)
+            return *logger;
 
-        pLogger = Static.getLogger();
-        return pLogger ? *pLogger
+        logger = Static.getLogger();
+        return logger ? *logger
             : *static_cast<GenericLogger *>(
                 &GenericLogger::get(Static.getInited() ? Static.getName() : std::string()));
+    }
+
+    GenericLogger& loggerUI()
+    {
+        GenericLogger* logger = StaticUILog.getThreadLocalLogger();
+        if (logger != nullptr)
+            return *logger;
+
+        logger = StaticUILog.getLogger();
+        return logger ? *logger
+            : *static_cast<GenericLogger *>(
+                &GenericLogger::get(StaticUILog.getInited() ? StaticUILog.getName() : std::string()));
+    }
+
+    } // namespace
+
+    bool isLogUIEnabled()
+    {
+        return (StaticUILog.getThreadLocalLogger() != nullptr) ||
+               (StaticUILog.getLogger() != nullptr);
+    }
+
+    void logUI(Level l, const std::string &text)
+    {
+        if (isLogUIEnabled())
+            Log::loggerUI().doLog(l, text);
+    }
+
+    bool isLogUIMerged()
+    {
+        return StaticUILog.getMergeCmd();
+    }
+
+    bool isLogUITimeEnd()
+    {
+        return StaticUILog.getLogTimeEndOfMergedCmd();
+    }
+
+    void setUILogMergeInfo(bool mergeCmd, bool logTimeEndOfMergedCmd)
+    {
+        StaticUILog.setLogMergeInfo(mergeCmd, logTimeEndOfMergedCmd);
     }
 
     bool isEnabled(Level l, Area a)
@@ -689,21 +752,43 @@ namespace Log
 
     void shutdown()
     {
-        if (Util::isMobileApp())
+        if constexpr (Util::isMobileApp())
             return;
         if (!Util::isKitInProcess())
+        {
+#ifndef NDEBUG
+            OwnThreadIdIndex = NextThreadIdIndex++;
+            ThreadIdArray[OwnThreadIdIndex] = Util::getThreadId();
+            const auto currentThreadId = Util::getThreadId();
+            for (int i = 0; i < NextThreadIdIndex; ++i)
+            {
+                if (ThreadIdArray[i] && ThreadIdArray[i] != currentThreadId)
+                {
+                    LOG_ERR(">>> Thread " << ThreadIdArray[i]
+                                          << " is still running while shutting down logging");
+                }
+            }
+
+            // Flush before we assert (no assertion in non-debug builds).
+            flush();
+            ::fflush(nullptr); // Flush all open output streams.
+#endif // !NDEBUG
+
             assert(ThreadLocalBufferCount <= 1 &&
                    "Unstopped threads may have unflushed buffered log entries");
+        }
 
         // continue logging shutdown on mobile
         IsShutdown = !Util::isMobileApp();
 
         Poco::Logger::shutdown();
 
-        // Flush
-        fflush(stdout);
-        fflush(stderr);
+        flush();
+
+        ::fflush(nullptr); // Flush all open output streams.
     }
+
+    void flush() { BufferedConsoleChannel::flush(); }
 
     void setThreadLocalLogLevel(const std::string& logLevel)
     {
@@ -712,7 +797,7 @@ namespace Log
             return;
         }
 
-        if (Util::isFuzzing())
+        if constexpr (Util::isFuzzing())
         {
             // loggingleveloverride tries to increase log level, ignore.
             return;
@@ -776,19 +861,20 @@ namespace Log
         Log::logger().doLog(l, text);
     }
 
-    const std::string levelList[] = {"none", "fatal", "critical", "error", "warning", "notice", "information", "debug", "trace"};
+    static const std::string levelList[] = { "none",        "fatal",   "critical",
+                                             "error",       "warning", "notice",
+                                             "information", "debug",   "trace" };
 
-    std::string getLogLevelName(const std::string &channel)
+    const std::string& getLogLevelName(const std::string& channel)
     {
-        unsigned int wsdLogLevel =
-            Log::logger().get(channel).getLevel();
+        const int wsdLogLevel = GenericLogger::get(channel).getLevel();
         return levelList[wsdLogLevel];
     }
 
     void setLogLevelByName(const std::string &channel,
                            const std::string &level)
     {
-        if (Util::isFuzzing())
+        if constexpr (Util::isFuzzing())
         {
             // update-log-levels tries to increase log level, ignore.
             return;
@@ -799,12 +885,12 @@ namespace Log
 
         // Get the list of channels..
         std::vector<std::string> nameList;
-        Log::logger().names(nameList);
+        GenericLogger::names(nameList);
 
         if (std::find(std::begin(levelList), std::end(levelList), level) == std::end(levelList))
             lvl = "debug";
 
-        Log::logger().get(channel).setLevel(lvl);
+        GenericLogger::get(channel).setLevel(lvl);
     }
 
 } // namespace Log

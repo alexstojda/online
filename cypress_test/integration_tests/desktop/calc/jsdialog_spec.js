@@ -2,11 +2,13 @@
 
 /* global describe it cy require expect beforeEach */
 var helper = require('../../common/helper');
+var desktopHelper = require('../../common/desktop_helper');
 
 describe(['tagdesktop'], 'JSDialog unit test', function() {
 
 	beforeEach(function() {
 		helper.setupAndLoadDocument('calc/help_dialog.ods');
+		cy.viewport(1920,1080);
 	});
 
 	it('JSDialog popup dialog', function() {
@@ -36,18 +38,84 @@ describe(['tagdesktop'], 'JSDialog unit test', function() {
 			});
 	});
 
+	it('JSDialog child focus', function() {
+		cy.getFrameWindow().then(function(win) {
+			var smile = win.document.querySelector('meta[name="previewSmile"]').content;
+			var jsonDialog = {
+				id: 'testfocus',
+				type: 'dialog',
+				text: 'Focus test',
+				children: [{
+					id: 'tabcontrol',
+					type: 'tabcontrol',
+					selected: 1,
+					tabs: [{
+						text: 'Test Focus',
+						id: 1,
+						name: 'testfocus'}],
+					children: [{
+						id: 'tabpage',
+						type: 'tabpage',
+						enabled: true,
+						text: 'Focus',
+						children: [{
+							id: 'container',
+							type: 'container',
+							children: [{
+								id: 'colorsetwin',
+								type: 'scrollwindow',
+								children: [{
+									id: 'colorset',
+									type: 'drawingarea',
+									canFocus: true,
+									enabled: true,
+									imagewidth: 216,
+									imageheight: 180,
+									image: smile }]}, {
+								id: 'testcheck',
+								type: 'checkbox',
+								text: 'checkbox' }]
+						}]
+					}]
+				}]};
+
+			var dialog = win.L.control.jsDialog();
+			dialog.onJSDialog({data: jsonDialog, callback: function() {}});
+			expect(Object.keys(dialog.dialogs)).to.have.length(1);
+		});
+
+		cy.cGet('#tabcontrol').should('be.visible');
+
+		cy.getFrameWindow().then(function(win) {
+			var dialog = win.L.control.jsDialog();
+			var current = win.document.activeElement;
+			expect(current.id).to.equal('tabcontrol-1');
+
+			cy.realPress('Tab').then(function() {
+				var next = win.document.activeElement;
+				expect(next.id).to.equal('colorset-img');
+				dialog.closeAll(false);
+			});
+		});
+	});
+
+	it('Open hybrid help dialog', function() {
+		cy.cGet('#Help-tab-label').click();
+		cy.cGet('.unoOnlineHelp').click();
+		cy.cGet('#online-help-content').should('exist');
+	});
+
 	it('JSDialog dropdown', function() {
-		// Open conditional format menu
-		cy.cGet('#toolbar-up .ui-scroll-right').click();
-		cy.cGet('#toolbar-up .ui-scroll-right').click();
-		cy.cGet('#toolbar-up #home-conditional-format-menu-button').click();
+		cy.cGet('#toolbar-up #Home .unoConditionalFormatMenu:visible').click();
+
+		desktopHelper.getDropdown('home-conditional-format-menu').should('exist');
 
 		// Click on overlay to close
 		cy.cGet('.jsdialog-overlay').click();
 
 		// Dropdown should be closed
 		cy.cGet('.jsdialog-overlay').should('not.exist');
-		cy.cGet('#home-conditional-format-menu-dropdown').should('not.exist');
+		desktopHelper.getDropdown('home-conditional-format-menu').should('not.exist');
 	});
 
 	it('JSDialog check enable edit input', function() {
@@ -57,10 +125,45 @@ describe(['tagdesktop'], 'JSDialog unit test', function() {
 		// open "PDF options JsDialog"
 		cy.cGet('.exportpdf-submenu-icon').click();
 
-		// check water marker checkbox to enable water mark entry input
+		// check watermark checkbox to enable watermark entry input
 		cy.cGet('#watermark-input').check();
-		// after enable eatermark checkbox the input filed beside should also be in enabled state
+		// after enable watermark checkbox the input field beside should also be in enabled state
 		cy.cGet('#watermarkentry-input').should('not.be.disabled');
 
+	});
+
+	it('JSDialog check data validity options', function() {
+		cy.cGet('#Data-tab-label').click();
+		cy.cGet('.unoValidation').click();
+
+		// On changing options other fields should toggle enable and disable
+		cy.cGet('#data-input').should('be.disabled');
+		cy.cGet('#allow-input').select("1");
+
+		cy.cGet('#data-input').should('not.be.disabled');
+	});
+
+	it('QuerySelector Syntax error', function(){
+
+		cy.getFrameWindow().then(function(win) {
+			cy.spy(win.console, 'error').as('consoleError');
+		})
+
+		cy.cGet('#Format-tab-label').click();
+		// FIXME: below button has class with "." inside, best to rework it
+		cy.cGet('#Format [id^="format-style-dialog"]:visible button').click();
+		cy.cGet('#filter-input').select('4');
+		cy.wait(500);
+		cy.cGet('#flatview .ui-treeview-entry').rightclick();
+		cy.getFrameWindow().then(function (win) {
+			cy.get('@consoleError').then(function (spy) {
+				var relevantErrors = spy.getCalls().filter(function (call) {
+					var error = String(call.args[0]);
+					// Ignore A11yValidator exceptions
+					return !error.includes(win.app.A11yValidatorException.PREFIX);
+				});
+				expect(relevantErrors.length).to.equal(0);
+			});
+		});
 	});
 });

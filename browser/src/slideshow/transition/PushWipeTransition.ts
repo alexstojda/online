@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -12,13 +14,15 @@ declare var SlideShow: any;
 
 function PushWipeTransition(transitionParameters: TransitionParameters) {
 	const transitionSubType =
-		stringToTransitionSubTypeMap[
-			transitionParameters.slideInfo.transitionSubtype
-		];
-	if (transitionSubType == TransitionSubType.FROMTOP) {
-		return new SlideShow.PushTransition(transitionParameters);
-	} else {
+		transitionParameters.transitionFilterInfo.transitionSubtype;
+
+	if (
+		transitionSubType == TransitionSubType.COMBHORIZONTAL ||
+		transitionSubType == TransitionSubType.COMBVERTICAL
+	) {
 		return new SlideShow.CombTransition(transitionParameters);
+	} else {
+		return new SlideShow.PushTransition(transitionParameters);
 	}
 }
 

@@ -11,12 +11,14 @@
 
 #pragma once
 
+#include <COOLWSD.hpp>
+#include <ConfigUtil.hpp>
+#include <HttpRequest.hpp>
+#include <Poco/Net/PartHandler.h>
+#include <Socket.hpp>
+
 #include <string>
 #include <unordered_map>
-
-#include <HttpRequest.hpp>
-#include <Socket.hpp>
-#include <COOLWSD.hpp>
 
 class RequestDetails;
 
@@ -54,8 +56,8 @@ public:
     std::string substitute(const std::unordered_map<std::string, std::string>& values);
 
 private:
-    const std::string _filename; //< Filename on disk, with extension.
-    const std::size_t _size; //< Number of bytes in original file.
+    const std::string _filename; ///< Filename on disk, with extension.
+    const std::size_t _size; ///< Number of bytes in original file.
     /// The segments of the file in <IsVariable, Data> pairs.
     std::vector<std::pair<SegmentType, std::string>> _segments;
 };
@@ -89,10 +91,14 @@ public:
     public:
         ResourceAccessDetails() = default;
 
-        ResourceAccessDetails(std::string wopiSrc, std::string accessToken, std::string permission)
+        ResourceAccessDetails(std::string wopiSrc, std::string accessToken,
+                              std::string noAuthHeader,
+                              std::string permission, std::string wopiConfigId)
             : _wopiSrc(std::move(wopiSrc))
             , _accessToken(std::move(accessToken))
+            , _noAuthHeader(std::move(noAuthHeader))
             , _permission(std::move(permission))
+            , _wopiConfigId(std::move(wopiConfigId))
         {
         }
 
@@ -100,12 +106,18 @@ public:
 
         const std::string wopiSrc() const { return _wopiSrc; }
         const std::string accessToken() const { return _accessToken; }
+        const std::string noAuthHeader() const { return _noAuthHeader; }
         const std::string permission() const { return _permission; }
+        // only exists in debugging mode, so built-in wopi debuging server
+        // can support multiple 'shared' configs depending on configid=something
+        const std::string wopiConfigId() const { return _wopiConfigId; }
 
     private:
         std::string _wopiSrc;
         std::string _accessToken;
+        std::string _noAuthHeader;
         std::string _permission;
+        std::string _wopiConfigId;
     };
 
 private:
@@ -114,20 +126,52 @@ private:
     static std::string getRequestPathname(const Poco::Net::HTTPRequest& request,
                                           const RequestDetails& requestDetails);
 
-    static ResourceAccessDetails preprocessFile(const Poco::Net::HTTPRequest& request,
-                                                http::Response& httpResponse,
-                                                const RequestDetails& requestDetails,
-                                                Poco::MemoryInputStream& message,
-                                                const std::shared_ptr<StreamSocket>& socket);
-    static void preprocessWelcomeFile(const Poco::Net::HTTPRequest& request,
-                                      http::Response& httpResponse,
-                                      const RequestDetails& requestDetails,
-                                      Poco::MemoryInputStream& message,
-                                      const std::shared_ptr<StreamSocket>& socket);
-    static void preprocessAdminFile(const Poco::Net::HTTPRequest& request,
-                                    http::Response& httpResponse,
-                                    const RequestDetails& requestDetails,
-                                    const std::shared_ptr<StreamSocket>& socket);
+    ResourceAccessDetails preprocessFile(const Poco::Net::HTTPRequest& request,
+                                         http::Response& httpResponse,
+                                         const RequestDetails& requestDetails,
+                                         std::istream& message,
+                                         const std::shared_ptr<StreamSocket>& socket);
+    void preprocessWelcomeFile(const Poco::Net::HTTPRequest& request,
+                               http::Response& httpResponse,
+                               const RequestDetails& requestDetails,
+                               std::istream& message,
+                               const std::shared_ptr<StreamSocket>& socket);
+
+    void replaceServiceRoot(const Poco::Net::HTTPRequest& request, http::Response& httpResponse,
+                            const RequestDetails& requestDetails,
+                            const std::shared_ptr<StreamSocket>& socket);
+
+    static void uploadFileToIntegrator(const Poco::Net::HTTPRequest& request,
+                                       std::istream& message,
+                                       const std::shared_ptr<StreamSocket>& socket);
+
+    static void fetchWopiSettingConfigs(const Poco::Net::HTTPRequest& request,
+                                        std::istream& message,
+                                        const std::shared_ptr<StreamSocket>& socket);
+
+    static void fetchSettingFile(const Poco::Net::HTTPRequest& request,
+                                   std::istream& message,
+                                   const std::shared_ptr<StreamSocket>& socket);
+
+    static void deleteWopiSettingConfigs(const Poco::Net::HTTPRequest& request,
+                                         std::istream& message,
+                                         const std::shared_ptr<StreamSocket>& socket);
+
+    void preprocessAdminFile(const Poco::Net::HTTPRequest& request,
+                             http::Response& httpResponse,
+                             const RequestDetails& requestDetails,
+                             const std::shared_ptr<StreamSocket>& socket);
+
+    static void updateThemeResources(std::string& fileContent,
+                                    const std::string& responseRoot,
+                                    const std::string& theme,
+                                    const Poco::Util::AbstractConfiguration& config);
+
+    void preprocessIntegratorAdminFile(const Poco::Net::HTTPRequest& request,
+                                       http::Response& httpResponse,
+                                       const RequestDetails& requestDetails,
+                                       std::istream& message,
+                                       const std::shared_ptr<StreamSocket>& socket);
 
     /// Construct a JSON to be accepted by the cool.html from a list like
     /// UIMode=classic;TextRuler=true;PresentationStatusbar=false
@@ -154,29 +198,30 @@ public:
     static bool authenticateAdmin(const Poco::Net::HTTPBasicCredentials& credentials,
                                   http::Response& response, std::string& jwtToken);
 
-    static void handleRequest(const Poco::Net::HTTPRequest& request,
-                              const RequestDetails& requestDetails,
-                              Poco::MemoryInputStream& message,
-                              const std::shared_ptr<StreamSocket>& socket,
-                              ResourceAccessDetails& accessDetails);
+    bool handleRequest(const Poco::Net::HTTPRequest& request,
+                       const RequestDetails& requestDetails,
+                       std::istream& message,
+                       const std::shared_ptr<StreamSocket>& socket,
+                       ResourceAccessDetails& accessDetails);
 
-    static void readDirToHash(const std::string &basePath, const std::string &path, const std::string &prefix = std::string());
+    void readDirToHash(const std::string &basePath, const std::string &path, const std::string &prefix = std::string());
 
-    static const std::string *getCompressedFile(const std::string &path);
+    const std::string *getCompressedFile(const std::string &path);
 
-    static const std::string *getUncompressedFile(const std::string &path);
+    const std::string *getUncompressedFile(const std::string &path);
 
     /// If configured and necessary, sets the HSTS headers.
     static void hstsHeaders([[maybe_unused]] http::Response& response)
     {
         // HSTS hardening. Disabled in debug builds.
 #if !ENABLE_DEBUG
-        if (COOLWSD::isSSLEnabled() || COOLWSD::isSSLTermination())
+        if (ConfigUtil::isSslEnabled() || ConfigUtil::isSSLTermination())
         {
-            if (COOLWSD::getConfigValue<bool>("ssl.sts.enabled", false))
+            if (ConfigUtil::getConfigValue<bool>("ssl.sts.enabled", false))
             {
+                // Only for release, which doesn't support tests. No CONFIG_STATIC, therefore.
                 static const auto maxAge =
-                    COOLWSD::getConfigValue<int>("ssl.sts.max_age", 31536000); // Default 1 year.
+                    ConfigUtil::getConfigValue<int>("ssl.sts.max_age", 31536000); // Default 1 year.
                 response.add("Strict-Transport-Security",
                              "max-age=" + std::to_string(maxAge) + "; includeSubDomains");
             }
@@ -184,12 +229,26 @@ public:
 #endif
     }
 
+    void dumpState(std::ostream& os);
+
 private:
-    static std::map<std::string, std::pair<std::string, std::string>> FileHash;
-    static void sendError(http::StatusCode errorCode, const Poco::Net::HTTPRequest& request,
+    std::map<std::string, std::pair<std::string, std::string>> FileHash;
+    static void sendError(http::StatusCode errorCode, const std::string& requestPath,
                           const std::shared_ptr<StreamSocket>& socket,
                           const std::string& shortMessage, const std::string& longMessage,
                           const std::string& extraHeader = std::string());
+};
+
+class FilePartHandler : public Poco::Net::PartHandler
+{
+public:
+    void handlePart(const Poco::Net::MessageHeader& header, std::istream& stream) override;
+    const std::string& getFileName() const { return _fileName; }
+    const std::string& getFileContent() const { return _fileContent; }
+
+private:
+    std::string _fileName;
+    std::string _fileContent;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

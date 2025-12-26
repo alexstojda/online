@@ -12,6 +12,11 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 		if (Cypress.env('INTEGRATION') === 'nextcloud') {
 			desktopHelper.showStatusBarIfHidden();
 		}
+
+		desktopHelper.shouldHaveZoomLevel('100');
+
+		cy.cGet(helper.addressInputSelector).should('have.value', 'A3');
+		cy.wait(100);
 	});
 
 	it('Selected sheet.', function() {
@@ -24,26 +29,36 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 
 	it('Multiple cell selection.', function() {
 		cy.cGet('#RowColSelCount').should('have.text', 'Select multiple cells');
-		helper.typeIntoInputField('input#addressInput-input', 'A1:A2');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A1:A2');
 		cy.cGet('#RowColSelCount').should('have.text', 'Selected: 2 rows, 1 column');
-		helper.typeIntoInputField('input#addressInput-input', 'A1');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A1');
 		cy.cGet('#RowColSelCount').should('have.text', 'Select multiple cells');
 	});
 
 	it('Text editing mode.', function() {
-		cy.cGet('#InsertMode').should('have.text', 'Insert mode: inactive');
+		cy.cGet('#InsertMode').should('not.be.visible');
 		calcHelper.dblClickOnFirstCell();
 		cy.cGet('#InsertMode').should('have.text', 'Insert');
 		calcHelper.typeIntoFormulabar('{enter}');
-		cy.cGet('#InsertMode').should('have.text', 'Insert mode: inactive');
+		cy.cGet('#InsertMode').should('not.be.visible');
 	});
 
 	it('Selected data summary.', function() {
+		// Ensure the viewport is large enough to show the whole status bar
+		// In Calc #StateTableCellMenu has a high data-priority
+		// and will be hidden if the status bar doesn't have enough space
+		cy.viewport(1280, 720);
 		cy.cGet('#StateTableCell').should('have.text', 'Average: ; Sum: 0');
-		helper.typeIntoInputField('input#addressInput-input', 'A1:A2');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A1:A2');
 		cy.cGet('#StateTableCell').should('have.text', 'Average: 15.5; Sum: 31');
-		helper.typeIntoInputField('input#addressInput-input', 'A1');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A1');
 		cy.cGet('#StateTableCell').should('have.text', 'Average: 10; Sum: 10');
+
+		desktopHelper.makeZoomItemsVisible();
+		cy.cGet('#StateTableCellMenu .unolabel').contains('Average; Sum');
+		cy.cGet('#StateTableCellMenu .arrowbackground').click();
+		cy.cGet('.jsdialog-overlay').should('exist');
+		cy.cGet('.ui-combobox-entry.selected').contains(/Average|Sum/g);
 	});
 
 	it('Change zoom level.', function() {
@@ -58,7 +73,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 	it('Select zoom level.', function() {
 		desktopHelper.resetZoomLevel();
 		desktopHelper.shouldHaveZoomLevel('100');
-		desktopHelper.selectZoomLevel('280');
+		desktopHelper.selectZoomLevel('280', false);
 		desktopHelper.shouldHaveZoomLevel('280');
 	});
 });

@@ -2,7 +2,8 @@ MAKEFLAGS = --no-builtin-rules
 CTAGS = ctags
 BUILT_SOURCES = node_modules
 
-L10N_PO = $(wildcard $(srcdir)/po/*.po)
+L10N_PO = $(if $(filter true,$(ENABLE_ANDROIDAPP)),$(filter-out %-ca-valencia.po,$(wildcard $(srcdir)/po/*.po)),$(wildcard $(srcdir)/po/*.po))
+# See https://issuetracker.google.com/issues/293294923 for why we need to filter out ca-valencian
 IS_BUNDLE = $(if $(filter true,$(ENABLE_BUNDLE)),true,)
 IS_SEPARATE = $(if $(filter false,$(ENABLE_BUNDLE)),true,)
 
@@ -12,29 +13,63 @@ TYPESCRIPT_JS_DIR = $(builddir)/typescript_js
 export NODE_PATH=$(abs_builddir)/node_module
 
 if !ENABLE_MOBILEAPP
-L10N_JSON = $(patsubst $(srcdir)/po/%.po,$(DIST_FOLDER)/l10n/%.json,$(L10N_PO))
+L10N_JSON = $(patsubst $(srcdir)/po/help-%.po,$(DIST_FOLDER)/l10n/help-%.json,$(L10N_PO))
+L10N_JSON += $(patsubst $(srcdir)/po/ui-%.po,$(DIST_FOLDER)/l10n/ui-%.json,$(L10N_PO))
 else
 L10N_IOS_ALL_JS = $(DIST_FOLDER)/l10n-all.js
 L10N_JSON = $(L10N_IOS_ALL_JS)
 
-$(L10N_IOS_ALL_JS) : $(wildcard $(srcdir)/po/ui-*.po) $(shell find $(srcdir)/l10n -name '*.*') $(srcdir)/util/create-l10n-all-js.pl
-	for F in $(wildcard $(srcdir)/po/ui-*.po); do \
-		$(srcdir)/util/po2json.py $$F -o $$F.json; \
-	done
+$(L10N_IOS_ALL_JS) : $(wildcard $(srcdir)/po/ui-*.po) $(wildcard $(srcdir)/po/help-*.po) $(shell find $(srcdir)/l10n -name '*.*') $(srcdir)/util/create-l10n-all-js.pl
+	find $(srcdir)/po -name 'ui-*.po' -exec $(srcdir)/util/po2json.py {} -o {}.json \;
+	find $(srcdir)/po -name 'help-*.po' -exec $(srcdir)/util/po2json.py {} -o {}.json \;
 	@mkdir -p $(dir $@)
 	perl $(srcdir)/util/create-l10n-all-js.pl >$@
-	for F in $(wildcard $(srcdir)/po/ui-*.po); do \
-		rm $$F.json; \
-	done
+	find $(srcdir)/po -name 'ui-*.po.json' -delete
+	find $(srcdir)/po -name 'help-*.po.json' -delete
 endif
 
+QUIET_TSC = $(QUIET_TSC_$(V))
+QUIET_TSC_ = $(QUIET_TSC_$(AM_DEFAULT_VERBOSITY))
+QUIET_TSC_0 = @echo "  TSC     " $@;
+
+QUIET_ESLINT = $(QUIET_ESLINT_$(V))
+QUIET_ESLINT_ = $(QUIET_ESLINT_$(AM_DEFAULT_VERBOSITY))
+QUIET_ESLINT_0 = @echo "  ESLINT  " $@;
+
+QUIET_PRETTIER = $(QUIET_PRETTIER_$(V))
+QUIET_PRETTIER_ = $(QUIET_PRETTIER_$(AM_DEFAULT_VERBOSITY))
+QUIET_PRETTIER_0 = @echo "  PRETTIER" $@;
+
+QUIET_M4 = $(QUIET_M4_$(V))
+QUIET_M4_ = $(QUIET_M4_$(AM_DEFAULT_VERBOSITY))
+QUIET_M4_0 = @echo "  M4      " $@;
+
+QUIET_ECHO = $(QUIET_ECHO_$(V))
+QUIET_ECHO_ = $(QUIET_ECHO_$(AM_DEFAULT_VERBOSITY))
+QUIET_ECHO_0 = @echo "  ECHO    " $@;
+
+QUIET_CMP = $(QUIET_CMP_$(V))
+QUIET_CMP_ = $(QUIET_CMP_$(AM_DEFAULT_VERBOSITY))
+QUIET_CMP_0 = @echo "  CMP     " $@;
+
+QUIET_JSCPCD = $(QUIET_JSCPCD_$(V))
+QUIET_JSCPCD_ = $(QUIET_JSCPCD_$(AM_DEFAULT_VERBOSITY))
+QUIET_JSCPCD_0 = @echo "  JSCPCD  " $@;
+
+QUIET_STYLELINT = $(QUIET_STYLELINT_$(V))
+QUIET_STYLELINT_ = $(QUIET_STYLELINT_$(AM_DEFAULT_VERBOSITY))
+QUIET_STYLELINT_0 = @echo "  STYLELINT" $@;
+
+QUIET_UNOCOMMANDS = $(QUIET_UNOCOMMANDS_$(V))
+QUIET_UNOCOMMANDS_ = $(QUIET_UNOCOMMANDS_$(AM_DEFAULT_VERBOSITY))
+QUIET_UNOCOMMANDS_0 = @echo "  UNOCOMMANDS " $@;
+
 MOCHA_DIR = $(srcdir)/mocha_tests
-MOCHA_TS_FILES = $(wildcard $(MOCHA_DIR)/*.ts)
-MOCHA_TS_JS_FILES := $(MOCHA_TS_FILES:.ts=.js)
+MOCHA_JS_DIR = $(MOCHA_DIR)/workdir
 # tsc can report a failure, but still create a .js and a second make attempt will succeed,
 # so if this returns an error then delete the target
-$(MOCHA_TS_JS_FILES): %.js: %.ts
-	$(builddir)/node_modules/typescript/bin/tsc $< --outfile $@ --module none --lib dom,es2016 --target ES5 || (rm -f $@ && false)
+$(MOCHA_JS_DIR)/main.js: $(MOCHA_DIR)/main.ts
+	$(QUIET_TSC) $(builddir)/node_modules/typescript/bin/tsc $< --outfile $@ --module none --lib dom,es2016 --target ES5 --downlevelIteration || (rm -f $@ && false)
 
 JQUERY_LIGHTNESS_IMAGE_PATH = $(srcdir)/images/jquery-ui-lightness
 JQUERY_LIGHTNESS_IMAGES = $(wildcard $(JQUERY_LIGHTNESS_IMAGE_PATH)/*.png)
@@ -44,11 +79,11 @@ JQUERY_MINIFIED_IMAGE_PATH = node_modules/jquery-ui/themes/base/images
 JQUERY_MINIFIED_IMAGES = $(wildcard $(JQUERY_MINIFIED_IMAGE_PATH)/*.png)
 JQUERY_MINIFIED_DIST_IMAGES = $(patsubst $(JQUERY_MINIFIED_IMAGE_PATH)/%.png,$(DIST_FOLDER)/images/%.png,$(JQUERY_MINIFIED_IMAGES))
 
-COOL_IMAGES_SRC = $(shell find $(srcdir)/images -name '*.*')
+COOL_IMAGES_SRC = $(shell find $(srcdir)/images \( -name '*.png' -o -name '*.svg' -o -name '*.gif' \))
 COOL_IMAGES_DST = $(patsubst $(srcdir)/%,$(DIST_FOLDER)/%,$(COOL_IMAGES_SRC))
 COOL_IMAGES_CUSTOM_SRC = $(shell if test -n "$(CUSTOM_ICONS_DIRECTORY)"; then find $(CUSTOM_ICONS_DIRECTORY) -name '*.*'; fi)
 COOL_IMAGES_CUSTOM_DST = $(patsubst $(CUSTOM_ICONS_DIRECTORY)/%,$(DIST_FOLDER)/images/%,$(COOL_IMAGES_CUSTOM_SRC))
-COOL_L10N_SRC = $(shell find $(srcdir)/l10n -name '*.*')
+COOL_L10N_SRC = $(shell find $(srcdir)/l10n -name '*.json')
 if !ENABLE_MOBILEAPP
 COOL_L10N_DST =  $(patsubst $(srcdir)/l10n/%,$(DIST_FOLDER)/l10n/%,$(COOL_L10N_SRC))
 endif
@@ -93,8 +128,11 @@ define npm_source
 	done
 endef
 
-COOL_ADMIN_TS =\
-	admin/src/ModalDialogCreator.ts
+COOL_ADMIN_TS = \
+	admin/src/ModalDialogCreator.ts \
+	admin/src/integrator/AdminIntegratorSettings.ts \
+	admin/src/integrator/WordBook.ts \
+	admin/src/integrator/Xcu.ts
 
 COOL_ADMIN_TS_JS = $(patsubst %.ts,$(TYPESCRIPT_JS_DIR)/%.js,$(COOL_ADMIN_TS))
 
@@ -113,6 +151,7 @@ COOL_ADMIN_JS =\
 
 NODE_MODULES_SRC =\
 	autolinker@3.14.1 \
+	dompurify@3.2.4 \
 	json-js@1.1.2 \
 	select2@4.0.13 \
 	l10n-for-node@0.0.1 \
@@ -142,13 +181,16 @@ COOL_CSS_LST =\
 	$(srcdir)/css/menubar.css \
 	$(srcdir)/css/mobilewizard.css \
 	$(srcdir)/css/jsdialogs.css \
+	$(srcdir)/css/helpdialog.css \
 	$(srcdir)/css/btns.css \
 	$(srcdir)/css/notebookbar.css \
 	$(srcdir)/css/jssidebar.css \
 	$(srcdir)/css/override-smartmenus.css \
 	$(srcdir)/css/jquery-ui-lightness.css \
 	$(srcdir)/css/infobar.css \
-	$(srcdir)/css/tooltip.css
+	$(srcdir)/css/tooltip.css \
+	$(srcdir)/css/progressbar.css \
+	$(srcdir)/css/settings.css
 
 COOL_CSS = $(filter %,$(COOL_CSS_LST))
 
@@ -157,15 +199,30 @@ COOL_CSS_M4 = $(strip $(foreach file,$(COOL_CSS),$(notdir $(file))))
 
 $(eval $(call file_targets,$(COOL_CSS)))
 
+WORKER_NODE_MODULES_JS =\
+	node_modules/fzstd/umd/index.js
+
+$(DIST_FOLDER)/src/layer/tile/TileWorker.js: \
+	$(srcdir)/src/layer/tile/CanvasTileWorker.js.m4 \
+	$(srcdir)/src/layer/tile/CanvasTileWorkerSrc.js \
+	$(WORKER_NODE_MODULES_JS)
+
+	$(QUIET_M4) m4 -PE -DDEBUG=$(ENABLE_DEBUG) \
+		-DNODE_MODULES_JS=$(subst $(SPACE),$(COMMA),$(WORKER_NODE_MODULES_JS)) \
+		-DWORKER_JS=$(srcdir)/src/layer/tile/CanvasTileWorkerSrc.js \
+		$(srcdir)/src/layer/tile/CanvasTileWorker.js.m4 > $@
+
 NODE_MODULES_JS =\
 	$(if $(IS_SEPARATE),node_modules/hammerjs/hammer.js,node_modules/hammerjs/hammer.min.js) \
+	node_modules/dompurify/dist/purify.min.js \
 	node_modules/jquery/dist/jquery.js \
 	node_modules/jquery-mousewheel/jquery.mousewheel.js \
 	node_modules/jquery-contextmenu/dist/jquery.contextMenu.js \
 	node_modules/jquery-ui/dist/jquery-ui.js \
-	$(shell find node_modules/jquery-ui/ui/i18n -name '*.js') \
+	$(shell find node_modules/jquery-ui/ui/i18n -name '*.js' 2>/dev/null) \
 	node_modules/smartmenus/dist/jquery.smartmenus.js \
-	node_modules/fzstd/umd/index.js
+	node_modules/fzstd/umd/index.js \
+	node_modules/gl-matrix/gl-matrix-min.js
 
 COOL_LIBS_JS =\
 	ResizeObserverPolyfill.js \
@@ -188,24 +245,51 @@ COOL_LIBS_JS_DST = $(patsubst %.js,$(DIST_FOLDER)/%.js,$(COOL_LIBS_JS))
 # this list includes both Javascript and Typescript generated files
 # in a rather precise order.
 COOL_JS_LST =\
-	src/docstate.js \
+	src/app/DocUtil.ts \
+	src/app/LocaleService.ts \
+	src/app/LayoutingService.ts \
+	src/app/ServerConnectionService.ts \
+	src/docstate.ts \
 	src/docstatefunctions.js \
 	src/docdispatcher.ts \
 	src/app/DocEvents.ts \
+	src/core/geometry.ts \
+	src/app/GraphicSelectionMiddleware.ts \
+	src/app/TextSelectionMiddleware.ts \
+	src/app/CellSelectionMarkerMiddleware.ts \
+	src/app/TableMiddleware.ts \
+	src/app/ImpressSelectionMiddleware.ts \
+	src/app/ViewLayout.ts \
+	src/app/ViewLayoutWriter.ts \
+	src/app/ViewLayoutMultiPage.ts \
+	src/app/DocumentBase.ts \
+	src/app/DocumentView.ts \
+	src/app/TilesMiddleware.ts \
+	src/app/SlideshowMiddleware.ts \
+	src/app/SearchService.ts \
+	src/app/BaseClass.ts \
+	src/app/Events.ts \
+	src/app/Rectangle.ts \
+	src/app/Util.ts \
+	src/app/LOUtil.ts \
+	src/app/IconUtil.ts \
+	src/app/iface/DocLayer.Interface.ts \
+	src/app/iface/Map.Interface.ts \
+	src/app/iface/Control.Interface.ts \
+	src/app/Log.ts \
+	src/app/Debug.ts \
+	src/app/A11yValidator.ts \
+	src/app/SocketBase.ts \
+	src/app/TracingEvents.ts \
+	src/app/ServerCommand.ts \
 	src/Leaflet.js \
 	src/errormessages.js \
 	src/unocommands.js \
 	src/UNO/Key.js \
-	src/core/Log.js \
 	src/core/Util.js \
-	src/core/LOUtil.js \
-	src/core/geometry.ts \
-	src/core/Rectangle.ts \
 	src/core/Class.js \
 	src/core/Events.js \
 	src/core/Socket.js \
-	src/core/Matrix.js \
-	src/core/Debug.js \
 	src/geometry/Point.ts \
 	src/geometry/Bounds.ts \
 	src/geometry/Transformation.ts \
@@ -220,18 +304,28 @@ COOL_JS_LST =\
 	src/layer/tile/SheetSwitch.ts \
 	src/layer/Layer.js \
 	src/layer/tile/SheetGeometry.ts \
-	src/layer/tile/Premult.ts \
+	src/layer/tile/CanvasTileUtils.ts \
 	src/canvas/CanvasSectionProps.js \
 	src/canvas/CanvasSectionContainer.ts \
 	src/canvas/CanvasSectionObject.ts \
+	src/canvas/sections/HTMLObjectSection.ts \
+	src/canvas/sections/CommentMarkerSubSection.ts \
 	src/canvas/sections/CommentSection.ts \
 	src/canvas/sections/CommentListSection.ts \
 	src/canvas/sections/CalcGridSection.ts \
 	src/canvas/sections/SplitSection.ts \
+	src/canvas/sections/SplitterLinesSection.ts \
 	src/canvas/sections/PixelGridSection.ts \
+	src/canvas/sections/DebugOverlaySection.ts \
+	src/canvas/sections/PreloadMapSection.ts \
 	src/canvas/sections/TilesSection.ts \
-	src/canvas/sections/AutoFillMarkerSection.ts \
-	src/canvas/sections/HTMLObjectSection.ts \
+	src/canvas/sections/AutoFillBaseSection.ts \
+	src/canvas/sections/CellFillMarkerSection.ts \
+	src/canvas/sections/ImpressSelectionRectangle.ts \
+	src/canvas/sections/TableFillMarkerSection.ts \
+	src/canvas/sections/TableResizeMarkerSection.ts \
+	src/canvas/sections/TableSelectMarkerSection.ts \
+	src/canvas/sections/FocusCellSection.ts \
 	src/canvas/sections/URLPopUpSection.ts \
 	src/canvas/sections/InvalidationRectangleSection.ts \
 	src/canvas/sections/ShapeHandlesSection.ts \
@@ -240,14 +334,17 @@ COOL_JS_LST =\
 	src/canvas/sections/ShapeHandleGluePointSubSection.ts \
 	src/canvas/sections/ShapeHandleAnchorSubSection.ts \
 	src/canvas/sections/ShapeHandleRotationSubSection.ts \
+	src/canvas/sections/ShapeHandleDiagramSubSection.ts \
 	src/canvas/sections/ShapeHandleScalingSubSection.ts \
 	src/canvas/sections/ValidityInputHelpSection.ts \
 	src/canvas/sections/CellCursorSection.ts \
 	src/canvas/sections/CellSelectionHandleSection.ts \
 	src/canvas/sections/CalcValidityDropDownSection.ts \
 	src/canvas/sections/TextSelectionHandleSection.ts \
+	src/canvas/sections/TextSelectionSection.ts \
 	src/canvas/sections/OtherViewGraphicSelectionSection.ts \
 	src/canvas/sections/OtherViewCellCursorSection.ts \
+	src/canvas/sections/FormFieldButton.ts \
 	src/canvas/sections/OtherViewCursorSection.ts \
 	src/layer/vector/CEventsHandler.ts \
 	src/layer/vector/CPointSet.ts \
@@ -257,63 +354,50 @@ COOL_JS_LST =\
 	src/layer/vector/CPolyUtil.ts \
 	src/layer/vector/CPolygon.ts \
 	src/layer/vector/CRectangle.ts \
-	src/layer/vector/CSplitterLine.ts \
 	src/layer/marker/Cursor.ts \
 	src/layer/vector/CanvasOverlay.ts \
 	src/canvas/sections/ScrollSection.ts \
+	src/canvas/sections/MouseControl.ts \
 	src/layer/tile/CanvasTileLayer.js \
 	src/layer/vector/CDarkOverlay.ts \
 	src/layer/SplitPanesContext.ts \
 	src/layer/CalcSplitPanesContext.ts \
-	src/layer/tile/TileLayer.TableOverlay.js \
 	src/layer/tile/WriterTileLayer.js \
 	src/layer/tile/ImpressTileLayer.js \
 	src/layer/tile/CalcTileLayer.js \
 	src/canvas/sections/CursorHeaderSection.ts \
+	src/canvas/sections/CursorHandler.ts \
+	src/canvas/sections/TableInsertMarkerSection.ts \
+	src/canvas/sections/GenericButtonSection.ts \
+	src/canvas/sections/ChartContextButtonSection.ts \
+	src/canvas/sections/DiagramButtonSection.ts \
+	src/canvas/sections/ContentControlDropdownSubSection.ts \
 	src/canvas/sections/ContentControlSection.ts \
 	src/layer/marker/ProgressOverlay.js \
 	src/layer/marker/TextInput.js \
 	src/layer/marker/A11yTextInput.js \
-	src/layer/marker/Icon.js \
-	src/layer/marker/Icon.Default.js \
-	src/layer/marker/Marker.js \
-	src/layer/marker/DivIcon.js \
 	src/layer/LayerGroup.js \
-	src/layer/vector/Renderer.js \
-	src/layer/vector/Path.js \
 	src/geometry/LineUtil.js \
-	src/layer/vector/Polyline.js \
-	src/geometry/PolyUtil.js \
-	src/layer/vector/Polygon.js \
-	src/layer/vector/Rectangle.js \
 	src/core/Handler.js \
-	src/layer/vector/Path.Drag.Transform.js \
-	src/layer/vector/Path.Drag.js \
-	src/layer/vector/Path.Transform.Util.js \
-	src/layer/vector/Canvas.js \
-	src/layer/FormFieldButtonLayer.js \
 	src/dom/DomEvent.js \
 	src/dom/Draggable.js \
 	src/dom/NotebookbarAccessibilityDefinitions.js \
 	src/dom/NotebookbarAccessibility.js \
-	src/map/handler/Map.Drag.js \
 	src/map/handler/Map.Scroll.js \
-	src/map/handler/Map.DoubleClickZoom.js \
 	src/dom/DomEvent.Pointer.js \
-	src/map/handler/Map.TouchGesture.js \
 	src/map/handler/Map.Keyboard.js \
 	src/map/handler/Map.KeyboardShortcuts.ts \
 	src/map/handler/Map.Welcome.js \
 	src/map/handler/Map.Feedback.js \
+	src/map/handler/Map.Settings.ts \
 	src/map/handler/Map.VersionBar.js \
 	src/dom/DomEvent.MultiClick.js \
-	src/map/handler/Map.Mouse.js \
 	src/map/handler/Map.Print.js \
 	src/map/handler/Map.SlideShow.js \
 	src/map/handler/Map.FileInserter.js \
 	src/map/handler/Map.StateChanges.js \
 	src/map/handler/Map.WOPI.js \
-	src/layer/marker/Marker.Drag.js \
+	src/control/jsdialog/Util.UniqueId.ts \
 	src/control/Control.AboutDialog.ts \
 	src/control/Control.Toolbar.js \
 	src/control/Control.Command.js \
@@ -330,7 +414,7 @@ COOL_JS_LST =\
 	src/control/Control.DocumentRepair.js \
 	src/control/Control.DownloadProgress.js \
 	src/control/Control.ContextMenu.js \
-	src/control/Control.Menubar.js \
+	src/control/Control.Menubar.ts \
 	src/control/Control.Tabs.js \
 	src/control/Control.Permission.js \
 	src/control/Control.Selection.js \
@@ -338,44 +422,70 @@ COOL_JS_LST =\
 	src/control/Control.LokDialog.js \
 	src/control/Control.AlertDialog.js \
 	src/control/Control.Tooltip.js \
+	src/control/Control.ESignature.ts \
+	src/control/Control.ESignatureDialog.ts \
 	src/control/ColorPicker.ts \
+	src/control/jsdialog/Util.Shortcuts.ts \
+	src/control/jsdialog/Util.ModelState.ts \
+	src/control/jsdialog/Component.Base.ts \
 	src/control/jsdialog/Component.Toolbar.ts \
 	src/control/jsdialog/Definitions.Menu.ts \
+	src/control/jsdialog/Definitions.DialogModification.ts \
+	src/control/jsdialog/Definitions.WindowId.ts \
+	src/control/jsdialog/Util.Accessibility.ts \
 	src/control/jsdialog/Util.Dropdown.js \
 	src/control/jsdialog/Util.Events.ts \
+	src/control/jsdialog/Util.KeyboardTabNavigation.ts \
+	src/control/jsdialog/Util.KeyboardGridNavigation.ts \
+	src/control/jsdialog/Util.KeyboardListNavigation.ts \
 	src/control/jsdialog/Util.FocusCycle.js \
+	src/control/jsdialog/Util.FormulaBarSelectionHandle.ts \
 	src/control/jsdialog/Util.MessageRouter.ts \
 	src/control/jsdialog/Util.ModalHelper.js \
 	src/control/jsdialog/Util.OnDemandRenderer.ts \
 	src/control/jsdialog/Util.ScrollableBar.ts \
+	src/control/jsdialog/Util.ScrollIntoView.ts \
 	src/control/jsdialog/Util.SnackbarController.ts \
 	src/control/jsdialog/Util.StateChange.ts \
 	src/control/jsdialog/Widget.ButtonBox.ts \
+	src/control/jsdialog/Widget.Checkbox.ts \
 	src/control/jsdialog/Widget.Calendar.js \
+	src/control/jsdialog/Widget.ColorPickerButton.js \
 	src/control/jsdialog/Widget.ColorPicker.ts \
+	src/control/jsdialog/Widget.PageMarginEntry.ts \
+	src/control/jsdialog/Widget.PageSizeEntry.ts \
 	src/control/jsdialog/Widget.Combobox.js \
 	src/control/jsdialog/Widget.Containers.ts \
+	src/control/jsdialog/Widget.DropDown.ts \
 	src/control/jsdialog/Widget.DrawingArea.js \
+	src/control/jsdialog/Widget.Edit.ts \
 	src/control/jsdialog/Widget.FormulabarEdit.js \
 	src/control/jsdialog/Widget.Frame.js \
 	src/control/jsdialog/Widget.HTMLContent.ts \
 	src/control/jsdialog/Widget.IconView.ts \
+	src/control/jsdialog/Widget.NotebookbarIconView.ts \
 	src/control/jsdialog/Widget.MenuButton.js \
 	src/control/jsdialog/Widget.MobileBorderSelector.js \
 	src/control/jsdialog/Widget.MobileTabControl.js \
 	src/control/jsdialog/Widget.MultilineEdit.js \
+	src/control/jsdialog/Widget.NewSlideLayoutEntry.ts \
+	src/control/jsdialog/Widget.OverflowGroup.ts \
+	src/control/jsdialog/Widget.OverflowManager.ts \
 	src/control/jsdialog/Widget.Progressbar.js \
+	src/control/jsdialog/Widget.RadioButton.ts \
 	src/control/jsdialog/Widget.ScrolledWindow.js \
+	src/control/jsdialog/Widget.SearchEdit.ts \
 	src/control/jsdialog/Widget.SidebarContainers.ts \
+	src/control/jsdialog/Widget.Toolitem.ts \
+	src/control/jsdialog/Widget.Text.ts \
 	src/control/jsdialog/Widget.Timefield.js \
-	src/control/jsdialog/Widget.TreeView.js \
+	src/control/jsdialog/Widget.TreeView.ts \
 	src/control/Control.JSDialog.js \
 	src/control/Control.JSDialogBuilder.js \
 	src/control/Control.MobileWizardBuilder.js \
 	src/control/Control.MobileWizardWindow.js \
 	src/control/Control.MobileWizard.js \
 	src/control/Control.LanguageDialog.js \
-	src/control/Control.Attribution.js \
 	src/control/Control.MobileSlide.js \
 	src/control/Control.StatusBar.js \
 	src/control/Control.MobileSearchBar.ts \
@@ -386,38 +496,106 @@ COOL_JS_LST =\
 	src/control/Control.SheetsBar.js \
 	src/control/Control.PresentationBar.js \
 	src/control/Control.TopToolbar.js \
-	src/control/Control.UIManager.js \
+	src/control/Control.SaveState.ts \
+	src/control/Control.NotebookbarBase.ts \
+	src/control/Control.UIManager.ts \
 	src/control/Control.DocumentNameInput.js \
+	src/control/Notebookbar.WriterReferencesTab.ts \
 	src/control/Control.Notebookbar.js \
 	src/control/Control.NotebookbarWriter.js \
 	src/control/Control.NotebookbarCalc.js \
 	src/control/Control.NotebookbarImpress.js \
 	src/control/Control.NotebookbarDraw.js \
 	src/control/Control.NotebookbarBuilder.js \
+	src/control/Control.ContextToolbar.ts \
 	src/control/Control.Layers.js \
-	src/control/Control.Sidebar.js \
+	src/control/Control.SidebarBase.ts \
+	src/control/Control.Sidebar.ts \
+	src/control/Notebookbar.ImpressAnimationTab.ts \
+	src/control/Notebookbar.ImpressTransitionTab.ts \
+	src/control/Sidebar.FromNotebookbarPanel.ts \
+	src/control/Control.NavigatorPanel.ts \
+	src/control/Control.QuickFindPanel.ts \
 	src/control/AutoCompletePopup.ts \
 	src/control/Control.Mention.ts \
 	src/control/Control.FormulaUsagePopup.ts \
 	src/control/Control.FormulaAutoCompletePopup.ts \
+	src/control/Control.AutoFillPreviewTooltip.ts \
+	src/control/Control.AddressInputField.ts \
 	src/control/Control.Zotero.js \
-	src/control/Search.js \
 	src/control/Permission.js \
 	src/control/Toolbar.js \
 	src/control/Signing.js \
 	src/control/Parts.js \
-	src/control/Scroll.js \
 	src/control/Styles.js \
-	src/control/Ruler.js \
+	src/control/Ruler.ts \
 	src/control/VRuler.ts \
+	src/control/HRuler.ts \
+	src/slideshow/SlideCache.ts \
 	src/slideshow/SlideCompositor.ts \
+	src/slideshow/LayerRenderer.ts \
 	src/slideshow/LayerDrawing.ts \
 	src/slideshow/LayersCompositor.ts \
 	src/slideshow/RenderContext.ts \
+	src/slideshow/VideoRenderer.ts \
 	src/slideshow/SlideRenderer.ts \
 	src/slideshow/SlideShowPresenter.ts \
-	src/slideshow/Transition2d.ts \
-	src/slideshow/PerformTransition.ts \
+	src/slideshow/PresenterConsole.js \
+	src/slideshow/SimpleTextureRenderer.ts \
+	src/slideshow/StaticTextRenderer.ts \
+	src/slideshow/PauseTimer.ts \
+	src/slideshow/TransitionFactory.ts \
+	src/slideshow/CanvasLoader.ts \
+	src/slideshow/Operation.ts \
+	src/slideshow/Primitive.ts \
+	src/slideshow/engine/ActivityFactory.ts \
+    src/slideshow/engine/ActivityQueue.ts \
+    src/slideshow/engine/AnimationFactory.ts \
+    src/slideshow/engine/Duration.ts \
+    src/slideshow/engine/Effect.ts \
+    src/slideshow/engine/ElapsedTime.ts \
+    src/slideshow/engine/EventMultiplexer.ts \
+    src/slideshow/engine/Event.ts \
+    src/slideshow/engine/FrameSynchronization.ts \
+    src/slideshow/engine/InteractiveAnimationSequence.ts \
+    src/slideshow/engine/MetaPresentation.ts \
+    src/slideshow/engine/MetaSlide.ts \
+    src/slideshow/engine/NextEffectEventArray.ts \
+    src/slideshow/engine/SlideAnimations.ts \
+    src/slideshow/engine/SlideChangeBase.ts \
+    src/slideshow/engine/SlideShowHandler.ts \
+    src/slideshow/engine/SlideShowNavigator.ts \
+    src/slideshow/engine/SlideTransition.ts \
+    src/slideshow/engine/SourceEventElement.ts \
+    src/slideshow/engine/TimerEventQueue.ts \
+    src/slideshow/engine/Timing.ts \
+    src/slideshow/engine/tools.ts \
+    src/slideshow/engine/activities/AnimationActivity.ts \
+    src/slideshow/engine/activities/ActivityBase.ts \
+    src/slideshow/engine/activities/SimpleContinuousActivityBase.ts \
+    src/slideshow/engine/activities/ContinuousActivityBase.ts \
+    src/slideshow/engine/activities/ContinuousKeyTimeActivityBase.ts \
+    src/slideshow/engine/activities/DiscreteActivityBase.ts \
+    src/slideshow/engine/activities/FromToByActivity.ts \
+    src/slideshow/engine/activities/SetActivity.ts \
+    src/slideshow/engine/activities/SimpleActivity.ts \
+    src/slideshow/engine/activities/ValueListActivity.ts \
+    src/slideshow/engine/animationnodes/BaseNode.ts \
+    src/slideshow/engine/animationnodes/AnimationBaseNode.ts \
+    src/slideshow/engine/animationnodes/AnimationColorNode.ts \
+    src/slideshow/engine/animationnodes/AnimationNodeInfo.ts \
+    src/slideshow/engine/animationnodes/AnimationPathMotionNode.ts \
+    src/slideshow/engine/animationnodes/AnimationSetNode.ts \
+    src/slideshow/engine/animationnodes/AnimationTransformNode.ts \
+    src/slideshow/engine/animationnodes/AnimationTransitionFilterNode.ts \
+    src/slideshow/engine/animationnodes/BaseContainerNode.ts \
+    src/slideshow/engine/animationnodes/NodeContext.ts \
+    src/slideshow/engine/animationnodes/PropertyAnimationNode.ts \
+    src/slideshow/engine/AnimatedElement.ts \
+    src/slideshow/TransitionsInfo.ts \
+    src/slideshow/Transition2d.ts \
+    src/slideshow/Transition3d.ts \
+    src/slideshow/transition/ClippingTransition.ts \
 	src/slideshow/transition/FadeTransition.ts \
 	src/slideshow/transition/PlusTransition.ts \
 	src/slideshow/transition/CircleTransition.ts \
@@ -435,6 +613,7 @@ COOL_JS_LST =\
 	src/slideshow/transition/UncoverTransition.ts \
 	src/slideshow/transition/CoverTransition.ts \
 	src/slideshow/transition/SplitTransition.ts \
+	src/slideshow/transition/WipeTransition.ts \
 	src/slideshow/transition/IrisWipeTransition.ts \
 	src/slideshow/transition/EllipseWipeTransition.ts \
 	src/slideshow/transition/SlideWipeTransition.ts \
@@ -442,11 +621,28 @@ COOL_JS_LST =\
 	src/slideshow/transition/DiagonalTransition.ts \
 	src/slideshow/transition/PushWipeTransition.ts \
 	src/slideshow/transition/CombTransition.ts \
-	src/slideshow/transition/WipeTransition.ts \
 	src/slideshow/transition/NoTransition.ts \
-	src/dom/PosAnimation.js \
-	src/map/anim/Map.PanAnimation.js \
-	src/dom/PosAnimation.Timer.js \
+	src/slideshow/transition3d/SimpleTransition.ts \
+	src/slideshow/transition3d/CubeTransition.ts \
+	src/slideshow/transition3d/HelixTransition.ts \
+	src/slideshow/transition3d/FallTransition.ts \
+	src/slideshow/transition3d/ReflectionTransition.ts \
+	src/slideshow/transition3d/RochadeTransition.ts \
+	src/slideshow/transition3d/TurnDownTransition.ts \
+	src/slideshow/transition3d/Venetian3dTransition.ts \
+	src/slideshow/transition3d/TurnAroundTransition.ts \
+	src/slideshow/transition3d/PermTextureTransition.ts \
+	src/slideshow/transition3d/RippleTransition.ts \
+	src/slideshow/transition3d/NewsFlashTransition.ts \
+	src/slideshow/transition3d/DissolveTransition3d.ts \
+	src/slideshow/transition3d/FlipTilesTransition.ts \
+	src/slideshow/transition3d/StaticNoiseTransition.ts \
+	src/slideshow/transition3d/MicsShapeWipeTransition.ts \
+	src/slideshow/operation/RotateAndScaleDepth.ts \
+	src/slideshow/operation/SEllipseTranslate.ts \
+	src/slideshow/operation/SRotate.ts \
+	src/slideshow/operation/SScale.ts \
+	src/slideshow/operation/STranslate.ts \
 	src/control/Control.Scroll.Annotation.js \
 	src/main.js
 
@@ -457,24 +653,39 @@ COOL_TS_SRC = $(filter %.ts,$(COOL_JS_WEBORDER))
 
 # beware these are not helpfully ordered
 COOL_TS_JS_DST = $(patsubst src/%.ts,$(DIST_FOLDER)/src/%.js,$(COOL_TS_SRC))
-COOL_JS_DST = $(patsubst src/%.js,$(DIST_FOLDER)/src/%.js,$(COOL_JS_SRC)) $(COOL_TS_JS_DST)
+COOL_JS_DST = $(patsubst src/%.js,$(DIST_FOLDER)/src/%.js,$(COOL_JS_SRC)) $(COOL_TS_JS_DST) $(DIST_FOLDER)/src/layer/tile/TileWorker.js
 # should be no lingering / obsolete files:
 COOL_ASSERT_INTERSECT = $(filter $(COOL_JS_SRC), $(patsubst %.ts,%.js,$(COOL_TS_SRC)))
 
 COMMA := ,
 EMPTY :=
 SPACE := $(EMPTY) $(EMPTY)
-COOL_VERSION = $(shell cd $(srcdir) && git log -1 --pretty=format:"%h")
+COOL_VERSION = $(shell cd $(srcdir) && git log -1 --format=%h --abbrev=10)
 INTERMEDIATE_DIR ?= $(if $(IS_SEPARATE),$(abs_builddir)/debug,$(abs_builddir)/release)
 
-EXTRA_DIST = $(shell find . -type f -not -path './.git/*' -not -path './node_modules/*' | sed 's/.\///')
+# Don't use EXTRA_DIST with $(shell find) as it causes "Argument list too long" errors
+# Instead, use dist-hook to copy files
+EXTRA_DIST =
+
+dist-hook:
+	cd $(srcdir) && find . -type f \
+		-not -path './.git/*' \
+		-not -path './node_modules/*' \
+		-not -path './l10n/*' \
+		-not -path './images/*' \
+		-not -path './dist/*' \
+		-not -path './debug/*' \
+		-not -path './release/*' \
+		-exec cp --parents {} $(distdir) \;
+
+SUBDIRS = l10n images
 
 COOL_JS_BUNDLE = $(patsubst %.ts,%.js,$(COOL_JS_WEBORDER))
 
 define bundle_cool
 	$(if $(IS_SEPARATE),\
 		@touch $@,
-		@m4 -PE -DIOSAPP=$(ENABLE_IOSAPP) \
+		$(QUIET_M4) m4 -PE -DIOSAPP=$(ENABLE_IOSAPP) \
 			-DGTKAPP=$(ENABLE_GTKAPP) \
 			-DANDROIDAPP=$(ENABLE_ANDROIDAPP) \
 			-DMOBILEAPPNAME="$(APP_NAME)" \
@@ -502,12 +713,12 @@ endef
 define bundle_all
 	$(if $(IS_SEPARATE),\
 		@touch $@,\
-		@echo "Uglify cool js files..."
-		@m4 -PE -DL10N_IOS_ALL_JS=$(L10N_IOS_ALL_JS) \
+		$(QUIET_M4) m4 -PE -DL10N_IOS_ALL_JS=$(L10N_IOS_ALL_JS) \
 			-DNODE_MODULES_JS=$(subst $(SPACE),$(COMMA),$(NODE_MODULES_JS)) \
 			-DCOOL_LIBS_JS=$(subst $(SPACE),$(COMMA),$(COOL_LIBS_JS_SRC)) \
 			-DCOOL_JS=$(INTERMEDIATE_DIR)/cool-src.js \
 			$(srcdir)/bundle.js.m4 > $(INTERMEDIATE_DIR)/bundle.js
+		@echo "Uglify cool js files..."
 		@$(NODE) node_modules/uglify-js/bin/uglifyjs \
 			-O max_line_len=100 \
 			$(INTERMEDIATE_DIR)/bundle.js \
@@ -527,7 +738,7 @@ define global_file
 endef
 
 define run_eslint_check
-	@$(NODE) node_modules/eslint/bin/eslint.js \
+	$(QUIET_ESLINT) $(NODE) node_modules/eslint/bin/eslint.js \
 		--resolve-plugins-relative-to $(abs_builddir) \
 		--ignore-path $(srcdir)/.eslintignore \
 		--config .eslintrc \
@@ -535,9 +746,10 @@ define run_eslint_check
 endef
 
 define run_prettier_check
-	@$(NODE) node_modules/.bin/prettier \
+	$(QUIET_PRETTIER) $(NODE) node_modules/.bin/prettier \
 		--ignore-path $(srcdir)/.prettierignore \
 		--ignore-path $(srcdir)/.beforeprettier \
+		--log-level warn \
 		$(1)
 endef
 
@@ -550,31 +762,72 @@ ADMIN_BUNDLE = $(DIST_FOLDER)/admin-bundle.js
 endif
 
 if ENABLE_WASM
-$(DIST_FOLDER)/online%: $(abs_top_builddir)/wasm/online%
+$(DIST_FOLDER)/emscripten-module.js: ../wasm/emscripten-module.js
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
-$(DIST_FOLDER)/soffice%: $(abs_top_builddir)/wasm/soffice%
+$(DIST_FOLDER)/emscripten-zetajs-example.js: $(abs_top_srcdir)/wasm/emscripten-zetajs-example.js
+	@mkdir -p $(dir $@)
+	@cp $< $@
+
+$(DIST_FOLDER)/online%: ../wasm/online%
+	@mkdir -p $(dir $@)
+	@cp $< $@
+
+$(DIST_FOLDER)/soffice%: ../wasm/soffice%
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
 WASM_FILES= \
+	$(DIST_FOLDER)/emscripten-module.js \
 	$(DIST_FOLDER)/online.js \
 	$(DIST_FOLDER)/online.wasm \
-	$(DIST_FOLDER)/online.worker.js \
 	$(DIST_FOLDER)/soffice.data \
 	$(DIST_FOLDER)/soffice.data.js.metadata
 
-if ENABLE_DEBUG
+if ENABLE_WASM_ADDITIONAL_FILES
 WASM_FILES += \
-	$(DIST_FOLDER)/online.wasm.debug.wasm
+	$(DIST_FOLDER)/online.data
 endif
 
+if ENABLE_DEBUG
+WASM_FILES += \
+	$(DIST_FOLDER)/online.wasm.debug.wasm \
+	$(DIST_FOLDER)/online.wasm.debug.wasm.dwp
+endif
+
+if ENABLE_WASM_ZETAJS
+
+$(DIST_FOLDER)/smoketest.js: $(WITH_WASM_ZETAJS)/test/smoketest.js
+	@mkdir -p $(dir $@)
+	@cp $< $@
+
+$(DIST_FOLDER)/zeta.js: $(WITH_WASM_ZETAJS)/source/zeta.js
+	@mkdir -p $(dir $@)
+	@cp $< $@
+
+WASM_FILES += $(DIST_FOLDER)/zeta.js
+
+if ENABLE_WASM_EMBINDTEST
+WASM_FILES += $(DIST_FOLDER)/smoketest.js
+endif
+
+endif
+
+if ENABLE_WASM_ZETAJS_EXAMPLE
+WASM_FILES += $(DIST_FOLDER)/emscripten-zetajs-example.js
+endif
+
+endif
+
+WASM_FALLBACK_FILES =
+if ENABLE_WASM_FALLBACK
+WASM_FALLBACK_FILES += $(DIST_FOLDER)/wasm
 endif
 
 $(TYPESCRIPT_JS_DIR)/%.js: $(srcdir)/%.ts
 	@mkdir -p $(dir $@)
-	$(builddir)/node_modules/typescript/bin/tsc --outFile $@ $<
+	$(QUIET_TSC) $(builddir)/node_modules/typescript/bin/tsc --outFile $@ $<
 
 build-cool: \
 	$(COOL_L10N_DST) \
@@ -589,16 +842,21 @@ build-cool: \
 	$(DIST_FOLDER)/device-mobile.css \
 	$(DIST_FOLDER)/device-tablet.css \
 	$(DIST_FOLDER)/device-desktop.css \
+	$(DIST_FOLDER)/progressbar.css \
+	$(DIST_FOLDER)/settings.css \
+	$(DIST_FOLDER)/color-palette.css \
+	$(DIST_FOLDER)/color-palette-dark.css \
 	$(DIST_FOLDER)/bundle.js \
 	$(DIST_FOLDER)/cool.html \
-	$(WASM_FILES)
+	$(WASM_FILES) \
+	$(WASM_FALLBACK_FILES)
 	@echo "build cool completed"
-if ENABLE_ANDROIDAPP
-	@if test -d "$(APP_BRANDING_DIR)" ; then cp -a "$(APP_BRANDING_DIR)/branding.css" "$(APP_BRANDING_DIR)/branding.js" $(DIST_FOLDER)/ ; else touch $(DIST_FOLDER)/branding.css ; fi
+if APP_HAS_BRANDING
+	@if test -d "$(APP_BRANDING_DIR)" ; then cp -a "$(APP_BRANDING_DIR)"/branding* $(DIST_FOLDER)/ ; fi
 	@if test -d "$(APP_BRANDING_DIR)" ; then cp -a "$(APP_BRANDING_DIR)"/images/*.svg $(DIST_FOLDER)/images/ ; fi
 	@if test -d "$(APP_BRANDING_DIR)" ; then cp -a "$(APP_BRANDING_DIR)/images/toolbar-bg-logo.svg" $(DIST_FOLDER)/images/toolbar-bg.svg ; fi
 	@echo
-	@echo "JS, HTML and CSS has been updated (android/lib/src/main/assets/dist)."
+	@echo "JS, HTML and CSS has been updated ($(DIST_FOLDER))."
 endif
 
 if ENABLE_CYPRESS
@@ -612,17 +870,15 @@ $(DIST_FOLDER)/admin-bundle.js: $(COOL_ADMIN_DST) \
 
 $(INTERMEDIATE_DIR)/admin-src.js: $(COOL_ADMIN_TS_JS) $(COOL_ADMIN_JS)
 	@mkdir -p $(dir $@)
-	@echo "Checking for admin JS errors..."
 	$(call run_eslint_check,--ignore-pattern $(COOL_ADMIN_TS_JS) $(srcdir)/admin/src)
 	$(call run_prettier_check,--debug-check $(srcdir)/admin/src)
 	@awk 'FNR == 1 {print ""} 1' $(COOL_ADMIN_TS_JS) $(patsubst %.js,$(srcdir)/%.js,$(COOL_ADMIN_JS)) > $@
 
-$(INTERMEDIATE_DIR)/cool-src.js: tscompile.done $(call prereq_cool) $(COOL_JS_DST) $(abs_top_srcdir)/scripts/unocommands.py
+$(INTERMEDIATE_DIR)/cool-src.js: tscompile.done $(call prereq_cool) $(COOL_JS_DST) $(abs_top_srcdir)/scripts/unocommands.py $(srcdir)/cool-src.js.m4
 	@mkdir -p $(dir $@)
-	$(abs_top_srcdir)/scripts/unocommands.py --check $(abs_top_srcdir)
+	$(QUIET_UNOCOMMANDS) $(abs_top_srcdir)/scripts/unocommands.py --check $(abs_top_srcdir)
 	@printf "Checking for obsolete JS build intermediates in this makefile... "
-	@if ! test "z$(COOL_ASSERT_INTERSECT)" == "z"; then echo; echo "Error: please remove obsolete files:"; echo "$(COOL_ASSERT_INTERSECT)"; exit 1; else echo "clean"; fi
-	@echo "Checking for cool JS errors..."
+	@if ! test "z$(COOL_ASSERT_INTERSECT)" = "z"; then echo; echo "Error: please remove obsolete files:"; echo "$(COOL_ASSERT_INTERSECT)"; exit 1; else echo "clean"; fi
 	$(call run_eslint_check,$(srcdir)/src $(srcdir)/js)
 	$(call run_prettier_check,--debug-check $(srcdir)/src $(srcdir)/js/global.js)
 	@echo "Bundling cool..."
@@ -630,8 +886,7 @@ $(INTERMEDIATE_DIR)/cool-src.js: tscompile.done $(call prereq_cool) $(COOL_JS_DS
 
 $(DIST_FOLDER)/bundle.css: $(call prereq_css)
 	@mkdir -p $(dir $@)
-	@echo "Checking for CSS errors..."
-	@$(NODE) node_modules/stylelint/bin/stylelint.js --config $(srcdir)/.stylelintrc.json $(srcdir)/css/*.css
+	$(QUIET_STYLELINT) $(NODE) node_modules/stylelint/bin/stylelint.js --config $(srcdir)/.stylelintrc.json $(srcdir)/css/*.css --fix
 	$(call bundle_css)
 
 $(DIST_FOLDER)/bundle.js: $(INTERMEDIATE_DIR)/cool-src.js $(call prereq_all)
@@ -642,14 +897,27 @@ $(DIST_FOLDER)/global.js: $(srcdir)/js/global.js
 	@mkdir -p $(dir $@)
 	$(call global_file)
 
+$(INTERMEDIATE_DIR)/COOL_JS.m4.jslist: $(COOL_JS_DST)
+	@mkdir -p $(INTERMEDIATE_DIR)
+	@rm -f $@.tmp
+	@for file in $^; do echo "$$file" >> $@.tmp; done
+	$(QUIET_CMP) if cmp -s $@.tmp $@; then rm $@.tmp; else mv $@.tmp $@; fi
+
+$(INTERMEDIATE_DIR)/COOL_JS.m4: $(INTERMEDIATE_DIR)/COOL_JS.m4.jslist
+	$(foreach file,$(NODE_MODULES_JS) $(COOL_LIBS_JS) $(patsubst %.ts,%.js,$(COOL_JS_WEBORDER)), $(shell echo -n $(file), >> $(INTERMEDIATE_DIR)/COOL_JS.m4.tmp))
+	@truncate $(if $(filter Darwin FreeBSD,$(shell uname -s)),-s -1,--size=-1) $(INTERMEDIATE_DIR)/COOL_JS.m4.tmp
+	@mv $(INTERMEDIATE_DIR)/COOL_JS.m4.tmp $(INTERMEDIATE_DIR)/COOL_JS.m4
+
 $(DIST_FOLDER)/cool.html: $(srcdir)/html/cool.html.m4 \
 	$(COOL_HTML_DST) \
 	$(COOL_WELCOME_DST) \
 	$(DIST_FOLDER)/bundle.css \
 	$(DIST_FOLDER)/global.js \
-	$(DIST_FOLDER)/bundle.js
-	@echo "Generating cool.html..."
-	m4 -PE -DBUNDLE=$(IS_BUNDLE) \
+	$(INTERMEDIATE_DIR)/COOL_JS.m4 \
+	| $(DIST_FOLDER)/bundle.js
+
+	$(QUIET_M4) m4 -PE -I $(INTERMEDIATE_DIR) \
+	    -DBUNDLE=$(IS_BUNDLE) \
 		-DIOSAPP=$(ENABLE_IOSAPP) \
 		-DGTKAPP=$(ENABLE_GTKAPP) \
 		-DDEBUG=$(ENABLE_DEBUG) \
@@ -658,9 +926,6 @@ $(DIST_FOLDER)/cool.html: $(srcdir)/html/cool.html.m4 \
 		-DMOBILEAPPNAME="$(APP_NAME)" \
 		-DCOOL_CSS="$(subst $(SPACE),$(COMMA),$(COOL_CSS_M4))" \
 		-DGLOBAL_JS="$(DIST_FOLDER)/global.js" \
-		-DCOOL_JS="$(subst $(SPACE),$(COMMA),$(NODE_MODULES_JS) \
-		$(COOL_LIBS_JS) \
-		$(patsubst %.ts,%.js,$(COOL_JS_WEBORDER)))" \
 		-DVENDOR="$(VENDOR)" \
 		$(srcdir)/html/cool.html.m4 > $@
 
@@ -715,7 +980,8 @@ SourceMap=--allowJs true --sourceMap true --inlineSources true
 endif
 
 tscompile.done: $(COOL_JS_SRC) $(COOL_TS_SRC)
-	$(builddir)/node_modules/typescript/bin/tsc --typeRoots $(builddir)/node_modules/@types --outDir $(DIST_FOLDER)/src --rootDir $(srcdir)/src --checkJs false --project $(srcdir)/tsconfig.json $(SourceMap)
+	$(QUIET_TSC) $(builddir)/node_modules/typescript/bin/tsc --typeRoots $(builddir)/node_modules/@types --outDir $(DIST_FOLDER)/src --rootDir $(srcdir)/src --checkJs false --project $(srcdir)/tsconfig.json $(SourceMap)
+	$(QUIET_TSC) $(builddir)/node_modules/.bin/tsc-strict --typeRoots $(builddir)/node_modules/@types --outDir $(DIST_FOLDER)/src --rootDir $(srcdir)/src --checkJs false --project $(srcdir)/tsconfig.json $(SourceMap)
 	@touch $@
 
 $(COOL_TS_JS_DST): tscompile.done
@@ -762,31 +1028,52 @@ $(DIST_FOLDER)/l10n/%: $(srcdir)/l10n/%
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
-$(DIST_FOLDER)/l10n/%.json: $(srcdir)/po/%.po
+$(DIST_FOLDER)/l10n/help-%.json: $(srcdir)/po/help-%.po
+	@$(srcdir)/util/po2json.py --quiet $< -o $@
+
+$(DIST_FOLDER)/l10n/ui-%.json: $(srcdir)/po/ui-%.po
 	@$(srcdir)/util/po2json.py --quiet $< -o $@
 
 $(DIST_FOLDER)/admin/%: $(srcdir)/admin/%
 	@mkdir -p $(dir $@)
 	@cp $< $@
 
+$(DIST_FOLDER)/wasm:
+	@mkdir -p $(dir $@)
+	ln -s @WASM_BUILDDIR@/browser/dist $@
+
 if ENABLE_DEBUG
 install-data-hook:
 	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
 	cp -a dist/ $(DESTDIR)$(pkgdatadir)/browser/;
 else
-install-data-hook:
-	mkdir -p $(DESTDIR)$(pkgdatadir)/browser; \
-	rsync -a --exclude='src' \
-		--exclude='debug.html' \
-		--exclude='framed.doc.html' \
-		--exclude='framed.html' \
-		--exclude='load.doc.html' \
-		--exclude='multidocs.html' \
-		--exclude='tsconfig.tsbuildinfo' \
-		dist $(DESTDIR)$(pkgdatadir)/browser/;
-if ENABLE_WASM
-	find $(DESTDIR)$(pkgdatadir)/browser/dist -type f ! -iname "*.png" -exec brotli --force {} \;
+EXCLUDES = \
+        --exclude='src' \
+        --exclude='debug.html' \
+        --exclude='framed.doc.html' \
+        --exclude='framed.html' \
+        --exclude='load.doc.html' \
+        --exclude='multidocs.html' \
+        --exclude='tsconfig.tsbuildinfo'
+
+if ENABLE_MOBILEAPP
+EXCLUDES += --exclude='l10n-all.js'
 endif
+
+if !ENABLE_WASM
+EXCLUDES += --exclude='wasm.html'
+WASM_BROTLI_CMD =
+else
+WASM_BROTLI_CMD = find $(DESTDIR)$(pkgdatadir)/browser/dist -type f ! -iname "*.png" -exec brotli --force {} \;
+endif
+
+install-data-hook:
+	mkdir -p $(DESTDIR)$(pkgdatadir)/browser
+	rsync -a $(EXCLUDES) dist $(DESTDIR)$(pkgdatadir)/browser/
+	mkdir -p $(DESTDIR)$(pkgdatadir)/browser/dist/src/layer/tile
+	cp -a dist/src/layer/tile/CanvasTileUtils.js $(DESTDIR)$(pkgdatadir)/browser/dist/src/layer/tile/CanvasTileUtils.js
+	cp -a dist/src/layer/tile/TileWorker.js $(DESTDIR)$(pkgdatadir)/browser/dist/src/layer/tile/TileWorker.js
+	$(WASM_BROTLI_CMD)
 endif
 
 libs:
@@ -797,137 +1084,120 @@ libs:
 pot:
 	xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --output=po/templates/cool-ui.pot \
 		admin/admin.strings.js \
+		admin/src/AdminClusterOverview.js \
 		admin/src/AdminSocketAnalytics.js \
 		admin/src/AdminSocketBase.js \
 		admin/src/AdminSocketOverview.js \
 		admin/src/AdminSocketSettings.js \
+		admin/src/integrator/AdminIntegratorSettings.ts \
+		admin/src/integrator/WordBook.ts \
+		admin/src/integrator/Xcu.ts \
 		admin/src/Util.js \
 		js/global.js \
+		src/app/Debug.ts \
+		src/app/IconUtil.ts \
+		src/canvas/sections/CommentListSection.ts \
+		src/canvas/sections/CommentSection.ts \
+		src/canvas/sections/ShapeHandlesSection.ts \
+		src/canvas/sections/URLPopUpSection.ts \
+		src/canvas/sections/TableInsertMarkerSection.ts \
+		src/canvas/sections/GenericButtonSection.ts \
+		src/canvas/sections/ChartContextButtonSection.ts \
+		src/canvas/sections/DiagramButtonSection.ts \
 		src/control/ColorPicker.ts \
 		src/control/Control.AboutDialog.ts \
+		src/control/Control.AddressInputField.ts \
 		src/control/Control.AlertDialog.js \
 		src/control/Control.Command.js \
 		src/control/Control.ContextMenu.js \
 		src/control/Control.DocumentNameInput.js \
 		src/control/Control.DocumentRepair.js \
 		src/control/Control.DownloadProgress.js \
+		src/control/Control.ESignature.ts \
+		src/control/Control.ESignatureDialog.ts \
 		src/control/Control.FormulaBarJSDialog.js \
 		src/control/Control.IdleHandler.ts \
+		src/control/Control.JSDialog.js \
 		src/control/Control.JSDialogBuilder.js \
 		src/control/Control.LanguageDialog.js \
-		src/control/Control.Menubar.js \
+		src/control/Control.Mention.ts \
+		src/control/Control.Menubar.ts \
 		src/control/Control.MobileBottomBar.js \
+		src/control/Control.MobileSearchBar.ts \
 		src/control/Control.MobileTopBar.ts \
 		src/control/Control.MobileWizardBuilder.js \
-		src/control/Control.MobileWizardWindow.js \
-		src/control/Control.MobileWizard.js \
+		src/control/Control.NavigatorPanel.ts \
+		src/control/Control.QuickFindPanel.ts \
+		src/control/Notebookbar.ImpressAnimationTab.ts \
+		src/control/Notebookbar.ImpressTransitionTab.ts \
+		src/control/Notebookbar.WriterReferencesTab.ts \
+		src/control/Sidebar.FromNotebookbarPanel.ts \
 		src/control/Control.Notebookbar.js \
 		src/control/Control.NotebookbarBuilder.js \
 		src/control/Control.NotebookbarCalc.js \
 		src/control/Control.NotebookbarDraw.js \
 		src/control/Control.NotebookbarImpress.js \
 		src/control/Control.NotebookbarWriter.js \
+		src/control/Control.ContextToolbar.ts \
 		src/control/Control.PartsPreview.js \
 		src/control/Control.PresentationBar.js \
+		src/control/Control.SaveState.ts \
 		src/control/Control.Scroll.Annotation.js \
-		src/control/Control.MobileSearchBar.ts \
 		src/control/Control.ServerAuditDialog.ts \
 		src/control/Control.SheetsBar.js \
 		src/control/Control.StatusBar.js \
 		src/control/Control.Tabs.js \
 		src/control/Control.Toolbar.js \
 		src/control/Control.TopToolbar.js \
-		src/control/Control.UIManager.js \
+		src/control/Control.UIManager.ts \
 		src/control/Control.UserList.ts \
 		src/control/Control.Zotero.js \
+		src/control/HRuler.ts \
 		src/control/Parts.js \
 		src/control/Permission.js \
-		src/control/Ruler.js \
-		src/control/VRuler.ts \
 		src/control/Signing.js \
 		src/control/Toolbar.js \
-		src/control/jsdialog/Component.Toolbar.ts \
+		src/control/VRuler.ts \
 		src/control/jsdialog/Definitions.Menu.ts \
-		src/control/jsdialog/Util.Dropdown.js \
-		src/control/jsdialog/Util.Events.ts \
-		src/control/jsdialog/Util.FocusCycle.js \
-		src/control/jsdialog/Util.MessageRouter.ts \
-		src/control/jsdialog/Util.ModalHelper.js \
-		src/control/jsdialog/Util.OnDemandRenderer.ts \
-		src/control/jsdialog/Util.ScrollableBar.ts \
 		src/control/jsdialog/Util.SnackbarController.ts \
-		src/control/jsdialog/Util.StateChange.ts \
-		src/control/jsdialog/Widget.ButtonBox.ts \
-		src/control/jsdialog/Widget.Calendar.js \
 		src/control/jsdialog/Widget.ColorPicker.ts \
-		src/control/jsdialog/Widget.Combobox.js \
-		src/control/jsdialog/Widget.Containers.ts \
-		src/control/jsdialog/Widget.DrawingArea.js \
-		src/control/jsdialog/Widget.FormulabarEdit.js \
-		src/control/jsdialog/Widget.Frame.js \
+		src/control/jsdialog/Widget.PageMarginEntry.ts \
+		src/control/jsdialog/Widget.PageSizeEntry.ts \
 		src/control/jsdialog/Widget.HTMLContent.ts \
-		src/control/jsdialog/Widget.IconView.ts \
-		src/control/jsdialog/Widget.MenuButton.js \
 		src/control/jsdialog/Widget.MobileBorderSelector.js \
-		src/control/jsdialog/Widget.MobileTabControl.js \
-		src/control/jsdialog/Widget.MultilineEdit.js \
-		src/control/jsdialog/Widget.Progressbar.js \
-		src/control/jsdialog/Widget.ScrolledWindow.js \
+		src/control/jsdialog/Widget.NewSlideLayoutEntry.ts \
+		src/control/jsdialog/Widget.RadioButton.ts \
 		src/control/jsdialog/Widget.SidebarContainers.ts \
-		src/control/jsdialog/Widget.Timefield.js \
-		src/control/jsdialog/Widget.TreeView.js \
-		src/slideshow/SlideCompositor.ts \
-		src/slideshow/LayerDrawing.ts \
-		src/slideshow/LayersCompositor.ts \
-		src/slideshow/RenderContext.ts \
-		src/slideshow/SlideRenderer.ts \
-		src/slideshow/SlideShowPresenter.ts \
-		src/slideshow/Transition2d.ts \
-		src/slideshow/PerformTransition.ts \
-		src/slideshow/transition/FadeTransition.ts \
-		src/slideshow/transition/PlusTransition.ts \
-		src/slideshow/transition/CircleTransition.ts \
-		src/slideshow/transition/VenetianTransition.ts \
-		src/slideshow/transition/WedgeTransition.ts \
-		src/slideshow/transition/BoxTransition.ts \
-		src/slideshow/transition/OvalTransition.ts\
-		src/slideshow/transition/DiamondTransition.ts\
-		src/slideshow/transition/CheckersTransition.ts \
-		src/slideshow/transition/PushTransition.ts \
-		src/slideshow/transition/SimpleDissolveTransition.ts \
-		src/slideshow/transition/BarsTransition.ts \
-		src/slideshow/transition/CutTransition.ts \
-		src/slideshow/transition/WheelTransition.ts \
-		src/slideshow/transition/UncoverTransition.ts \
-		src/slideshow/transition/CoverTransition.ts \
-		src/slideshow/transition/SplitTransition.ts \
-		src/slideshow/transition/IrisWipeTransition.ts \
-		src/slideshow/transition/EllipseWipeTransition.ts \
-		src/slideshow/transition/SlideWipeTransition.ts \
-		src/slideshow/transition/DiagonalTransition.ts \
-		src/slideshow/transition/PushWipeTransition.ts \
-		src/slideshow/transition/CombTransition.ts \
-		src/slideshow/transition/BarWipeTransition.ts \
+		src/control/jsdialog/Widget.TreeView.ts \
+		src/app/SocketBase.ts \
+		src/app/TracingEvents.ts \
+		src/app/ServerCommand.ts \
 		src/core/Socket.js \
-		src/core/Debug.js \
-		src/docstate.js \
-		src/docstatefunctions.js \
 		src/docdispatcher.ts \
-		src/app/DocEvents.ts \
+		src/docstate.ts \
+		src/docstatefunctions.js \
+		src/dom/NotebookbarAccessibility.js \
 		src/errormessages.js \
+		src/layer/marker/A11yTextInput.js \
+		src/layer/marker/TextInput.js \
 		src/layer/tile/CanvasTileLayer.js \
-		src/canvas/sections/CommentListSection.ts \
-		src/canvas/sections/CommentSection.ts \
 		src/main.js \
 		src/map/Clipboard.js \
 		src/map/Map.js \
 		src/map/handler/Map.Feedback.js \
 		src/map/handler/Map.FileInserter.js \
-		src/map/handler/Map.Keyboard.js \
+		src/map/handler/Map.Print.js \
 		src/map/handler/Map.SlideShow.js \
-		src/map/handler/Map.WOPI.js
+		src/map/handler/Map.VersionBar.js \
+		src/map/handler/Map.WOPI.js \
+		src/map/handler/Map.Welcome.js \
+		src/map/handler/Map.Settings.ts \
+		src/slideshow/PauseTimer.ts \
+		src/slideshow/PresenterConsole.js \
+		src/slideshow/SlideShowPresenter.ts
 
 	html2po --pot --input=html/cool-help.html --output=po/templates/cool-help.pot --duplicates=merge
+	html2po --pot --input=descriptions/google-play.html --output=po/templates/descriptions.pot --duplicates=merge --keepcomments
 	html2po --pot --input=welcome/welcome.html --output=po/templates/welcome.pot --duplicates=merge
 	$(srcdir)/util/appendwelcome.py po/templates/welcome.pot po/templates/cool-ui.pot
 	rm po/templates/welcome.pot
@@ -936,6 +1206,7 @@ pot:
 l10n: pot
 	for i in po/ui-*.po; do pot2po --input=po/templates/cool-ui.pot --template=$$i --output=$$i.new; mv $$i.new $$i;done
 	for i in po/help-*.po; do pot2po --input=po/templates/cool-help.pot --template=$$i --output=$$i.new; mv $$i.new $$i;done
+	for i in po/descriptions-*.po; do pot2po --input=po/templates/descriptions.pot --template=$$i --output=$$i.new; mv $$i.new $$i;done
 
 clean-local:
 	@rm -rf $(DIST_FOLDER)
@@ -945,9 +1216,6 @@ clean-local:
 	@rm -f $(abs_srcdir)/admin/jsconfig.json
 
 CLEANFILES = tscompile.done $(INTERMEDIATE_DIR)/cool-src.js $(DIST_FOLDER)/bundle.css $(DIST_FOLDER)/bundle.js $(INTERMEDIATE_DIR)/cool-src.js
-
-ctags:
-	@$(CTAGS) --language-force=JavaScript $(COOL_JS_SRC) $(srcdir)/js/global.js
 
 $(abs_srcdir)/jsconfig.json:
 	@printf "{\n \
@@ -963,7 +1231,7 @@ $(abs_srcdir)/admin/jsconfig.json:
 
 jsconfig: $(abs_srcdir)/jsconfig.json $(abs_srcdir)/admin/jsconfig.json
 
-build-tests: $(MOCHA_TS_JS_FILES)
+build-tests: $(MOCHA_JS_DIR)/main.js
 	@echo "Build of mocha test finished."
 
 eslint: $(COOL_ADMIN_TS_JS)
@@ -987,7 +1255,7 @@ prettier-write:
 
 MOCHA_TEST_LOG = "`pwd`/mocha.log"
 DUPLICATION_TEST_LOG = "`pwd`/duplication.log"
-check-local: $(MOCHA_TS_JS_FILES)
+check-local: $(MOCHA_JS_DIR)/main.js
 	@echo "Running mocha tests..."
 	@echo > ${MOCHA_TEST_LOG}
 	@if npm test 2> ${MOCHA_TEST_LOG} 1>&2; then \
@@ -997,9 +1265,8 @@ check-local: $(MOCHA_TS_JS_FILES)
 		exit 1; \
 	fi
 
-	@echo "Checking code duplication..."
 	@echo > ${DUPLICATION_TEST_LOG}
-	@if npm run duplication 2> ${DUPLICATION_TEST_LOG} 1>&2; then \
+	$(QUIET_JSCPCD) if npm run duplication 2> ${DUPLICATION_TEST_LOG} 1>&2; then \
 		echo "Code duplication tests finished successfully."; \
 	else \
 		cat ${DUPLICATION_TEST_LOG}; \

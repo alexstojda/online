@@ -1,14 +1,23 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Map.SlideShow is handling the slideShow action
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+/*
+ * window.L.Map.SlideShow is handling the slideShow action
  */
 
-/* global _ sanitizeUrl */
-L.Map.mergeOptions({
+/* global _ sanitizeUrl app */
+window.L.Map.mergeOptions({
 	slideShow: true
 });
 
-L.Map.SlideShow = L.Handler.extend({
+window.L.Map.SlideShow = window.L.Handler.extend({
 
 	_slideURL: '', // store the URL for svg
 	_presentInWindow: false,
@@ -17,9 +26,9 @@ L.Map.SlideShow = L.Handler.extend({
 
 	initialize: function (map) {
 		this._map = map;
-		window.app.console.log('L.Map.SlideShow: Cypress in window: ' + ('Cypress' in window));
+		window.app.console.log('window.L.Map.SlideShow: Cypress in window: ' + ('Cypress' in window));
 		this._cypressSVGPresentationTest =
-			L.Browser.cypressTest && 'Cypress' in window
+			window.L.Browser.cypressTest && 'Cypress' in window
 			&& window.Cypress.spec.name === 'impress/fullscreen_presentation_spec.js';
 	},
 
@@ -46,12 +55,7 @@ L.Map.SlideShow = L.Handler.extend({
 			return;
 		}
 
-		if (window.ThisIsTheiOSApp || window.ThisIsTheAndroidApp) {
-			window.postMobileMessage('SLIDESHOW');
-			return;
-		}
-
-		if (this._map._docLayer.hiddenSlides() >= this._map.getNumberOfParts()) {
+		if (app.impress.areAllSlidesHidden()) {
 			this._map.uiManager.showInfoModal('allslidehidden-modal', _('Empty Slide Show'),
 					'All slides are hidden!', '', _('OK'), function () { }, false, 'allslidehidden-modal-response');
 			return;
@@ -67,13 +71,13 @@ L.Map.SlideShow = L.Handler.extend({
 			that.fullscreen = !that._cypressSVGPresentationTest;
 			that._map.downloadAs('slideshow.svg', 'svg', null, 'slideshow');
 
-			L.DomEvent.on(document, 'fullscreenchange', that._onFullScreenChange, that);
+			window.L.DomEvent.on(document, 'fullscreenchange', that._onFullScreenChange, that);
 		};
 
 		let fallback = function(that, e) {
 			// fallback to "open in new tab"
 			if (that._slideShow) {
-				L.DomUtil.remove(that._slideShow);
+				window.L.DomUtil.remove(that._slideShow);
 				that._slideShow = null;
 			}
 
@@ -81,7 +85,7 @@ L.Map.SlideShow = L.Handler.extend({
 		};
 
 		if (!(this._cypressSVGPresentationTest || this._map['wopi'].DownloadAsPostMessage)) {
-			this._slideShow = L.DomUtil.create('iframe', 'leaflet-slideshow', this._map._container);
+			this._slideShow = window.L.DomUtil.create('iframe', 'leaflet-slideshow', this._map._container);
 			if (this._slideShow.requestFullscreen) {
 
 				let that = this;
@@ -130,10 +134,10 @@ L.Map.SlideShow = L.Handler.extend({
 	},
 
 	_stopFullScreen: function () {
-		L.DomUtil.remove(this._slideShow);
+		window.L.DomUtil.remove(this._slideShow);
 		this._slideShow = null;
 		// #7102 on exit from fullscreen we don't get a 'focus' event
-		// in chome so a later second attempt at launching a presentation
+		// in Chrome so a later second attempt at launching a presentation
 		// fails
 		this._map.focus();
 	},
@@ -143,13 +147,11 @@ L.Map.SlideShow = L.Handler.extend({
 			e.url = window.processCoolUrl({ url: e.url, type: 'slideshow' });
 		}
 
-		this._slideURL = e.url;
-		window.app.console.debug('slide file url : ', this._slideURL);
+		const embedURL = new URL(e.url);
+		embedURL.searchParams.append('attachment', 0);
 
-		if ('processCoolUrl' in window) {
-			this._processSlideshowLinks();
-		}
-		this._processSlideshowVideoForSafari();
+		this._slideURL = embedURL.toString();
+		window.app.console.debug('slide file url : ', this._slideURL);
 
 		this._startPlaying();
 	},
@@ -158,11 +160,8 @@ L.Map.SlideShow = L.Handler.extend({
 		// Windowed Presentation
 		if (this._presentInWindow) {
 
-			var popupTitle = _('Windowed Presentation: ') + this._map['wopi'].BaseFileName;
-			const htmlContent = this._generateSlideWindowHtml(popupTitle, this._slideURL);
-
 			this._slideShowWindowProxy = window.open('', '_blank', 'popup');
-			
+
 			if (!this._slideShowWindowProxy) {
 				this._map.uiManager.showInfoModal('popup-blocked-modal',
 					_('Windowed Presentation Blocked'),
@@ -170,7 +169,27 @@ L.Map.SlideShow = L.Handler.extend({
 					_('OK'), null, false);
 			}
 
-			this._slideShowWindowProxy.document.documentElement.innerHTML = htmlContent;
+			var popupTitle = _('Windowed Presentation: ') + this._map['wopi'].BaseFileName;
+			this._slideShowWindowProxy.document.title = popupTitle;
+
+			this._slideShowWindowProxy.document.body.style.margin = '0';
+			this._slideShowWindowProxy.document.body.style.padding = '0';
+			this._slideShowWindowProxy.document.body.style.height = '100%';
+			this._slideShowWindowProxy.document.body.style.overflow = 'hidden'; // Prevent scrollbars.
+
+			const iFrame = this._slideShowWindowProxy.document.createElement('iframe');
+			iFrame.src = sanitizeUrl(this._slideURL);
+			iFrame.style.width = '100%';
+			iFrame.style.height = '100%';
+			iFrame.style.border = 'none';
+			this._slideShowWindowProxy.document.body.appendChild(iFrame);
+			this._slideShow = iFrame;
+
+			if ('processCoolUrl' in window) {
+				this._processSlideshowLinks();
+			}
+			this._processSlideshowVideoForSafari();
+
 			this._slideShowWindowProxy.document.close();
 			this._slideShowWindowProxy.focus();
 
@@ -190,10 +209,17 @@ L.Map.SlideShow = L.Handler.extend({
 					clearInterval(this._windowCloseInterval);
 					this._map.uiManager.closeSnackbar();
 					this._slideShowWindowProxy = null;
+					this._slideShow = null;
 				}
 			}.bind(this), 500);
 			return;
 		}
+
+		if ('processCoolUrl' in window) {
+			this._processSlideshowLinks();
+		}
+		this._processSlideshowVideoForSafari();
+
 		// Cypress Presentation
 		if (this._cypressSVGPresentationTest || !this._slideShow) {
 			window.open(this._slideURL, '_self');
@@ -218,40 +244,6 @@ L.Map.SlideShow = L.Handler.extend({
 			iframe.contentWindow.focus();
 			iframe.contentWindow.addEventListener('keydown', this._onSlideWindowKeyPress.bind(this));
 		}
-	},
-
-	_generateSlideWindowHtml: function(title, slideURL) {
-		var sanitizer = document.createElement('div');
-		sanitizer.innerText = title;
-
-		var sanitizedTitle = sanitizer.innerHTML;
-		var sanitizedUrl = sanitizeUrl(slideURL);
-		return `
-		<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>${sanitizedTitle}</title>
-			<style>
-				body, html {
-					margin: 0;
-					padding: 0;
-					height: 100%;
-					overflow: hidden; /* Prevent scrollbars */
-				}
-				iframe {
-					width: 100%;
-					height: 100%;
-					border: none;
-				}
-			</style>
-		</head>
-		<body>
-			<iframe src="${sanitizedUrl}"></iframe>
-		</body>
-		</html>
-		`;
 	},
 
 	_processSlideshowLinks: function() {
@@ -328,7 +320,7 @@ L.Map.SlideShow = L.Handler.extend({
 		// There is an issue where Safari without LBSE renders the video in the wrong place, so we
 		// must move it back into frame
 		// GH#7399 fixed the same issue, but not in presentation mode
-		if (!L.Browser.safari) {
+		if (!window.L.Browser.safari) {
 			return;
 		}
 
@@ -392,4 +384,4 @@ L.Map.SlideShow = L.Handler.extend({
 	}
 });
 
-L.Map.addInitHook('addHandler', 'slideShow', L.Map.SlideShow);
+window.L.Map.addInitHook('addHandler', 'slideShow', window.L.Map.SlideShow);

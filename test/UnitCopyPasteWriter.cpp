@@ -22,6 +22,7 @@
 #include <wsd/COOLWSD.hpp>
 #include <wsd/ClientSession.hpp>
 
+using namespace std::literals;
 using namespace Poco::Net;
 
 std::shared_ptr<ClientSession> getChildSession(size_t session)
@@ -72,7 +73,7 @@ public:
             socketPoll(), Poco::URI(helpers::getTestServerURI()), documentURL, testname);
         helpers::sendTextFrame(socket, "uno .uno:SelectAll", testname);
 
-        // When copying the cnotent of the document:
+        // When copying the content of the document:
         helpers::sendAndDrain(socket, testname, "uno .uno:Copy", "statechanged:");
 
         // Then make sure asking for multiple, specific formats results in a JSON answer, it's what
@@ -84,7 +85,7 @@ public:
             std::shared_ptr<const http::Response> httpResponse =
                 httpSession->syncRequest(http::Request(Poco::URI(clipURI).getPathAndQuery()));
             LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-            std::string body = httpResponse->getBody();
+            const std::string& body = httpResponse->getBody();
             Poco::JSON::Object::Ptr object;
             // This failed, we didn't return JSON.
             LOK_ASSERT(JsonUtil::parseJSON(body, object));
@@ -102,7 +103,7 @@ public:
             std::shared_ptr<const http::Response> httpResponse =
                 httpSession->syncRequest(http::Request(Poco::URI(clipURI).getPathAndQuery()));
             LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-            std::string body = httpResponse->getBody();
+            const std::string& body = httpResponse->getBody();
             Poco::JSON::Object::Ptr object;
             LOK_ASSERT(JsonUtil::parseJSON(body, object));
             LOK_ASSERT(object->has("text/html"));
@@ -110,7 +111,7 @@ public:
 
         TRANSITION_STATE(_phase, Phase::WaitDocClose);
         socket->asyncShutdown();
-        LOK_ASSERT(socket->waitForDisconnection(std::chrono::seconds(5)));
+        LOK_ASSERT(socket->waitForDisconnection(5s));
     }
 
     void invokeWSDTest() override

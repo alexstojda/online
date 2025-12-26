@@ -1,3 +1,4 @@
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4; fill-column: 100 -*- */
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -25,7 +26,7 @@ bool DoInitialization()
     bool withColor = false;
     bool logToFile = false;
     std::map<std::string, std::string> logProperties;
-    Log::initialize("wsd", logLevel, withColor, logToFile, logProperties);
+    Log::initialize("wsd", logLevel, withColor, logToFile, logProperties, false, {});
     ssl::Manager::initializeClientContext(
             /*certificateFile=*/"", /*privateKeyFile=*/"", /*caLocation=*/"",
             /*cipherList=*/"", ssl::CertificateVerification::Required);

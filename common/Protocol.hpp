@@ -42,29 +42,29 @@ namespace COOLProtocol
     // Negative numbers for error.
     std::tuple<int, int, std::string> ParseVersion(const std::string& version);
 
-    inline bool stringToInteger(const std::string& input, int& value)
+    inline bool stringToInteger(const std::string_view input, int& value)
     {
         bool res;
         std::tie(value, res) = Util::i32FromString(input);
         return res;
     }
 
-    inline bool stringToUInt32(const std::string& input, uint32_t& value)
+    inline bool stringToUInt32(const std::string_view input, uint32_t& value)
     {
         bool res;
         std::tie(value, res) = Util::i32FromString(input);
         return res;
     }
 
-    inline bool stringToUInt64(const std::string& input, uint64_t& value)
+    inline bool stringToUInt64(const std::string_view input, uint64_t& value)
     {
         bool res;
         std::tie(value, res) = Util::u64FromString(input);
         return res;
     }
 
-    inline
-    bool parseNameValuePair(const std::string& token, std::string& name, std::string& value, const char delim = '=')
+    inline bool parseNameValuePair(const std::string_view token, std::string& name,
+                                   std::string& value, const char delim = '=')
     {
         const size_t mid = token.find_first_of(delim);
         if (mid != std::string::npos)
@@ -77,19 +77,30 @@ namespace COOLProtocol
         return false;
     }
 
-    bool getTokenInteger(const std::string& token, const std::string_view name, int& value);
-    bool getTokenUInt32(const std::string& token, const std::string_view name, uint32_t& value);
-    bool getTokenUInt64(const std::string& token, const std::string_view name, uint64_t& value);
-    bool getTokenString(const std::string& token, const std::string_view name, std::string& value);
-    bool getTokenKeyword(const std::string& token, const std::string_view name, const std::map<std::string, int>& map, int& value);
+    bool getTokenInteger(std::string_view token, std::string_view name, int& value);
+    bool getTokenUInt32(std::string_view token, std::string_view name, uint32_t& value);
+    bool getTokenUInt64(std::string_view token, std::string_view name, uint64_t& value);
+    bool getTokenString(std::string_view token, std::string_view name, std::string& value);
+    bool getTokenKeyword(std::string_view token, std::string_view name,
+                         const std::map<std::string, int>& map, int& value);
 
-    bool getTokenKeyword(const StringVector& tokens, const std::string_view name, const std::map<std::string, int>& map, int& value);
+    bool getTokenKeyword(const StringVector& tokens, std::string_view name,
+                         const std::map<std::string, int>& map, int& value);
 
-    bool getTokenInteger(const StringVector& tokens, const std::string_view name, int& value);
+    inline bool getTokenInteger(const StringVector& tokens, const std::string_view name,
+                                int& value)
+    {
+        for (size_t i = 0; i < tokens.size(); i++)
+        {
+            if (getTokenInteger(tokens[i], name, value))
+                return true;
+        }
+        return false;
+    }
 
     /// Literal-string token names.
     template <std::size_t N>
-    inline bool getTokenInteger(const std::string& token, const char (&name)[N], int& value)
+    inline bool getTokenInteger(const std::string_view token, const char (&name)[N], int& value)
     {
         // N includes null termination.
         static_assert(N > 1, "Token name must be at least one character long.");
@@ -106,7 +117,8 @@ namespace COOLProtocol
 
     /// Extracts a name and value from token. Returns true if value is a non-negative integer.
     template <std::size_t N>
-    inline bool getNonNegTokenInteger(const std::string& token, const char (&name)[N], int& value)
+    inline bool getNonNegTokenInteger(const std::string_view token, const char (&name)[N],
+                                      int& value)
     {
         return getTokenInteger(token, name, value) && value >= 0;
     }
@@ -126,8 +138,8 @@ namespace COOLProtocol
         return false;
     }
 
-    bool getTokenStringFromMessage(const std::string& message, const std::string_view name, std::string& value);
-    bool getTokenKeywordFromMessage(const std::string& message, const std::string_view name, const std::map<std::string, int>& map, int& value);
+    bool getTokenStringFromMessage(std::string_view message, std::string_view name,
+                                   std::string& value);
 
     inline
     std::vector<int> tokenizeInts(const char* data, const size_t size, const char delimiter = ',')
@@ -157,10 +169,9 @@ namespace COOLProtocol
         return tokens;
     }
 
-    inline
-    std::vector<int> tokenizeInts(const std::string& s, const char delimiter = ',')
+    inline std::vector<int> tokenizeInts(const std::string_view str, const char delimiter = ',')
     {
-        return tokenizeInts(s.data(), s.size(), delimiter);
+        return tokenizeInts(str.data(), str.size(), delimiter);
     }
 
     inline bool getTokenIntegerFromMessage(const std::string& message, const std::string_view name, int& value)
@@ -256,7 +267,10 @@ namespace COOLProtocol
         {
             // By default, all uno commands are modifying, unless we are certain they don't.
             return !tokens.equals(1, ".uno:SidebarHide") && !tokens.equals(1, ".uno:SidebarShow") &&
-                   !tokens.equals(1, ".uno:Copy") && !tokens.equals(1, ".uno:Save");
+                   !tokens.equals(1, ".uno:Copy") && !tokens.equals(1, ".uno:Save") &&
+                   !tokens.startsWith(1, ".uno:ToolbarMode") && // ToolbarMode?Mode...
+                   !tokens.equals(1, ".uno:InvertBackground") &&
+                   !tokens.equals(1, ".uno:ChangeTheme");
         }
 
         return false;
@@ -297,8 +311,8 @@ namespace COOLProtocol
         std::string ret(message, abbrevLen);
         for (size_t i = abbrevLen; i < messageLen; ++i)
         {
-            const uint8_t unit = message[i];
-            const bool continuation = (unit & 0xC0) == 0x80;
+            const char unit = message[i];
+            const bool continuation = (static_cast<uint8_t>(unit) & 0xC0) == 0x80;
             if (!continuation) // likely
                 break;
             ret.push_back(unit);
@@ -307,7 +321,7 @@ namespace COOLProtocol
     }
 
     /// Returns an abbreviation of the message (the first line, indicating truncation). We assume
-    /// that it adhers to the COOL protocol, i.e. that there is always a first (or only) line that
+    /// that it adheres to the COOL protocol, i.e. that there is always a first (or only) line that
     /// is in printable UTF-8. I.e. no encoding of binary bytes is done. The format of the result is
     /// not guaranteed to be stable. It is to be used for logging purposes only, not for decoding
     /// protocol frames.

@@ -19,6 +19,8 @@
 
 #include <string>
 
+using namespace std::literals;
+
 /// Load torture testcase.
 class UnitLoadTorture : public UnitWSD
 {
@@ -74,12 +76,16 @@ void UnitLoadTorture::loadTorture(const std::string& name, const std::string& do
                 wsSession->sendMessage("load url=" + documentURL);
 
                 // 20s is double of the default.
-                std::vector<char> message
-                    = wsSession->waitForMessage("status:", std::chrono::seconds(20), name + id + ' ');
+                std::vector<char> message =
+                    wsSession->waitForMessage("status:", 20s, name + id + ' ');
                 const std::string status = COOLProtocol::getFirstLine(message);
 
                 int viewid = -1;
-                LOK_ASSERT(COOLProtocol::getTokenIntegerFromMessage(status, "viewid", viewid));
+                Poco::JSON::Parser parser;
+                Poco::Dynamic::Var statusJsonVar = parser.parse(status.substr(7));
+                const Poco::SharedPtr<Poco::JSON::Object>& statusJsonObject = statusJsonVar.extract<Poco::JSON::Object::Ptr>();
+                if (statusJsonObject->has("viewid"))
+                    viewid = std::atoi(statusJsonObject->get("viewid").toString().c_str());
 
                 LOK_ASSERT("Failed to create view in time " && viewid >= 0);
 
@@ -92,19 +98,18 @@ void UnitLoadTorture::loadTorture(const std::string& name, const std::string& do
                 ++num_of_views;
                 --num_to_load;
 
-                TST_LOG(": #" << id << ", new viewId: " << viewid <<
-                        ", loaded views: " << num_of_views <<
-                        ", to load: " << num_to_load);
+                TST_LOG(": #" << id << ", new viewId: " << viewid << ", loaded views: "
+                              << num_of_views << ", to load: " << num_to_load);
 
                 // Get all the views loaded - lean on test timeout to interrupt.
                 while (num_to_load > 0)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    std::this_thread::sleep_for(20ms);
 
                 // delay randomly to close in random order:
-                const auto ms
-                    = (max_jitter_ms > 0
-                       ? std::chrono::milliseconds(Util::rng::getNext() % max_jitter_ms)
-                       : std::chrono::milliseconds(0));
+                const auto ms =
+                    (max_jitter_ms > 0
+                         ? std::chrono::milliseconds(Util::rng::getNext() % max_jitter_ms)
+                         : 0ms);
                 std::this_thread::sleep_for(ms);
 
                 --num_of_views;

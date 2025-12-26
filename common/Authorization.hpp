@@ -30,27 +30,30 @@ class URI;
 class Authorization
 {
 public:
-    enum class Type
+    enum class Type : char
     {
-        None, //< Unlike Expired, this implies no Authorization needed.
+        None, ///< Unlike Expired, this implies no Authorization needed.
         Token,
         Header,
-        Expired //< The server is rejecting the current authorization key.
+        Expired ///< The server is rejecting the current authorization key.
     };
 
 private:
-    Type _type;
     std::string _data;
+    Type _type;
+    bool _noHeader;
 
-public:
     Authorization()
         : _type(Type::None)
+        , _noHeader(false)
     {
     }
 
-    Authorization(Type type, const std::string& data)
-        : _type(type)
-        , _data(data)
+public:
+    Authorization(Type type, std::string data, bool noHeader)
+        : _data(std::move(data))
+        , _type(type)
+        , _noHeader(noHeader)
     {
     }
 

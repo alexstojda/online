@@ -8,16 +8,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 #include <config.h>
+
+#include <tools/Replay.hpp>
 
 #include <sysexits.h>
 
 #include <Poco/Util/Application.h>
 #include <Poco/Util/Option.h>
 #include <Poco/Util/OptionSet.h>
-
-#include "Replay.hpp"
-// #include <test/helpers.hpp>
 
 int ClientPortNumber = DEFAULT_CLIENT_PORT_NUMBER;
 
@@ -74,7 +74,7 @@ int Stress::main(const std::vector<std::string>& args)
         return EX_NOINPUT;
     }
 
-    TerminatingPoll poll("stress replay");
+    std::shared_ptr<TerminatingPoll> poll(std::make_shared<TerminatingPoll>("stress replay"));
 
     if (!UnitWSD::init(UnitWSD::UnitType::Tool, ""))
         throw std::runtime_error("Failed to init unit test pieces.");
@@ -89,11 +89,11 @@ int Stress::main(const std::vector<std::string>& args)
     }
 #endif
 
-    std::string server = args[0];
+    const std::string& server = args[0];
 
     if (!strncmp(server.c_str(), "http", 4))
     {
-        std::cerr << "Server should be wss:// or ws:// URL not " << server << "\n";
+        std::cerr << "Server should be wss:// or ws:// URL, not " << server << '\n';
         return -1;
     }
 
@@ -101,13 +101,13 @@ int Stress::main(const std::vector<std::string>& args)
 
     std::cerr << "Connect to " << server << "\n";
     for (size_t i = 1; i < args.size() - 1; i += 2)
-        StressSocketHandler::addPollFor(poll, server, args[i], args[i+1], stats);
+        StressSocketHandler::addPollFor(*poll, server, args[i], args[i+1], stats);
 
     do {
-        poll.poll(TerminatingPoll::DefaultPollTimeoutMicroS);
-    } while (poll.continuePolling() && poll.getSocketCount() > 0);
+        poll->poll(TerminatingPoll::DefaultPollTimeoutMicroS);
+    } while (poll->continuePolling() && poll->getSocketCount() > 0);
 
-    stats->dump();
+    stats->dump(std::cerr);
 
     return EX_OK;
 }

@@ -1,5 +1,4 @@
 /* global describe it cy require */
-const { assertImageSize  } = require('../../common/desktop_helper');
 var helper = require('../../common/helper');
 var desktopHelper = require('../../common/desktop_helper');
 
@@ -22,7 +21,6 @@ describe.skip(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Open different file t
 		cy.cGet('#copy-paste-container colgroup').find('col').should('have.length', 4);
 		cy.cGet('#copy-paste-container tbody').find('tr').should('have.length', 1);
 		helper.typeIntoDocument('{downarrow}');
-		helper.waitUntilIdle('.leaflet-cursor.blinking-cursor');
 
 		// Click right to the blinking cursor position.
 		cy.cGet('.leaflet-cursor.blinking-cursor')
@@ -35,7 +33,7 @@ describe.skip(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Open different file t
 			});
 
 		//assert image
-		assertImageSize(480, 122);
+		helper.assertImageSize(480, 122);
 	}
 
 	it('Open doc file', { defaultCommandTimeout: 60000 }, function() {

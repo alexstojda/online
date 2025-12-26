@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -7,7 +10,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
-declare var L: any;
 
 namespace cool {
 
@@ -67,6 +69,8 @@ export class SheetGeometry {
 	private _columns: SheetDimension;
 	private _rows: SheetDimension;
 	private _unoCommand: string;
+	public maxVisibleColumnIndex: number;
+	public maxVisibleRowIndex: number;
 
 	constructor(sheetGeomJSON: SheetGeometryCoreData, tileWidthTwips: number, tileHeightTwips: number,
 		tileSizePixels: number, part: number) {
@@ -93,8 +97,50 @@ export class SheetGeometry {
 		this.update(sheetGeomJSON, /* checkCompleteness */ true, part);
 	}
 
-	public update(sheetGeomJSON: SheetGeometryCoreData, checkCompleteness: boolean, part: number): boolean {
+	private checkMaxIndex(sheetGeomJSON: SheetGeometryCoreData, column: boolean): number {
+		/*
+			About "hidden" variable format:
+			* This information is sent from the core side.
+			* Represents the hidden rows / columns.
+			* Works with "true - false - true - false" pattern.
+				* Like: 5 8 10 20... -> Means that visible up  to 5 (including), hidden up to 8 (including), visible up to 10 (including), hidden up to 20 (including)...
+			* But now, above format assumes the first row / column is visible.
+			* To determine if the data starts with true or false, the first value in data is formatted differently.
+				* If first is visible: 0:0 5 8 10 20... -> Means that visible up to 1 (index 0), hidden up to 5 (including 5), visible up to 8 (including), hidden up to 10 (including)...
+				* If first is hidden: 1:0 5 8 10 20... -> Means that hidden up to 0, visible up to 5, hidden up to 8, visible up to 10...
+		*/
 
+		// We will check one special case here: Only a few rows/columns are visible on top, others are hidden all the way to the bottom/right.
+		const hiddenInfo = column ? sheetGeomJSON.columns.hidden.trim() : sheetGeomJSON.rows.hidden.trim();
+
+		const isFirstHidden = hiddenInfo.indexOf('1') === 0;
+		const splitted = hiddenInfo.split(' ');
+		const isLastHidden = (splitted.length % 2 === 0 && !isFirstHidden) || (splitted.length % 2 === 1 && isFirstHidden);
+
+		if (splitted.length === 1) {
+			if (isFirstHidden) return 0; // All hidden.
+			else return parseInt(splitted[0].split(':')[1]); // All visible.
+		}
+		else if (!isLastHidden) { // Last rows / columns are visible.
+			return parseInt(splitted[splitted.length - 1]);
+		}
+
+		/*
+			Last rows / columns are hidden (below else if case):
+				* We need the index from the item that comes right before the last one. Becase we want last visible index.
+				* There are only 2 items, so we need the first item (index 0).
+				* First item is written in a different format (0:1->hiddenOrNot:LastIndex).
+				* We need to split the first item to get the last index (second item is hidden, we ignore that).
+		*/
+		else if (splitted.length === 2) {
+			return parseInt(splitted[0].split(':')[1]);
+		}
+		else { // Last rows / columns are hidden and there are more than 2 items.
+			return parseInt(splitted[splitted.length - 2]);
+		}
+	}
+
+	public update(sheetGeomJSON: SheetGeometryCoreData, checkCompleteness: boolean, part: number): boolean {
 		if (!this._testValidity(sheetGeomJSON, checkCompleteness)) {
 			return false;
 		}
@@ -105,6 +151,11 @@ export class SheetGeometry {
 				console.error(this._unoCommand + ': columns update failed.');
 				updateOK = false;
 			}
+
+			if (sheetGeomJSON.columns.hidden)
+				this.maxVisibleColumnIndex = this.checkMaxIndex(sheetGeomJSON, true);
+			else
+				this.maxVisibleColumnIndex = parseInt(sheetGeomJSON.maxtiledcolumn);
 		}
 
 		if (sheetGeomJSON.rows) {
@@ -112,6 +163,11 @@ export class SheetGeometry {
 				console.error(this._unoCommand + ': rows update failed.');
 				updateOK = false;
 			}
+
+			if (sheetGeomJSON.rows.hidden)
+				this.maxVisibleRowIndex = this.checkMaxIndex(sheetGeomJSON, false);
+			else
+				this.maxVisibleRowIndex = parseInt(sheetGeomJSON.maxtiledrow);
 		}
 
 		if (updateOK) {
@@ -131,11 +187,13 @@ export class SheetGeometry {
 		updatePositions: boolean): void {
 		this._columns.setTileGeometryData(tileWidthTwips, tileSizePixels, updatePositions);
 		this._rows.setTileGeometryData(tileHeightTwips, tileSizePixels, updatePositions);
+
+		if (app.map) app.map.fire('sheetgeometrychanged');
 	}
 
 	public setViewArea(topLeftTwipsPoint: Point, sizeTwips: Point): boolean {
 
-		if (!(topLeftTwipsPoint instanceof L.Point) || !(sizeTwips instanceof L.Point)) {
+		if (!(topLeftTwipsPoint instanceof cool.Point) || !(sizeTwips instanceof cool.Point)) {
 			console.error('invalid argument types');
 			return false;
 		}
@@ -209,48 +267,48 @@ export class SheetGeometry {
 	// accepts a point in display twips coordinates at current zoom
 	// and returns the equivalent point in display-twips at the given zoom.
 	public getTileTwipsAtZoom(point: Point, zoomScale: number): Point {
-		if (!(point instanceof L.Point)) {
-			console.error('Bad argument type, expected L.Point');
+		if (!(point instanceof cool.Point)) {
+			console.error('Bad argument type, expected cool.Point');
 			return point;
 		}
 
-		return new L.Point(this._columns.getTileTwipsAtZoom(point.x, zoomScale),
+		return new cool.Point(this._columns.getTileTwipsAtZoom(point.x, zoomScale),
 			this._rows.getTileTwipsAtZoom(point.y, zoomScale));
 	}
 
 	// accepts a point in core-pixel coordinates at current zoom
 	// and returns the equivalent point in core-pixels at the given zoomScale.
 	public getCorePixelsAtZoom(point: Point, zoomScale: number): Point {
-		if (!(point instanceof L.Point)) {
-			console.error('Bad argument type, expected L.Point');
+		if (!(point instanceof cool.Point)) {
+			console.error('Bad argument type, expected cool.Point');
 			return point;
 		}
 
-		return new L.Point(this._columns.getCorePixelsAtZoom(point.x, zoomScale),
+		return new cool.Point(this._columns.getCorePixelsAtZoom(point.x, zoomScale),
 			this._rows.getCorePixelsAtZoom(point.y, zoomScale));
 	}
 
 	// accepts a point in core-pixel coordinates at *given* zoomScale
 	// and returns the equivalent point in core-pixels at the current zoom.
 	public getCorePixelsFromZoom(point: Point, zoomScale: number): Point {
-		if (!(point instanceof L.Point)) {
-			console.error('Bad argument type, expected L.Point');
+		if (!(point instanceof cool.Point)) {
+			console.error('Bad argument type, expected cool.Point');
 			return point;
 		}
 
-		return new L.Point(this._columns.getCorePixelsFromZoom(point.x, zoomScale),
+		return new cool.Point(this._columns.getCorePixelsFromZoom(point.x, zoomScale),
 			this._rows.getCorePixelsFromZoom(point.y, zoomScale));
 	}
 
 	// accepts a point in print twips coordinates and returns the equivalent point
 	// in tile-twips.
 	public getTileTwipsPointFromPrint(point: Point): Point {
-		if (!(point instanceof L.Point)) {
-			console.error('Bad argument type, expected L.Point');
+		if (!(point instanceof cool.Point)) {
+			console.error('Bad argument type, expected cool.Point');
 			return point;
 		}
 
-		return new L.Point(this._columns.getTileTwipsPosFromPrint(point.x),
+		return new cool.Point(this._columns.getTileTwipsPosFromPrint(point.x),
 			this._rows.getTileTwipsPosFromPrint(point.y));
 	}
 
@@ -259,22 +317,35 @@ export class SheetGeometry {
 		simplePoint.y = this._rows.getTileTwipsPosFromPrint(simplePoint.y);
 	}
 
+	public convertRectangleToTileTwips(simpleRectangle: cool.SimpleRectangle): void {
+		simpleRectangle.x1 = this._columns.getTileTwipsPosFromPrint(simpleRectangle.x1);
+		simpleRectangle.y1 = this._rows.getTileTwipsPosFromPrint(simpleRectangle.y1);
+	}
+
+	public convertRawRectangleToTileTwips(rectangle: number[]): void {
+		rectangle[0] = this._columns.getTileTwipsPosFromPrint(rectangle[0]);
+		rectangle[1] = this._rows.getTileTwipsPosFromPrint(rectangle[1]);
+
+		rectangle[2] = this._columns.getTileTwipsPosFromPrint(rectangle[2]);
+		rectangle[3] = this._rows.getTileTwipsPosFromPrint(rectangle[3]);
+	}
+
 	// accepts a point in tile-twips coordinates and returns the equivalent point
 	// in print-twips.
 	public getPrintTwipsPointFromTile(point: Point): Point {
-		if (!(point instanceof L.Point)) {
-			console.warn('Bad argument type, expected L.Point');
+		if (!(point instanceof cool.Point)) {
+			console.warn('Bad argument type, expected cool.Point');
 		}
 
-		return new L.Point(this._columns.getPrintTwipsPosFromTile(point.x),
+		return new cool.Point(this._columns.getPrintTwipsPosFromTile(point.x),
 			this._rows.getPrintTwipsPosFromTile(point.y));
 	}
 
 	// accepts a rectangle in print twips coordinates and returns the equivalent rectangle
 	// in tile-twips aligned to the cells.
 	public getTileTwipsSheetAreaFromPrint(rectangle: Bounds): Bounds {
-		if (!(rectangle instanceof L.Bounds)) {
-			console.error('Bad argument type, expected L.Bounds');
+		if (!(rectangle instanceof cool.Bounds)) {
+			console.error('Bad argument type, expected cool.Bounds');
 			return rectangle;
 		}
 
@@ -284,17 +355,24 @@ export class SheetGeometry {
 		var horizBounds = this._columns.getTileTwipsRangeFromPrint(topLeft.x, bottomRight.x);
 		var vertBounds = this._rows.getTileTwipsRangeFromPrint(topLeft.y, bottomRight.y);
 
-		topLeft = new L.Point(horizBounds.startpos, vertBounds.startpos);
-		bottomRight = new L.Point(horizBounds.endpos, vertBounds.endpos);
+		topLeft = new cool.Point(horizBounds.startpos, vertBounds.startpos);
+		bottomRight = new cool.Point(horizBounds.endpos, vertBounds.endpos);
 
-		return new L.Bounds(topLeft, bottomRight);
+		return new cool.Bounds(topLeft, bottomRight);
 	}
 
-	// Returns full sheet size as L.Point in the given unit.
+	// Returns full sheet size as cool.Point in the given unit.
 	// unit must be one of 'corepixels', 'tiletwips', 'printtwips'
 	public getSize(unit: GeometryUnit): Point {
-		return new L.Point(this._columns.getSize(unit),
+		return new cool.Point(this._columns.getSize(unit),
 			this._rows.getSize(unit));
+	}
+
+	// Returns the cell rectangle as SimpleRectangle in tile twips.
+	public getCellSimpleRectangle(columnIndex: number, rowIndex: number): cool.SimpleRectangle {
+		const horizPosSize = this._columns.getElementData(columnIndex);
+		const vertPosSize = this._rows.getElementData(rowIndex);
+		return cool.SimpleRectangle.fromCorePixels([horizPosSize.startpos, vertPosSize.startpos, horizPosSize.size, vertPosSize.size]);
 	}
 
 	// Returns the core pixel position/size of the requested cell at a specified zoom.
@@ -302,15 +380,15 @@ export class SheetGeometry {
 		var horizPosSize = this._columns.getElementData(columnIndex, zoomScale);
 		var vertPosSize = this._rows.getElementData(rowIndex, zoomScale);
 
-		var topLeft = new L.Point(horizPosSize.startpos, vertPosSize.startpos);
-		var size = new L.Point(horizPosSize.size, vertPosSize.size);
+		var topLeft = new cool.Point(horizPosSize.startpos, vertPosSize.startpos);
+		var size = new cool.Point(horizPosSize.size, vertPosSize.size);
 
-		return new L.Bounds(topLeft, topLeft.add(size));
+		return new cool.Bounds(topLeft, topLeft.add(size));
 	}
 
 	public getCellFromPos(pos: Point, unit: GeometryUnit): Point {
-		console.assert(pos instanceof L.Point);
-		return new L.Point(
+		console.assert(pos instanceof cool.Point);
+		return new cool.Point(
 			this._columns.getIndexFromPos(pos.x, unit),
 			this._rows.getIndexFromPos(pos.y, unit)
 		);
@@ -1640,5 +1718,3 @@ function _findFirstMatch(array: any[], key: any, directionProvider: DirectionPro
 }
 
 }
-
-L.SheetGeometry = cool.SheetGeometry;

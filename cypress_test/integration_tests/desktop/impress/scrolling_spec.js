@@ -6,11 +6,13 @@ var desktopHelper = require('../../common/desktop_helper');
 describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Scroll through document', function() {
 
 	beforeEach(function() {
+		cy.viewport(1500, 600);
 		helper.setupAndLoadDocument('impress/scrolling.odp');
 		desktopHelper.switchUIToCompact();
-		cy.cGet('#toolbar-up .ui-scroll-right').click();
-		cy.cGet('#modifypage').click({force: true});
-		desktopHelper.selectZoomLevel('200');
+		// close the default slide-sorter navigation sidebar
+		desktopHelper.closeNavigatorSidebar();
+		desktopHelper.getCompactIcon('ModifyPage').click();
+		desktopHelper.selectZoomLevel('200', false);
 	});
 
 	function clickOnTheCenter() {
@@ -26,23 +28,23 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Scroll through document', 
 	}
 	it('Scrolling to bottom/top', function() {
 		//show vertical scrollbar
-		cy.cGet('.leaflet-layer').click('right');
+		cy.cGet('#document-container').click('right');
 		cy.wait(1000);
 		clickOnTheCenter();
-		desktopHelper.pressKey(9,'uparrow');
-		cy.cGet('#test-div-vertical-scrollbar').should('have.text', '0');
+		desktopHelper.pressKey(15,'uparrow');
+		desktopHelper.assertScrollbarPosition('vertical', 0, 10);
 		desktopHelper.pressKey(18,'downarrow');
-		desktopHelper.assertScrollbarPosition('vertical', 306, 355);
+		desktopHelper.assertScrollbarPosition('vertical', 280, 330);
 	});
 
 	it('Scrolling to left/right', function() {
 		//show horizontal scrollbar
-		cy.cGet('.leaflet-layer').click('bottom');
+		cy.cGet('#document-container').click('bottom');
 		cy.wait(500);
 		clickOnTheCenter();
 		cy.wait(500);
 		helper.typeIntoDocument('{home}');
-		cy.cGet('#test-div-horizontal-scrollbar').should('have.text', '0').wait(500);
+		desktopHelper.assertScrollbarPosition('horizontal', 0, 1);
 		helper.typeIntoDocument('{end}');
 		desktopHelper.assertScrollbarPosition('horizontal', 340, 660);
 	});

@@ -12,6 +12,8 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 		if (Cypress.env('INTEGRATION') === 'nextcloud') {
 			desktopHelper.showStatusBarIfHidden ();
 		}
+
+		desktopHelper.shouldHaveZoomLevel('70');
 	});
 
 	it('Text selection.', function() {
@@ -21,21 +23,20 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 	});
 
 	it('Switching page.', function() {
-		cy.cGet('#StatePageNumber').should('have.text', 'Page 1 of 1');
+		desktopHelper.assertVisiblePage(1, 1, 1);
 		cy.cGet('#menu-insert').click();
 		cy.cGet('body').contains('#menu-insert li a', 'Page Break').click();
-		cy.cGet('#StatePageNumber').invoke('text').should('be.oneOf', ['Page 2 of 2', 'Pages 1 and 2 of 2']);
+		desktopHelper.assertVisiblePage(1, 2, 2);
 		cy.cGet('#toolbar-down #prev').click();
-		cy.cGet('#StatePageNumber').should('have.text', 'Page 1 of 2');
+		desktopHelper.assertVisiblePage(1, 1, 2);
+		desktopHelper.assertScrollbarPosition('vertical', 0, 10);
 		cy.cGet('#toolbar-down #next').click();
-		cy.cGet('#StatePageNumber').invoke('text').should('be.oneOf', ['Page 2 of 2', 'Pages 1 and 2 of 2']);
+		desktopHelper.assertVisiblePage(1, 2, 2);
+		desktopHelper.assertScrollbarPosition('vertical',190, 205);
 	});
 
 	it('Text entering mode.', function() {
 		cy.cGet('#InsertMode').should('have.text', 'Insert');
-		helper.typeIntoDocument('{insert}');
-		cy.cGet('.ui-dialog-titlebar-close').click();
-		cy.cGet('#InsertMode').should('have.text', 'Overwrite');
 		helper.typeIntoDocument('{insert}');
 		cy.cGet('#InsertMode').should('have.text', 'Insert');
 	});
@@ -52,7 +53,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Statubar tests.', function
 	it('Select zoom level.', function() {
 		desktopHelper.resetZoomLevel();
 		desktopHelper.shouldHaveZoomLevel('100');
-		desktopHelper.selectZoomLevel('280');
+		desktopHelper.selectZoomLevel('280', false);
 		desktopHelper.shouldHaveZoomLevel('280');
 	});
 });

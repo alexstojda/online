@@ -18,9 +18,7 @@
 
 @property (strong) CODocument *document;
 @property (strong) WKWebView *webView;
-@property (strong) WKWebView *slideshowWebView;
-@property std::string slideshowFile;
-@property (strong) NSURL *slideshowURL;
+@property void *schemeHandler;
 
 - (void)bye;
 

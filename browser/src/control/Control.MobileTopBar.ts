@@ -14,9 +14,9 @@
 
 class MobileTopBar extends JSDialog.Toolbar {
 	constructor(map: any) {
-		super(map, 'toolbar-up');
+		super(map, 'MobileTopBar', 'toolbar-up');
 
-		map.on('updatepermission', this.onUpdatePermission, this);
+		app.events.on('updatepermission', this.onUpdatePermission.bind(this));
 		map.on('commandstatechanged', this.onCommandStateChanged, this);
 	}
 
@@ -86,7 +86,7 @@ class MobileTopBar extends JSDialog.Toolbar {
 
 	onUpdatePermission(e: any) {
 		const toolbarButtons: string[] = ['undo', 'redo', 'mobile_wizard', 'insertion_mobile_wizard', 'comment_wizard'];
-		if (e.perm === 'edit') {
+		if (e.detail.perm === 'edit') {
 			toolbarButtons.forEach((id) => {
 				this.showItem(id, true);
 			});

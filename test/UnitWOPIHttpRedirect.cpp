@@ -24,7 +24,7 @@
 
 class UnitWopiHttpRedirect : public WopiTestServer
 {
-    STATE_ENUM(Phase, Load, Redirected, GetFile, Redirected2, Done) _phase;
+    STATE_ENUM(Phase, Load, WaitLoad, Redirected, GetFile, Redirected2, Done) _phase;
 
     const std::string params = "access_token=anything";
 
@@ -36,8 +36,8 @@ public:
     }
 
     virtual bool handleHttpRequest(const Poco::Net::HTTPRequest& request,
-                                   Poco::MemoryInputStream& message,
-                                   std::shared_ptr<StreamSocket>& socket) override
+                                   std::istream& message,
+                                   const std::shared_ptr<StreamSocket>& socket) override
     {
         Poco::URI uriReq(request.getURI());
         Poco::RegularExpression regInfo("/wopi/files/1");
@@ -47,16 +47,16 @@ public:
         std::string redirectUri2 = "/wopi/files/2/contents";
         Poco::RegularExpression regContentsRedirected(redirectUri2);
 
-        LOG_TST("FakeWOPIHost: Request URI [" << uriReq.toString() << "]:\n");
+        TST_LOG("FakeWOPIHost: Request URI [" << uriReq.toString() << "]:\n");
 
         // CheckFileInfo - returns redirect response
         if (request.getMethod() == "GET" && regInfo.match(uriReq.getPath()))
         {
-            LOG_TST("FakeWOPIHost: Handling CheckFileInfo (1/2)");
+            TST_LOG("FakeWOPIHost: Handling CheckFileInfo (1/2)");
 
             assertCheckFileInfoRequest(request);
 
-            LOK_ASSERT_STATE(_phase, Phase::Load);
+            LOK_ASSERT_STATE(_phase, Phase::WaitLoad);
             TRANSITION_STATE(_phase, Phase::Redirected);
 
             http::Response httpResponse(http::StatusCode::Found);
@@ -68,7 +68,7 @@ public:
         // CheckFileInfo - for redirected URI
         else if (request.getMethod() == "GET" && regRedirected.match(uriReq.getPath()) && !regContents.match(uriReq.getPath()))
         {
-            LOG_TST("FakeWOPIHost: Handling CheckFileInfo: (2/2)");
+            TST_LOG("FakeWOPIHost: Handling CheckFileInfo: (2/2)");
 
             assertCheckFileInfoRequest(request);
 
@@ -95,7 +95,7 @@ public:
         // GetFile - first try
         else if (request.getMethod() == "GET" && regContents.match(uriReq.getPath()))
         {
-            LOG_TST("FakeWOPIHost: Handling GetFile: " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling GetFile: " << uriReq.getPath());
 
             assertGetFileRequest(request);
 
@@ -111,7 +111,7 @@ public:
         // GetFile - redirected
         else if (request.getMethod() == "GET" && regContentsRedirected.match(uriReq.getPath()))
         {
-            LOG_TST("FakeWOPIHost: Handling GetFile: " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling GetFile: " << uriReq.getPath());
 
             assertGetFileRequest(request);
 
@@ -137,12 +137,15 @@ public:
         {
             case Phase::Load:
             {
+                TRANSITION_STATE(_phase, Phase::WaitLoad);
+
                 initWebsocket("/wopi/files/1?" + params);
 
                 WSD_CMD("load url=" + getWopiSrc());
 
                 break;
             }
+            case Phase::WaitLoad:
             case Phase::Redirected:
             case Phase::Redirected2:
             case Phase::GetFile:
@@ -168,30 +171,30 @@ public:
     }
 
     virtual bool handleHttpRequest(const Poco::Net::HTTPRequest& request,
-                                   Poco::MemoryInputStream& /*message*/,
-                                   std::shared_ptr<StreamSocket>& socket) override
+                                   std::istream& /*message*/,
+                                   const std::shared_ptr<StreamSocket>& socket) override
     {
         Poco::URI uriReq(request.getURI());
         Poco::RegularExpression regInfo("/wopi/files/[0-9]+");
         static unsigned redirectionCount = 0;
 
-        LOG_TST("FakeWOPIHost: Request URI [" << uriReq.toString() << "]:\n");
+        TST_LOG("FakeWOPIHost: Request URI [" << uriReq.toString() << "]:\n");
 
         // CheckFileInfo - always returns redirect response
         if (request.getMethod() == "GET" && regInfo.match(uriReq.getPath()))
         {
-            LOG_TST("FakeWOPIHost: Handling CheckFileInfo");
+            TST_LOG("FakeWOPIHost: Handling CheckFileInfo");
 
             assertCheckFileInfoRequest(request);
 
-            std::string sExpectedMessage = "It is expected to stop requesting after " +
-                                           std::to_string(RedirectionLimit) + " redirections";
-            LOK_ASSERT_MESSAGE(sExpectedMessage, redirectionCount <= RedirectionLimit);
+            std::string expectedMessage = "It is expected to stop requesting after " +
+                                           std::to_string(HTTP_REDIRECTION_LIMIT) + " redirections";
+            LOK_ASSERT_MESSAGE(expectedMessage, redirectionCount <= HTTP_REDIRECTION_LIMIT);
 
             LOK_ASSERT_MESSAGE("Expected to be in Phase::Load or Phase::Redirected",
                                _phase == Phase::Load || _phase == Phase::Redirected);
 
-            if (redirectionCount == RedirectionLimit)
+            if (redirectionCount == HTTP_REDIRECTION_LIMIT)
             {
                 exitTest(TestResult::Ok);
                 return true;
@@ -200,9 +203,9 @@ public:
             TRANSITION_STATE(_phase, Phase::Redirected);
 
             http::Response httpResponse(http::StatusCode::Found);
-            const std::string location = helpers::getTestServerURI() + "/wopi/files/" +
+            std::string location = helpers::getTestServerURI() + "/wopi/files/" +
                                          std::to_string(redirectionCount) + '?' + params;
-            httpResponse.set("Location", location);
+            httpResponse.set("Location", std::move(location));
             socket->sendAndShutdown(httpResponse);
 
             redirectionCount++;

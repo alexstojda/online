@@ -11,28 +11,57 @@
 
 #pragma once
 
-#include <unordered_map>
-#include <queue>
-
-#include <atomic>
+#include <common/Session.hpp>
+#include <kit/Kit.hpp>
+#include <kit/StateRecorder.hpp>
+#include <kit/Watermark.hpp>
 
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.hxx>
 
-#include "Common.hpp"
-#include "Kit.hpp"
-#include "Session.hpp"
-#include "Watermark.hpp"
-#include "StateRecorder.hpp"
+#include <chrono>
+#include <queue>
 
 class Document;
 class ChildSession;
 
-enum class LokEventTargetEnum
+struct LogUiCommandsLine {
+    std::chrono::steady_clock::time_point _timeStart;
+    std::chrono::steady_clock::time_point _timeEnd;
+    int _repeat = 0;
+    int _undoChange = 0;
+    std::string _cmd;
+    std::string _subCmd;
+};
+
+class LogUiCommands {
+public:
+    ChildSession& _session;
+    int _lastUndoCount = 0;
+    const StringVector* _tokens;
+    LogUiCommands(ChildSession& session, const StringVector* tokens);
+    LogUiCommands(ChildSession& session) : _session(session),_tokens(nullptr) {}
+    ~LogUiCommands();
+    void logSaveLoad(std::string cmd, const std::string & path, std::chrono::steady_clock::time_point timeStart);
+private:
+    std::weak_ptr<lok::Document> _document;
+    // list the commands to log here.
+    std::set<std::string> _cmdToLog = {
+        "uno", "key", "mouse", "textinput", "removetextcontext",
+        "paste", "insertfile", "dialogevent" };
+    // list the the uno commands here, that are not to log. It will search these strings as a prefixes
+    std::set<std::string> _unoCmdToNotLog = {
+        ".uno:SidebarShow", ".uno:ToolbarMode" };
+    void logLine(LogUiCommandsLine &line, bool isUndoChange=false);
+};
+
+enum class LokEventTargetEnum: std::uint8_t
 {
     Document,
     Window
 };
+
+class SlideCompressor;
 
 /// Represents a session to the WSD process, in a Kit process. Note that this is not a singleton.
 class ChildSession final : public Session
@@ -52,6 +81,7 @@ public:
     virtual ~ChildSession();
 
     bool getStatus();
+    bool getPartStatus();
     int getViewId() const { return _viewId; }
     void setViewId(const int viewId) { _viewId = viewId; }
     const std::string& getViewUserId() const { return getUserId(); }
@@ -60,8 +90,9 @@ public:
     const std::string& getViewUserPrivateInfo() const { return getUserPrivateInfo(); }
     void updateSpeed();
     int getSpeed();
+    bool isDocLoaded() const { return _isDocLoaded; }
 
-    void loKitCallback(const int type, const std::string& payload);
+    void loKitCallback(int type, const std::string& payload);
 
     /// Initializes the watermark support, if enabled and required.
     /// Returns true if watermark is enabled and initialized.
@@ -80,9 +111,12 @@ public:
 
     bool sendTextFrame(const char* buffer, int length) override
     {
-        if (!_docManager)
+        if (_docManager == nullptr)
         {
-            LOG_TRC("ERR dropping - client-" + getId() + ' ' + std::string(buffer, length));
+
+            LOG_TRC("No DocManager; dropping message to client-"
+                    << getId() << ": " << std::string_view(buffer, length));
+
             return false;
         }
         const auto msg = "client-" + getId() + ' ' + std::string(buffer, length);
@@ -91,16 +125,18 @@ public:
 
     bool sendBinaryFrame(const char* buffer, int length) override
     {
-        if (!_docManager)
+        if (_docManager == nullptr)
         {
-            LOG_TRC("ERR dropping binary - client-" + getId());
+            LOG_TRC("No DocManager; dropping binary to client-" << getId());
+
             return false;
         }
         const auto msg = "client-" + getId() + ' ' + std::string(buffer, length);
         return _docManager->sendFrame(msg.data(), msg.size(), WSOpCode::Binary);
     }
 
-    bool sendProgressFrame(const char* id, const std::string &jsonProps);
+    bool sendProgressFrame(const char* id, const std::string& jsonProps,
+                           const std::string& forcedID = "");
 
     using Session::sendTextFrame;
 
@@ -113,19 +149,26 @@ public:
     }
 
     // Only called by kit.
-    void setCanonicalViewId(int viewId) { _canonicalViewId = viewId; }
+    void setCanonicalViewId(CanonicalViewId viewId) { _canonicalViewId = viewId; }
 
-    int  getCanonicalViewId() { return _canonicalViewId; }
+    CanonicalViewId getCanonicalViewId() const { return _canonicalViewId; }
 
     void setViewRenderState(const std::string& state) { _viewRenderState = state; }
 
-    bool getDumpTiles() { return _isDumpingTiles; }
+    bool getDumpTiles() const { return _isDumpingTiles; }
 
     void setDumpTiles(bool dumpTiles) { _isDumpingTiles = dumpTiles; }
 
     std::string getViewRenderState() { return _viewRenderState; }
 
-    bool isTileInsideVisibleArea(const TileDesc& tile) const;
+    TilePrioritizer::Priority getTilePriority(const TileDesc &desc) const;
+
+    void saveLogUiBackground()
+#if defined(BUILDING_TESTS)
+    {}
+#else
+    ;
+#endif
 
 private:
     bool loadDocument(const StringVector& tokens);
@@ -140,21 +183,24 @@ private:
     bool downloadAs(const StringVector& tokens);
     bool getChildId();
     bool getTextSelection(const StringVector& tokens);
-    bool setClipboard(const char* buffer, int length, const StringVector& tokens);
+    bool setClipboard(const StringVector& tokens);
     std::string getTextSelectionInternal(const std::string& mimeType);
     bool paste(const char* buffer, int length, const StringVector& tokens);
     bool insertFile(const StringVector& tokens);
-    bool keyEvent(const StringVector& tokens, const LokEventTargetEnum target);
+    bool keyEvent(const StringVector& tokens, LokEventTargetEnum target);
     bool extTextInputEvent(const StringVector& tokens);
     bool dialogKeyEvent(const char* buffer, int length, const std::vector<std::string>& tokens);
-    bool mouseEvent(const StringVector& tokens, const LokEventTargetEnum target);
+    bool mouseEvent(const StringVector& tokens, LokEventTargetEnum target);
     bool gestureEvent(const StringVector& tokens);
     bool dialogEvent(const StringVector& tokens);
     bool completeFunction(const StringVector& tokens);
     bool unoCommand(const StringVector& tokens);
-    bool selectText(const StringVector& tokens, const LokEventTargetEnum target);
+    bool unoSignatureCommand(std::string_view commandName);
+    bool selectText(const StringVector& tokens, LokEventTargetEnum target);
     bool selectGraphic(const StringVector& tokens);
-    bool renderNextSlideLayer(const unsigned width, const unsigned height, bool& done);
+    bool renderNextSlideLayer(SlideCompressor& scomp, unsigned width, unsigned height,
+                              double devicePixelRatio, bool& done, const std::string& cacheKey,
+                              bool isCompressed);
     bool renderSlide(const StringVector& tokens);
     bool renderWindow(const StringVector& tokens);
     bool resizeWindow(const StringVector& tokens);
@@ -182,7 +228,7 @@ private:
     bool getA11yCaretPosition();
     bool getPresentationInfo();
 
-    void rememberEventsForInactiveUser(const int type, const std::string& payload);
+    void rememberEventsForInactiveUser(int type, const std::string& payload);
 
     virtual void disconnect() override;
     virtual bool _handleInput(const char* buffer, int length) override;
@@ -203,13 +249,18 @@ private:
     {
         char *lastErr = _docManager->getLOKit()->getError();
         std::string ret;
-        if (lastErr)
+        if (lastErr != nullptr)
         {
             ret = std::string(lastErr, strlen(lastErr));
             free (lastErr);
         }
         return ret;
     }
+
+    void updateCursorPosition(const std::string &rect);
+    void updateCursorPositionJSON(const std::string &payload);
+    std::string getJailDocRoot() const;
+    std::string getZoomPercent(const std::string &payload);
 
 public:
     // simple one line for priming
@@ -231,6 +282,8 @@ public:
         Session::dumpState(oss);
 
         oss << "\n\tviewId: " << _viewId
+            << "\n\tpart: " << _currentPart
+            << "\n\tcursor: " << _cursorPosition.toString()
             << "\n\tcanonicalViewId: " << _canonicalViewId
             << "\n\tisDocLoaded: " << _isDocLoaded
             << "\n\tdocType: " << _docType
@@ -239,7 +292,7 @@ public:
             // FIXME: _pixmapCache
             << "\n\texportAsWopiUrl: " << _exportAsWopiUrl
             << "\n\tviewRenderedState: " << _viewRenderState
-            << "\n\tisDumpingTiles: " << _isDocLoaded
+            << "\n\tisDumpingTiles: " <<_isDumpingTiles
             << "\n\tclientVisibleArea: " << _clientVisibleArea.toString()
             << "\n\thasURP: " << _hasURP
             << "\n\tURPContext?: " << (_URPContext == nullptr)
@@ -256,10 +309,16 @@ private:
     std::shared_ptr<Watermark> _docWatermark;
 
     std::queue<std::chrono::steady_clock::time_point> _cursorInvalidatedEvent;
-    const unsigned _eventStorageIntervalMs = 15*1000;
+    static constexpr std::chrono::seconds EventStorageInterval{ 15 };
 
     /// View ID, returned by createView() or 0 by default.
     int _viewId;
+
+    /// Currently visible part
+    int _currentPart;
+
+    /// Last known position of a cursor for prioritizing rendering
+    Util::Rectangle _cursorPosition;
 
     /// Whether document has been opened successfully
     bool _isDocLoaded;
@@ -283,7 +342,7 @@ private:
     std::string _viewRenderState;
 
     /// the canonical id unique to the set of rendering properties of this session
-    int _canonicalViewId;
+    CanonicalViewId _canonicalViewId;
 
     /// whether we are dumping tiles as they are being drawn
     bool _isDumpingTiles;
@@ -296,6 +355,11 @@ private:
     bool _hasURP;
 
     // When state is added - please update dumpState above.
+
+    friend class LogUiCommands;
+    int _lastUiCmdLinesLoggedCount = 0;
+    LogUiCommandsLine _lastUiCmdLinesLogged[2];
+    std::chrono::steady_clock::time_point _logUiSaveBackGroundTimeStart;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

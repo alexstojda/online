@@ -10,60 +10,106 @@
  */
 
 #include "config.h"
-#include "config_version.h"
 
 #include "Socket.hpp"
-#include "TraceEvent.hpp"
-#include "Util.hpp"
 
+#include <common/ConfigUtil.hpp>
+#include <common/HexUtil.hpp>
+#include <common/Log.hpp>
+#include <common/SigUtil.hpp>
+#include <common/TraceEvent.hpp>
+#include <common/Unit.hpp>
+#include <common/Util.hpp>
+#if !MOBILEAPP
+#include <common/Watchdog.hpp>
+#endif
+#include <common/base64.hpp>
+#include <net/HttpRequest.hpp>
+#include <net/NetUtil.hpp>
+#include <net/ServerSocket.hpp>
+#include <net/WebSocketHandler.hpp>
+
+#if !MOBILEAPP && ENABLE_SSL
+#include <net/SslSocket.hpp>
+#include <openssl/x509v3.h>
+#endif
+
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
-#include <ctype.h>
+#include <cctype>
 #include <iomanip>
 #include <memory>
+#include <ostream>
+#include <ratio>
 #include <sstream>
-#include <stdio.h>
+#include <cstdio>
 #include <string>
-#include <unistd.h>
+
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#include <sysexits.h>
+#include <unistd.h>
 #include <sys/un.h>
+
 #ifdef __FreeBSD__
 #include <sys/ucred.h>
 #endif
 
 #include <Poco/MemoryStream.h>
+#if !MOBILEAPP
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Net/HTTPResponse.h>
+#include <Poco/Net/NetException.h>
 #include <Poco/Net/WebSocket.h> // computeAccept
+#endif
+
 #include <Poco/URI.h>
+
 #if ENABLE_SSL
 #include <Poco/Net/X509Certificate.h>
 #endif
 
-#include <SigUtil.hpp>
-#include "ServerSocket.hpp"
-#if !MOBILEAPP && ENABLE_SSL
-#include <net/SslSocket.hpp>
-#include <openssl/x509v3.h>
-#endif
-#include "WebSocketHandler.hpp"
-#include <net/HttpRequest.hpp>
-#include <NetUtil.hpp>
-#include <Log.hpp>
-#include <Watchdog.hpp>
-#include <wasm/base64.hpp>
-
 // Bug in pre C++17 where static constexpr must be defined. Fixed in C++17.
 constexpr std::chrono::microseconds SocketPoll::DefaultPollTimeoutMicroS;
 constexpr std::chrono::microseconds WebSocketHandler::InitialPingDelayMicroS;
-constexpr std::chrono::microseconds WebSocketHandler::PingFrequencyMicroS;
 
-std::atomic<bool> SocketPoll::InhibitThreadChecks(false);
-std::atomic<bool> Socket::InhibitThreadChecks(false);
+namespace ThreadChecks
+{
+    std::atomic<bool> Inhibit(false);
+}
+
+#if !MOBILEAPP
 
 std::unique_ptr<Watchdog> SocketPoll::PollWatchdog;
 
 #define SOCKET_ABSTRACT_UNIX_NAME "0coolwsd-"
+
+#endif
+
+std::atomic<size_t> StreamSocket::ExternalConnectionCount = 0;
+
+net::DefaultValues net::Defaults = { .inactivityTimeout = std::chrono::seconds(3600),
+                                     .maxExtConnections = 200000 /* arbitrary value to be resolved */ };
+
+constexpr std::string_view Socket::toString(Type t)
+{
+    switch (t)
+    {
+        case Type::IPv4:
+            return "IPv4";
+        case Type::IPv6:
+            return "IPv6";
+        case Type::All:
+            return "All";
+        case Type::Unix:
+            return "Unix";
+    }
+
+    return "Unknown";
+}
 
 int Socket::createSocket([[maybe_unused]] Socket::Type type)
 {
@@ -78,35 +124,83 @@ int Socket::createSocket([[maybe_unused]] Socket::Type type)
     default: assert(!"Unknown Socket::Type"); break;
     }
 
-    return socket(domain, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    return ::socket(domain, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 #else
     return fakeSocketSocket();
 #endif
 }
 
-
-bool StreamSocket::socketpair(std::shared_ptr<StreamSocket> &parent,
-                              std::shared_ptr<StreamSocket> &child)
+std::ostream& Socket::streamStats(std::ostream& os,
+                                  const std::chrono::steady_clock::time_point now) const
 {
-#if MOBILEAPP
-    return false;
-#else
+    const auto durTotal = std::chrono::duration_cast<std::chrono::milliseconds>(now - _creationTime);
+    const auto durLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastSeenTime);
+
+    float kBpsIn, kBpsOut;
+    if (durTotal.count() > 0)
+    {
+        kBpsIn = (float)_bytesRcvd / (float)durTotal.count();
+        kBpsOut = (float)_bytesSent / (float)durTotal.count();
+    }
+    else
+    {
+        kBpsIn = (float)_bytesRcvd / 1000.0f;
+        kBpsOut = (float)_bytesSent / 1000.0f;
+    }
+
+    const std::streamsize p = os.precision();
+    os.precision(1);
+    os << "Stats[dur[total "
+        << durTotal.count() << "ms, last "
+        << durLast.count() << " ms], kBps[in "
+        << kBpsIn << ", out " << kBpsOut
+        << "]]";
+    os.precision(p);
+    return os;
+}
+
+std::string Socket::getStatsString(const std::chrono::steady_clock::time_point now) const
+{
+    std::ostringstream oss;
+    streamStats(oss, now);
+    return oss.str();
+}
+
+std::ostream& Socket::streamImpl(std::ostream& os) const
+{
+    os << "Socket[#" << getFD() << ", " << toString(type()) << " @ " << clientAddress() << ":"
+       << clientPort() << ']';
+    return os;
+}
+
+std::string Socket::toStringImpl() const
+{
+    std::ostringstream oss;
+    streamImpl(oss);
+    return oss.str();
+}
+
+#if !MOBILEAPP
+
+bool StreamSocket::socketpair(const std::chrono::steady_clock::time_point creationTime,
+                              std::shared_ptr<StreamSocket>& parent,
+                              std::shared_ptr<StreamSocket>& child)
+{
     int pair[2];
     int rc = ::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair);
     if (rc != 0)
         return false;
-
-    child = std::shared_ptr<StreamSocket>(new StreamSocket("save-child", pair[0], Socket::Type::Unix, true));
+    child = std::make_shared<StreamSocket>("save-child", pair[0], Socket::Type::Unix, true, HostType::Other, ReadType::NormalRead, creationTime);
     child->setNoShutdown();
     child->setClientAddress("save-child");
-    parent = std::shared_ptr<StreamSocket>(new StreamSocket("save-kit-parent", pair[1], Socket::Type::Unix, true));
+    parent = std::make_shared<StreamSocket>("save-kit-parent", pair[1], Socket::Type::Unix, true, HostType::Other, ReadType::NormalRead, creationTime);
     parent->setNoShutdown();
     parent->setClientAddress("save-parent");
 
     return true;
-#endif
 }
 
+#endif
 
 #if ENABLE_DEBUG
 static std::atomic<long> socketErrorCount;
@@ -141,30 +235,30 @@ static std::string X509_NAME_to_utf8(X509_NAME* name)
 
 bool SslStreamSocket::verifyCertificate()
 {
-    if (_verification == ssl::CertificateVerification::Disabled || net::isLocalhost(hostname()))
+    if (_verification == ssl::CertificateVerification::Disabled || isLocalHost())
     {
         return true;
     }
 
     LOG_TRC("Verifying certificate of [" << hostname() << ']');
-    X509* x509 = SSL_get_peer_certificate(_ssl);
+    X509* x509 = SSL_get1_peer_certificate(_ssl);
     if (x509)
     {
         // Dump cert info, for debugging only.
         const std::string issuerName = X509_NAME_to_utf8(X509_get_issuer_name(x509));
         const std::string subjectName = X509_NAME_to_utf8(X509_get_subject_name(x509));
         std::string serialNumber;
-        BIGNUM* pBN = ASN1_INTEGER_to_BN(X509_get_serialNumber(const_cast<X509*>(x509)), 0);
-        if (pBN)
+        BIGNUM* bigNumber = ASN1_INTEGER_to_BN(X509_get_serialNumber(const_cast<X509*>(x509)), 0);
+        if (bigNumber)
         {
-            char* pSN = BN_bn2hex(pBN);
-            if (pSN)
+            char* Sn = BN_bn2hex(bigNumber);
+            if (Sn)
             {
-                serialNumber = pSN;
-                OPENSSL_free(pSN);
+                serialNumber = Sn;
+                OPENSSL_free(Sn);
             }
 
-            BN_free(pBN);
+            BN_free(bigNumber);
         }
 
         LOG_TRC("SSL cert issuer: " << issuerName << ", subject: " << subjectName
@@ -176,11 +270,9 @@ bool SslStreamSocket::verifyCertificate()
             LOG_TRC("SSL cert verified for host [" << hostname() << ']');
             return true;
         }
-        else
-        {
-            LOG_INF("SSL cert failed verification for host [" << hostname() << ']');
-            return false;
-        }
+
+        LOG_INF("SSL cert failed verification for host [" << hostname() << ']');
+        return false;
     }
 
     return false;
@@ -189,7 +281,7 @@ bool SslStreamSocket::verifyCertificate()
 std::string SslStreamSocket::getSslCert(std::string& subjectHash)
 {
     std::ostringstream strstream;
-    if (X509* x509 = SSL_get_peer_certificate(_ssl))
+    if (X509* x509 = SSL_get1_peer_certificate(_ssl))
     {
         Poco::Net::X509Certificate cert(x509);
         cert.save(strstream);
@@ -218,39 +310,47 @@ namespace {
 
 
 SocketPoll::SocketPoll(std::string threadName)
-    : _name(std::move(threadName)),
-      _pollStartIndex(0),
-      _stop(false),
-      _threadStarted(0),
-      _threadFinished(false),
-      _runOnClientThread(false),
-      _owner(std::this_thread::get_id()),
-      _ownerThreadId(Util::getThreadId()),
-      _watchdogTime(Watchdog::getDisableStamp())
+    : _name(std::move(threadName))
+    , _pollStartIndex(0)
+    , _owner(std::this_thread::get_id())
+    , _threadStarted(0)
+#if !MOBILEAPP
+    , _watchdogTime(Watchdog::getDisableStamp())
+#endif
+    , _ownerThreadId(Util::getThreadId())
+    , _stop(false)
+    , _threadFinished(false)
+    , _runOnClientThread(false)
 {
     ProfileZone profileZone("SocketPoll::SocketPoll");
 
+#if !MOBILEAPP
     static bool watchDogProfile = !!getenv("COOL_WATCHDOG");
     if (watchDogProfile && !PollWatchdog)
-        PollWatchdog.reset(new Watchdog());
+        PollWatchdog = std::make_unique<Watchdog>();
+#endif
 
     _wakeup[0] = -1;
     _wakeup[1] = -1;
 
     createWakeups();
 
-    LOG_DBG("New SocketPoll [" << _name << "] owned by " << Log::to_string(_owner));
+    LOG_DBG("New " << logInfo());
 
+#if !MOBILEAPP
     if (PollWatchdog)
         PollWatchdog->addTime(&_watchdogTime, &_ownerThreadId);
+#endif
 }
 
 SocketPoll::~SocketPoll()
 {
-    LOG_TRC("~SocketPoll [" << _name << "] destroying. Joining thread now.");
+    LOG_DBG("~" << logInfo());
 
+#if !MOBILEAPP
     if (PollWatchdog)
         PollWatchdog->removeTime(&_watchdogTime);
+#endif
 
     joinThread();
 
@@ -259,7 +359,7 @@ SocketPoll::~SocketPoll()
 
 void SocketPoll::checkAndReThread()
 {
-    if (InhibitThreadChecks)
+    if (ThreadChecks::Inhibit)
         return; // in late shutdown
     const std::thread::id us = std::this_thread::get_id();
     if (_owner == us)
@@ -269,12 +369,13 @@ void SocketPoll::checkAndReThread()
     _owner = us;
     _ownerThreadId = Util::getThreadId();
     for (const auto& it : _pollSockets)
-        it->setThreadOwner(us);
+        SocketThreadOwnerChange::setThreadOwner(*it, us);
     // _newSockets are adapted as they are inserted.
 }
 
 void SocketPoll::removeFromWakeupArray()
 {
+    if (_wakeup[1] != -1)
     {
         std::lock_guard<std::mutex> lock(getPollWakeupsMutex());
         auto it = std::find(getWakeupsArray().begin(),
@@ -292,6 +393,7 @@ void SocketPoll::removeFromWakeupArray()
     fakeSocketClose(_wakeup[0]);
     fakeSocketClose(_wakeup[1]);
 #endif
+
     _wakeup[0] = -1;
     _wakeup[1] = -1;
 }
@@ -375,14 +477,14 @@ void SocketPoll::pollingThreadEntry()
 
         // Invoke the virtual implementation.
         pollingThread();
-
-        // Release sockets.
-        removeSockets();
     }
     catch (const std::exception& exc)
     {
         LOG_ERR("Exception in polling thread [" << _name << "]: " << exc.what());
     }
+
+    // Release sockets.
+    removeSockets();
 
     _threadFinished = true;
     LOG_INF("Finished polling thread [" << _name << "].");
@@ -390,15 +492,19 @@ void SocketPoll::pollingThreadEntry()
 
 void SocketPoll::disableWatchdog()
 {
+#if !MOBILEAPP
     _watchdogTime = Watchdog::getDisableStamp();
+#endif
 }
 
 void SocketPoll::enableWatchdog()
 {
+#if !MOBILEAPP
     _watchdogTime = Watchdog::getTimestamp();
+#endif
 }
 
-int SocketPoll::poll(int64_t timeoutMaxMicroS)
+int SocketPoll::poll(int64_t timeoutMaxMicroS, bool justPoll)
 {
     if (_runOnClientThread)
         checkAndReThread();
@@ -410,7 +516,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
     socketErrorCount++;
 #endif
 
-    std::chrono::steady_clock::time_point now =
+    const std::chrono::steady_clock::time_point now =
         std::chrono::steady_clock::now();
 
     // The events to poll on change each spin of the loop.
@@ -430,42 +536,66 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
         struct timespec timeout;
         timeout.tv_sec = timeoutMaxMicroS / (1000 * 1000);
         timeout.tv_nsec = (timeoutMaxMicroS % (1000 * 1000)) * 1000;
-        rc = ::ppoll(&_pollFds[0], size + 1, &timeout, nullptr);
+        rc = ::ppoll(_pollFds.data(), size + 1, &timeout, nullptr);
 #  else
         int timeoutMaxMs = (timeoutMaxMicroS + 999) / 1000;
         LOG_TRC("Legacy Poll start, timeoutMs: " << timeoutMaxMs);
-        rc = ::poll(&_pollFds[0], size + 1, std::max(timeoutMaxMs,0));
+        rc = ::poll(_pollFds.data(), size + 1, std::max(timeoutMaxMs,0));
 #  endif
 #else
         LOG_TRC("SocketPoll Poll");
         int timeoutMaxMs = (timeoutMaxMicroS + 999) / 1000;
-        rc = fakeSocketPoll(&_pollFds[0], size + 1, std::max(timeoutMaxMs,0));
+        rc = fakeSocketPoll(_pollFds.data(), size + 1, std::max(timeoutMaxMs,0));
 #endif
     }
     while (rc < 0 && errno == EINTR);
     LOGA_TRC(Socket, "Poll completed with " << rc << " live polls max (" <<
              timeoutMaxMicroS << "us)" << ((rc==0) ? "(timedout)" : ""));
 
+    if (rc == 0)
+    {
+        // We timed out. Flush the thread-local log
+        // buffer to avoid falling too much behind.
+        Log::flush();
+    }
+
     // from now we want to race back to sleep.
     enableWatchdog();
+
+    if (justPoll)
+    {
+        // Done with the poll(), don't process anything.
+        bool ret = false;
+        // Run through the poll entries (except the wakeup poll), and combine them into an answer.
+        for (size_t i = 0; i < size; ++i)
+        {
+            if (_pollFds[i].revents)
+            {
+                ret = true;
+                break;
+            }
+        }
+        return ret;
+    }
 
     // First process the wakeup pipe (always the last entry).
     if (_pollFds[size].revents)
     {
-        LOGA_TRC(Socket, '#' << _pollFds[size].fd << ": Handling events of wakeup pipe: 0x" << std::hex
-                 << _pollFds[size].revents << std::dec);
+        LOGA_TRC(Socket, "Handling events of wakeup pipe (" << _pollFds[size].fd << "): 0x"
+                                                            << std::hex << _pollFds[size].revents
+                                                            << std::dec);
 
         // Clear the data.
-#if !MOBILEAPP
         int dump[32];
+#if !MOBILEAPP
         dump[0] = ::read(_wakeup[0], &dump, sizeof(dump));
-        LOGA_TRC(Socket, "Wakeup pipe read " << dump[0] << " bytes");
 #else
-        LOGA_TRC(Socket, "Wakeup pipe read");
-        int dump = fakeSocketRead(_wakeup[0], &dump, sizeof(dump));
+        dump[0] = fakeSocketRead(_wakeup[0], &dump, sizeof(dump));
 #endif
+        LOGA_TRC(Socket, "Wakeup pipe (" << _wakeup[0] << ") read " << dump[0] << " bytes");
 
         std::vector<CallbackFn> invoke;
+        std::vector<SocketTransfer> pendingTransfers;
         {
             std::lock_guard<std::mutex> lock(_mutex);
 
@@ -476,7 +606,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
 
                 // Update thread ownership.
                 for (auto& i : _newSockets)
-                    i->setThreadOwner(std::this_thread::get_id());
+                    SocketThreadOwnerChange::setThreadOwner(*i, std::this_thread::get_id());
 
                 // Copy the new sockets over and clear.
                 _pollSockets.insert(_pollSockets.end(), _newSockets.begin(), _newSockets.end());
@@ -486,6 +616,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
 
             // Extract list of callbacks to process
             std::swap(_newCallbacks, invoke);
+            std::swap(_pendingTransfers, pendingTransfers);
         }
 
         if (invoke.size() > 0)
@@ -502,6 +633,24 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
                         "] callback: " << exc.what());
             }
         }
+
+        if (pendingTransfers.size() > 0)
+            LOGA_TRC(Socket, "Invoking " << pendingTransfers.size() << " transfers");
+        for (const auto& pendingTransfer : pendingTransfers)
+        {
+            try
+            {
+                transfer(pendingTransfer);
+            }
+            catch (const std::exception& exc)
+            {
+                LOG_ERR("Exception while invoking poll [" << _name <<
+                        "] transfer: " << exc.what());
+            }
+        }
+
+        pendingTransfers.clear();
+        invoke.clear();
 
         try
         {
@@ -526,7 +675,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
         assert(!_pollSockets.empty() && "All existing sockets disappeared from the SocketPoll");
 
         // Fire the poll callbacks and remove dead fds.
-        std::chrono::steady_clock::time_point newNow = std::chrono::steady_clock::now();
+        const std::chrono::steady_clock::time_point newNow = std::chrono::steady_clock::now();
 
         // We use the _pollStartIndex to start the polling at a different index each time. Do some
         // sanity check first to handle the case where we removed one or several sockets last time.
@@ -546,7 +695,7 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
             else if (!_pollSockets[i])
             {
                 // removed in a callback
-                itemsErased++;
+                ++itemsErased;
             }
             else if (_pollFds[i].fd == _pollSockets[i]->getFD())
             {
@@ -567,9 +716,9 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
                     rc = -1;
                 }
 
-                if (!disposition.isContinue())
+                if (!_pollSockets[i]->isOpen() || !disposition.isContinue())
                 {
-                    itemsErased++;
+                    ++itemsErased;
                     LOGA_TRC(Socket, '#' << _pollFds[i].fd << ": Removing socket (at " << i
                              << " of " << _pollSockets.size() << ") from " << _name);
                     _pollSockets[i] = nullptr;
@@ -608,8 +757,39 @@ int SocketPoll::poll(int64_t timeoutMaxMicroS)
     return rc;
 }
 
+void SocketPoll::transfer(const SocketTransfer& pendingTransfer)
+{
+    std::shared_ptr<Socket> socket = pendingTransfer._socket.lock();
+    std::shared_ptr<SocketPoll> toPoll = pendingTransfer._toPoll.lock();
+    if (!socket)
+    {
+        LOG_WRN("Socket for transfer no longer exists");
+        return;
+    }
+    if (!toPoll)
+    {
+        LOG_WRN("Destination Poll for socket transfer no longer exists");
+        return;
+    }
+    auto it = std::find(_pollSockets.begin(), _pollSockets.end(), socket);
+    if (it == _pollSockets.end())
+        LOG_WRN("Trying to move socket out of the wrong poll");
+    else
+    {
+        SocketDisposition disposition(socket);
+        disposition.setTransfer(*toPoll, pendingTransfer._cbAfterArrivalInNewPoll);
+        // leave empty entry in _pollSockets to be added to toErase and
+        // cleaned later.
+        *it = nullptr;
+        disposition.execute();
+        if (pendingTransfer._cbAfterRemovalFromOldPoll)
+            pendingTransfer._cbAfterRemovalFromOldPoll();
+    }
+}
+
 void SocketPoll::wakeupWorld()
 {
+    std::lock_guard<std::mutex> lock(getPollWakeupsMutex());
     for (const auto& fd : getWakeupsArray())
         wakeup(fd);
 }
@@ -623,10 +803,11 @@ void SocketPoll::closeAllSockets()
     checkAndReThread();
 
     removeFromWakeupArray();
-    for (auto &it : _pollSockets)
+    for (std::shared_ptr<Socket> &it : _pollSockets)
     {
-        // first close the underlying socket
-        close(it->getFD());
+        // first close the underlying socket/fakeSocket
+        it->closeFD(*this);
+        assert(!it->isOpen() && "Socket is still open after closing");
 
         // avoid the socketHandler' getting an onDisconnect
         auto stream = dynamic_cast<StreamSocket *>(it.get());
@@ -638,38 +819,24 @@ void SocketPoll::closeAllSockets()
     assert(_newSockets.size() == 0);
 }
 
-void SocketPoll::takeSocket(const std::shared_ptr<SocketPoll> &fromPoll,
-                            const std::shared_ptr<Socket> &inSocket)
+void SocketPoll::takeSocket(const std::shared_ptr<SocketPoll>& fromPoll,
+                            const std::shared_ptr<SocketPoll>& toPoll,
+                            const std::shared_ptr<Socket>& inSocket)
 {
     std::mutex mut;
     std::condition_variable cond;
     bool transferred = false;
 
     // Important we're not blocking the fromPoll thread.
-    ASSERT_CORRECT_THREAD();
+    toPoll->assertCorrectThread(__FILE__, __LINE__);
 
-    // hold a reference during transfer
-    std::shared_ptr<Socket> socket = inSocket;
+    int socketFD = inSocket->getFD();
 
-    SocketPoll *toPoll = this;
-    fromPoll->addCallback([fromPoll,socket,&mut,&cond,&transferred,toPoll](){
-        auto it = std::find(fromPoll->_pollSockets.begin(),
-                            fromPoll->_pollSockets.end(), socket);
-        if (it != fromPoll->_pollSockets.end())
-        {
-            // Erasing messes up the tracking of poll results in 'poll'
-            // leave to be added to toErase and cleaned later.
-            *it = nullptr;
-        }
-        else
-            LOG_WRN("Trying to move socket out of the wrong poll");
+    fromPoll->transferSocketTo(inSocket, toPoll,
+        [](const std::shared_ptr<Socket>& /*moveSocket*/){},
+        [&mut,&cond,&transferred,socketFD](){
 
-        // sockets in transit are un-owned
-        socket->resetThreadOwner();
-
-        toPoll->insertNewSocket(socket);
-
-        LOG_TRC("Socket #" << socket->getFD() << " moved across polls");
+        LOG_TRC("Socket #" << socketFD << " moved across polls");
 
         // Let the caller know we've done our job.
         std::unique_lock<std::mutex> lock(mut);
@@ -677,14 +844,14 @@ void SocketPoll::takeSocket(const std::shared_ptr<SocketPoll> &fromPoll,
         cond.notify_all();
     });
 
-    LOG_TRC("Waiting to transfer Socket #" << socket->getFD() <<
-            " from: " << fromPoll->name() << " to new poll: " << name());
+    LOG_TRC("Waiting to transfer Socket #" << socketFD <<
+            " from: " << fromPoll->name() << " to new poll: " << toPoll->name());
     std::unique_lock<std::mutex> lock(mut);
-    while (!transferred && continuePolling()) // in case of exit during transfer.
+    while (!transferred && toPoll->continuePolling()) // in case of exit during transfer.
         cond.wait_for(lock, std::chrono::milliseconds(50));
 
-    LOG_TRC("Transfer of Socket #" << socket->getFD() <<
-            " from: " << fromPoll->name() << " to new poll: " << name() << " complete");
+    LOG_TRC("Transfer of Socket #" << socketFD <<
+            " from: " << fromPoll->name() << " to new poll: " << toPoll->name() << " complete");
 }
 
 void SocketPoll::createWakeups()
@@ -703,6 +870,9 @@ void SocketPoll::createWakeups()
         throw std::runtime_error("Failed to allocate pipe for SocketPoll [" + _name + "] waking.");
     }
 
+    LOG_DBG("Created wakeup FDs for SocketPoll [" << _name << "], rfd: " << _wakeup[0]
+                                                  << ", wfd: " << _wakeup[1]);
+
     std::lock_guard<std::mutex> lock(getPollWakeupsMutex());
     getWakeupsArray().push_back(_wakeup[1]);
 }
@@ -720,7 +890,7 @@ void SocketPoll::removeSockets()
 
         LOG_DBG("Removing socket #" << socket->getFD() << " from " << _name);
         ASSERT_CORRECT_SOCKET_THREAD(socket);
-        socket->resetThreadOwner();
+        SocketThreadOwnerChange::resetThreadOwner(*socket);
 
         _pollSockets.pop_back();
     }
@@ -792,7 +962,7 @@ bool SocketPoll::insertNewUnixSocket(
 #else
     addrunix.sun_path[0] = '0';
 #endif
-    memcpy(&addrunix.sun_path[1], location.c_str(), location.length());
+    std::memcpy(&addrunix.sun_path[1], location.c_str(), location.length());
 
     const int res = connect(fd, (const struct sockaddr*)&addrunix, sizeof(addrunix));
     if (res < 0 && errno != EINPROGRESS)
@@ -804,7 +974,7 @@ bool SocketPoll::insertNewUnixSocket(
 
     std::shared_ptr<StreamSocket> socket
         = StreamSocket::create<StreamSocket>(std::string(), fd, Socket::Type::Unix,
-                                             true, websocketHandler);
+                                             true, HostType::Other, websocketHandler);
     if (!socket)
     {
         LOG_ERR("Failed to create socket unix socket at " << location);
@@ -860,7 +1030,8 @@ void SocketPoll::insertNewFakeSocket(
     else
     {
         std::shared_ptr<StreamSocket> socket;
-        socket = StreamSocket::create<StreamSocket>(std::string(), fd, Socket::Type::Unix, true, websocketHandler);
+        socket = StreamSocket::create<StreamSocket>(std::string(), fd, Socket::Type::Unix, true,
+                                                    HostType::Other, websocketHandler);
         if (socket)
         {
             LOG_TRC("Sending 'hello' instead of HTTP GET for now");
@@ -892,50 +1063,70 @@ void SocketDisposition::execute()
     if (_socketMove)
     {
         // Drop pretentions of ownership before _socketMove.
-        _socket->resetThreadOwner();
+        SocketThreadOwnerChange::resetThreadOwner(*_socket);
 
-        if (!_toPoll) {
-            assert (isMove());
-            _socketMove(_socket);
-        } else {
-            assert (isTransfer());
+        assert (isTransfer() && _toPoll);
+        if (!_toPoll->isAlive())
+        {
             // Ensure the thread is running before adding callback.
+            LOG_DBG("Starting target poll thread [" << _toPoll->name() << "] while moving socket #"
+                                                    << _socket->getFD());
             _toPoll->startThread();
-            _toPoll->addCallback([pollCopy = _toPoll, socket = _socket, socketMoveFn = std::move(_socketMove)]()
-                {
-                    pollCopy->insertNewSocket(socket);
-                    socketMoveFn(socket);
-                });
         }
+
+        auto callback = [pollCopy = _toPoll, socket = std::move(_socket),
+                         socketMoveFn = std::move(_socketMove)]() mutable
+        {
+            pollCopy->insertNewSocket(socket);
+            socketMoveFn(socket);
+            // Clear lambda's socket capture while in the polling thread
+            socket.reset();
+        };
         _socketMove = nullptr;
+        assert(!_socket && "should be unset after move");
+
+        _toPoll->addCallback(std::move(callback));
+
+        // This can happen due to programming error or a race with the thread.
+        if (!_toPoll->isAlive())
+            LOG_WRN("Thread poll [" << _toPoll->name()
+                                    << "] is not alive after adding transfer callback");
+
         _toPoll = nullptr;
     }
 }
 
-void WebSocketHandler::dumpState(std::ostream& os) const
+void WebSocketHandler::dumpState(std::ostream& os, const std::string& indent) const
 {
     os << (_shuttingDown ? "shutd " : "alive ");
 #if !MOBILEAPP
     os << std::setw(5) << _pingTimeUs/1000. << "ms ";
 #endif
     if (_wsPayload.size() > 0)
-        Util::dumpHex(os, _wsPayload, "\t\tws queued payload:\n", "\t\t");
+        HexUtil::dumpHex(os, _wsPayload, "\t\tws queued payload:\n", "\t\t");
     os << '\n';
     if (_msgHandler)
+    {
+        os << indent << "msgHandler:\n";
         _msgHandler->dumpState(os);
+    }
 }
 
 void StreamSocket::dumpState(std::ostream& os)
 {
     int64_t timeoutMaxMicroS = SocketPoll::DefaultPollTimeoutMicroS.count();
     const int events = getPollEvents(std::chrono::steady_clock::now(), timeoutMaxMicroS);
-    os << '\t' << std::setw(6) << getFD() << "\t0x" << std::hex << events << std::dec << '\t'
-       << (ignoringInput() ? "ignore\t" : "process\t") << std::setw(6) << _inBuffer.size() << '\t'
-       << std::setw(6) << _outBuffer.size() << '\t' << " r: " << std::setw(6) << _bytesRecvd
-       << "\t w: " << std::setw(6) << _bytesSent << '\t' << clientAddress() << '\t';
+
+    // The format of the table is as follows (spaces are really tabs):
+    // "fd events status rbuffered rcapacity wbuffered wcapacity rtotal wtotal clientaddress";
+    os << '\t' << std::setw(6) << getFD() << "\t0x" << std::hex << events << std::dec
+       << (ignoringInput() ? "\t\tignore\t" : "\t\tprocess\t") << std::setw(7) << _inBuffer.size()
+       << '\t' << std::setw(7) << _inBuffer.capacity() << '\t' << std::setw(6) << _outBuffer.size()
+       << '\t' << std::setw(7) << _outBuffer.capacity() << '\t' << " r: " << std::setw(6)
+       << bytesRcvd() << "\t w: " << std::setw(6) << bytesSent() << '\t' << clientAddress() << '\t';
     _socketHandler->dumpState(os);
     if (_inBuffer.size() > 0)
-        Util::dumpHex(os, _inBuffer, "\t\tinBuffer:\n", "\t\t");
+        HexUtil::dumpHex(os, _inBuffer, "\t\tinBuffer:\n", "\t\t");
     _outBuffer.dumpHex(os, "\t\toutBuffer:\n", "\t\t");
 }
 
@@ -943,36 +1134,32 @@ bool StreamSocket::send(const http::Response& response)
 {
     if (response.writeData(_outBuffer))
     {
-        flush();
+        attemptWrites();
         return true;
     }
-    else
-    {
-        shutdown();
-        return false;
-    }
+
+    asyncShutdown();
+    return false;
 }
 
 bool StreamSocket::send(http::Request& request)
 {
     if (request.writeData(_outBuffer, getSendBufferCapacity()))
     {
-        flush();
+        attemptWrites();
         return true;
     }
-    else
-    {
-        shutdown();
-        return false;
-    }
+
+    asyncShutdown();
+    return false;
 }
 
 bool StreamSocket::sendAndShutdown(http::Response& response)
 {
-    response.set("Connection", "close");
+    response.setConnectionToken(http::Header::ConnectionToken::Close);
     if (send(response))
     {
-        shutdown();
+        asyncShutdown();
         return true;
     }
 
@@ -981,19 +1168,30 @@ bool StreamSocket::sendAndShutdown(http::Response& response)
 
 void SocketPoll::dumpState(std::ostream& os) const
 {
+    THREAD_UNSAFE_DUMP_BEGIN
     // FIXME: NOT thread-safe! _pollSockets is modified from the polling thread!
-    const auto pollSockets = _pollSockets;
+    const std::vector<std::shared_ptr<Socket>> pollSockets = _pollSockets;
 
-    os << "\n  SocketPoll:";
-    os << "\n    Poll [" << name() << "] with " << pollSockets.size() << " socket"
-       << (pollSockets.size() == 1 ? "" : "s") << " - wakeup rfd: " << _wakeup[0]
+    os << "\n  SocketPoll [" << name() << "] with " << pollSockets.size() << " socket(s)" << " and "
+       << _newCallbacks.size() << " callback(s) - wakeup rfd: " << _wakeup[0]
        << " wfd: " << _wakeup[1] << '\n';
-    const auto callbacks = _newCallbacks.size();
-    if (callbacks > 0)
-        os << "\tcallbacks: " << callbacks << '\n';
-    os << "\t    fd\tevents\trbuffered\twbuffered\trtotal\twtotal\tclientaddress\n";
-    for (const auto& i : pollSockets)
-        i->dumpState(os);
+
+    if (!pollSockets.empty())
+    {
+        os << "\t\tfd\tevents\tstatus\trbuffered\trcapacity\twbuffered\twcapacity\trtotal\twtotal\t"
+              "clientaddress\n";
+        std::size_t totalCapacity = 0;
+        for (const std::shared_ptr<Socket>& socket : pollSockets)
+        {
+            socket->dumpState(os);
+            totalCapacity += socket->totalBufferCapacity();
+        }
+
+        os << "\n  Total socket buffer capacity: " << totalCapacity / 1024 << " KB\n";
+    }
+
+    os << "\n  Done SocketPoll [" << name() << "]\n";
+    THREAD_UNSAFE_DUMP_END
 }
 
 /// Returns true on success only.
@@ -1006,7 +1204,7 @@ bool ServerSocket::bind([[maybe_unused]] Type type, [[maybe_unused]] int port)
     const int reuseAddress = 1;
     constexpr unsigned int len = sizeof(reuseAddress);
     if (::setsockopt(getFD(), SOL_SOCKET, SO_REUSEADDR, &reuseAddress, len) == -1)
-        LOG_SYS("Failed setsockopt SO_REUSEADDR: " << strerror(errno));
+        LOG_SYS("Failed setsockopt SO_REUSEADDR on socket fd " << getFD() << ": " << strerror(errno));
 
     int rc;
 
@@ -1055,6 +1253,47 @@ bool ServerSocket::bind([[maybe_unused]] Type type, [[maybe_unused]] int port)
 #endif
 }
 
+#if !MOBILEAPP
+
+bool ServerSocket::isUnrecoverableAcceptError(const int cause)
+{
+    constexpr const char * messagePrefix = "Failed to accept. (errno: ";
+    switch(cause)
+    {
+        case EINTR:
+        case EAGAIN:        // == EWOULDBLOCK
+        case ENETDOWN:
+        case EPROTO:
+        case ENOPROTOOPT:
+        case EHOSTDOWN:
+#ifdef ENONET
+        case ENONET:
+#endif
+        case EHOSTUNREACH:
+        case EOPNOTSUPP:
+        case ENETUNREACH:
+        case ECONNABORTED:
+        case ETIMEDOUT:
+        case EMFILE:
+        case ENFILE:
+        case ENOMEM:
+        case ENOBUFS:
+        {
+            LOG_DBG(messagePrefix << Util::symbolicErrno(cause) << ", " << std::strerror(cause)
+                                  << ')');
+            return false;
+        }
+        default:
+        {
+            LOG_FTL(messagePrefix << Util::symbolicErrno(cause) << ", " << std::strerror(cause)
+                                  << ')');
+            return true;
+        }
+    }
+}
+
+#endif
+
 std::shared_ptr<Socket> ServerSocket::accept()
 {
     // Accept a connection (if any) and set it to non-blocking.
@@ -1062,57 +1301,74 @@ std::shared_ptr<Socket> ServerSocket::accept()
 #if !MOBILEAPP
     assert(_type != Socket::Type::Unix);
 
+    UnitWSD* const unitWsd = UnitWSD::isUnitTesting() ? &UnitWSD::get() : nullptr;
+    if (unitWsd && unitWsd->simulateExternalAcceptError())
+        return nullptr; // Recoverable error, ignore to retry
+
     struct sockaddr_in6 clientInfo;
     socklen_t addrlen = sizeof(clientInfo);
     const int rc = ::accept4(getFD(), (struct sockaddr *)&clientInfo, &addrlen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    if (rc < 0)
+    {
+        if (isUnrecoverableAcceptError(errno))
+            Util::forcedExit(EX_SOFTWARE);
+        return nullptr;
+    }
 #else
     const int rc = fakeSocketAccept4(getFD());
 #endif
     LOG_TRC("Accepted socket #" << rc << ", creating socket object.");
+
+#if !MOBILEAPP
+    char addrstr[INET6_ADDRSTRLEN];
+
+    Socket::Type type;
+    const void *inAddr;
+    if (clientInfo.sin6_family == AF_INET)
+    {
+        struct sockaddr_in *ipv4 = (struct sockaddr_in *)&clientInfo;
+        inAddr = &(ipv4->sin_addr);
+        type = Socket::Type::IPv4;
+    }
+    else
+    {
+        struct sockaddr_in6 *ipv6 = &clientInfo;
+        inAddr = &(ipv6->sin6_addr);
+        type = Socket::Type::IPv6;
+    }
+    ::inet_ntop(clientInfo.sin6_family, inAddr, addrstr, sizeof(addrstr));
+
+    const size_t extConnCount = StreamSocket::getExternalConnectionCount();
+    if (net::Defaults.maxExtConnections > 0 && extConnCount >= net::Defaults.maxExtConnections)
+    {
+        LOG_WRN("Limiter rejected extConn[" << extConnCount << "/" << net::Defaults.maxExtConnections << "]: #"
+                << rc << " has family "
+                << clientInfo.sin6_family << ", address " << addrstr << ":" << clientInfo.sin6_port);
+        ::close(rc);
+        return nullptr;
+    }
+
     try
     {
         // Create a socket object using the factory.
-        if (rc != -1)
-        {
-#if !MOBILEAPP
-            char addrstr[INET6_ADDRSTRLEN];
+        std::shared_ptr<Socket> _socket = createSocketFromAccept(rc, type);
+        if (unitWsd)
+            unitWsd->simulateExternalSocketCtorException(_socket);
 
-            Socket::Type type;
-            const void *inAddr;
-            if (clientInfo.sin6_family == AF_INET)
-            {
-                auto ipv4 = (struct sockaddr_in *)&clientInfo;
-                inAddr = &(ipv4->sin_addr);
-                type = Socket::Type::IPv4;
-            }
-            else
-            {
-                auto ipv6 = (struct sockaddr_in6 *)&clientInfo;
-                inAddr = &(ipv6->sin6_addr);
-                type = Socket::Type::IPv6;
-            }
+        _socket->setClientAddress(addrstr, clientInfo.sin6_port);
 
-            std::shared_ptr<Socket> _socket = createSocketFromAccept(rc, type);
-
-            inet_ntop(clientInfo.sin6_family, inAddr, addrstr, sizeof(addrstr));
-            _socket->setClientAddress(addrstr);
-
-            LOG_TRC("Accepted socket #" << _socket->getFD() << " has family "
-                                        << clientInfo.sin6_family << " address "
-                                        << _socket->clientAddress());
-#else
-            std::shared_ptr<Socket> _socket = createSocketFromAccept(rc, Socket::Type::Unix);
-#endif
-            return _socket;
-        }
-        return std::shared_ptr<Socket>(nullptr);
+        LOG_TRC("Accepted socket #" << _socket->getFD() << " has family "
+                                    << clientInfo.sin6_family << ", " << *_socket);
+        return _socket;
     }
     catch (const std::exception& ex)
     {
         LOG_ERR("Failed to create client socket #" << rc << ". Error: " << ex.what());
     }
-
     return nullptr;
+#else
+    return createSocketFromAccept(rc, Socket::Type::Unix);
+#endif
 }
 
 #if !MOBILEAPP
@@ -1158,11 +1414,15 @@ bool Socket::isLocal() const
 std::shared_ptr<Socket> LocalServerSocket::accept()
 {
     const int rc = ::accept4(getFD(), nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    if (rc < 0)
+    {
+        if (isUnrecoverableAcceptError(errno))
+            Util::forcedExit(EX_SOFTWARE);
+        return nullptr;
+    }
     try
     {
         LOG_DBG("Accepted prisoner socket #" << rc << ", creating socket object.");
-        if (rc < 0)
-            return std::shared_ptr<Socket>(nullptr);
 
         std::shared_ptr<Socket> _socket = createSocketFromAccept(rc, Socket::Type::Unix);
         // Sanity check this incoming socket
@@ -1212,8 +1472,8 @@ std::shared_ptr<Socket> LocalServerSocket::accept()
     catch (const std::exception& ex)
     {
         LOG_ERR("Failed to create client socket #" << rc << ". Error: " << ex.what());
-        return std::shared_ptr<Socket>(nullptr);
     }
+    return nullptr;
 }
 
 /// Returns true on success only.
@@ -1249,7 +1509,7 @@ std::string LocalServerSocket::bind()
 #endif
 
         const std::string rand = Util::rng::getFilename(RandomSuffixLength);
-        memcpy(addrunix.sun_path + socketAbstractUnixName.size(), rand.c_str(), RandomSuffixLength);
+        std::memcpy(addrunix.sun_path + socketAbstractUnixName.size(), rand.c_str(), RandomSuffixLength);
         LOG_ASSERT_MSG(addrunix.sun_path[sizeof(addrunix.sun_path) - 1] == '\0',
                        "addrunix.sun_path is not null terminated");
 
@@ -1268,15 +1528,15 @@ std::string LocalServerSocket::bind()
         return std::string(&addrunix.sun_path[1]);
     }
 
-    LOG_SYS_ERRNO(last_errno, "Failed to bind to Unix socket at [" << &addrunix.sun_path[1] << ']');
+    LOG_ERR_ERRNO(last_errno, "Failed to bind to Unix socket at [" << &addrunix.sun_path[1] << ']');
     return std::string();
 }
 
 #ifndef HAVE_ABSTRACT_UNIX_SOCKETS
 bool LocalServerSocket::link(std::string to)
 {
-    _linkName = to;
-    return 0 == ::link(_name.c_str(), to.c_str());
+    _linkName = std::move(to);
+    return ::link(_name.c_str(), _linkName.c_str()) == 0;
 }
 #endif
 
@@ -1296,146 +1556,270 @@ LocalServerSocket::~LocalServerSocket()
 #  define LOG_CHUNK(X)
 #endif
 
-bool StreamSocket::parseHeader(const char *clientName,
-                               Poco::MemoryInputStream &message,
-                               Poco::Net::HTTPRequest &request,
-                               MessageMap& map)
+#endif // !MOBILEAPP
+
+std::ostream& StreamSocket::stream(std::ostream& os) const
 {
-    assert(map._headerSize == 0 && map._messageSize == 0);
+    os << "StreamSocket[#" << getFD()
+       << ", " << nameShort(_wsState)
+       << ", " << Socket::toString(type())
+       << " @ ";
+    if (Type::IPv6 == type())
+    {
+        os << "[" << clientAddress() << "]:" << clientPort();
+    }
+    else
+    {
+        os << clientAddress() << ":" << clientPort();
+    }
+    return os << "]";
+}
+
+bool StreamSocket::checkRemoval(std::chrono::steady_clock::time_point now)
+{
+    if (!isIPType())
+        return false;
+
+    // Forced removal on outside-facing IPv{4,6} network connections only.
+    const auto durLast =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - getLastSeenTime());
+
+    // Timeout criteria: Violate maximum inactivity (default 3600s).
+    const bool isInactive = net::Defaults.inactivityTimeout > std::chrono::microseconds::zero() &&
+        durLast > net::Defaults.inactivityTimeout;
+
+    // Timeout criteria: Shall terminate?
+    const bool isTermination = SigUtil::getTerminationFlag();
+    if (isInactive || isTermination)
+    {
+        LOG_WRN("CheckRemoval: Timeout: {Inactive " << isInactive << ", Termination "
+                                                    << isTermination << "}, " << getStatsString(now)
+                                                    << ", " << *this);
+        ensureDisconnected();
+        if (!isShutdown())
+        {
+            asyncShutdown(); // signal
+            shutdownConnection(); // real -> setShutdown()
+        }
+
+        assert(isShutdown() && "Should have issued shutdown");
+        assert(!isOpen() && "Socket is still open after closing");
+        return true;
+    }
+
+    return false;
+}
+
+#if !MOBILEAPP
+
+ssize_t StreamSocket::readHeader(const std::string_view clientName, std::istream& message,
+                                 size_t messagesize,
+                                 Poco::Net::HTTPRequest& request,
+                                 std::chrono::duration<float, std::milli> delayMs)
+{
+    constexpr std::chrono::duration<float, std::milli> delayMax =
+        std::chrono::duration_cast<std::chrono::milliseconds>(SocketPoll::DefaultPollTimeoutMicroS);
 
     // Find the end of the header, if any.
-    static const std::string marker("\r\n\r\n");
-    auto itBody = std::search(_inBuffer.begin(), _inBuffer.end(),
-                              marker.begin(), marker.end());
-    if (itBody == _inBuffer.end())
+    constexpr std::string_view marker("\r\n\r\n");
+    if (!Util::seekToMatch(message, marker))
     {
-        LOG_TRC(clientName << " doesn't have enough data for the header yet.");
-        return false;
+        LOG_TRC("parseHeader: " << clientName << " doesn't have enough data for the header yet. delay " << delayMs.count() << "ms");
+        return -1;
     }
 
     // Skip the marker.
-    itBody += marker.size();
-    map._headerSize = static_cast<size_t>(itBody - _inBuffer.begin());
-    map._messageSize = map._headerSize;
+    ssize_t headerSize = static_cast<ssize_t>(message.tellg()) + marker.size();
+    message.seekg(0, std::ios_base::beg);
 
     try
     {
         request.read(message);
-
-        LOG_INF(clientName << " HTTP Request: " << request.getMethod() << ' ' << request.getURI()
-                           << ' ' << request.getVersion() << ' '
-                           << [&](auto& log) { Util::joinPair(log, request, " / "); });
-
-        const std::streamsize contentLength = request.getContentLength();
-        const auto offset = itBody - _inBuffer.begin();
-        const std::streamsize available = _inBuffer.size() - offset;
-
-        if (contentLength != Poco::Net::HTTPMessage::UNKNOWN_CONTENT_LENGTH && available < contentLength)
-        {
-            LOG_DBG("Not enough content yet: ContentLength: " << contentLength
-                                                              << ", available: " << available);
-            return false;
-        }
-        map._messageSize += contentLength;
-
-        const std::string expect = request.get("Expect", "");
-        const bool getExpectContinue = Util::iequal(expect, "100-continue");
-        if (getExpectContinue && !_sentHTTPContinue)
-        {
-            LOG_TRC("Got Expect: 100-continue, sending Continue");
-            // FIXME: should validate authentication headers early too.
-            send("HTTP/1.1 100 Continue\r\n\r\n",
-                 sizeof("HTTP/1.1 100 Continue\r\n\r\n") - 1);
-            _sentHTTPContinue = true;
-        }
-
-        if (request.getChunkedTransferEncoding())
-        {
-            // keep the header
-            map._spans.push_back(std::pair<size_t, size_t>(0, itBody - _inBuffer.begin()));
-
-            int chunk = 0;
-            while (itBody != _inBuffer.end())
-            {
-                auto chunkStart = itBody;
-
-                // skip whitespace
-                for (; itBody != _inBuffer.end() && isascii(*itBody) && isspace(*itBody); ++itBody)
-                    ; // skip.
-
-                // each chunk is preceeded by its length in hex.
-                size_t chunkLen = 0;
-                for (; itBody != _inBuffer.end(); ++itBody)
-                {
-                    int digit = Util::hexDigitFromChar(*itBody);
-                    if (digit >= 0)
-                        chunkLen = chunkLen * 16 + digit;
-                    else
-                        break;
-                }
-
-                LOG_CHUNK("Chunk of length " << chunkLen);
-
-                for (; itBody != _inBuffer.end() && *itBody != '\n'; ++itBody)
-                    ; // skip to end of line
-
-                if (itBody != _inBuffer.end())
-                    itBody++; /* \n */;
-
-                // skip the chunk.
-                auto chunkOffset = itBody - _inBuffer.begin();
-                auto chunkAvailable = _inBuffer.size() - chunkOffset;
-
-                if (chunkLen == 0) // we're complete.
-                {
-                    map._messageSize = chunkOffset;
-                    return true;
-                }
-
-                if (chunkLen > chunkAvailable + 2)
-                {
-                    LOG_DBG("Not enough content yet in chunk " << chunk <<
-                            " starting at offset " << (chunkStart - _inBuffer.begin()) <<
-                            " chunk len: " << chunkLen << ", available: " << chunkAvailable);
-                    return false;
-                }
-                itBody += chunkLen;
-
-                map._spans.push_back(std::pair<size_t,size_t>(chunkOffset, chunkLen));
-
-                if (*itBody != '\r' || *(itBody + 1) != '\n')
-                {
-                    LOG_ERR("Missing \\r\\n at end of chunk " << chunk << " of length " << chunkLen);
-                    LOG_CHUNK("Chunk " << chunk << " is: \n" << Util::dumpHex("", "", chunkStart, itBody + 1, false));
-                    return false; // TODO: throw something sensible in this case
-                }
-                else
-                {
-                    LOG_CHUNK("Chunk " << chunk << " is: \n" << Util::dumpHex("", "", chunkStart, itBody + 1, false));
-                }
-
-                itBody+=2;
-                chunk++;
-            }
-            LOG_TRC("Not enough chunks yet, so far " << chunk << " chunks of total length " << (itBody - _inBuffer.begin()));
-            return false;
-        }
+    }
+    catch (const Poco::Net::NotAuthenticatedException& exc)
+    {
+        LOG_DBG("parseHeader: Exception caught with "
+                << messagesize << " bytes, shutdown: " << exc.displayText() << ", delay "
+                << delayMs.count() << "ms");
+        asyncShutdown();
+        return false;
+    }
+    catch (const Poco::Net::UnsupportedRedirectException& exc)
+    {
+        LOG_DBG("parseHeader: Exception caught with "
+                << messagesize << " bytes, shutdown: " << exc.displayText() << ", delay "
+                << delayMs.count() << "ms");
+        asyncShutdown();
+        return -1;
+    }
+    catch (const Poco::Net::HTTPException& exc)
+    {
+        LOG_DBG("parseHeader: Exception caught with "
+                << messagesize << " bytes, shutdown: " << exc.displayText() << ", delay "
+                << delayMs.count() << "ms");
+        asyncShutdown();
+        return -1;
     }
     catch (const Poco::Exception& exc)
     {
-        LOG_DBG("parseHeader exception caught with " << _inBuffer.size()
-                                                     << " bytes: " << exc.displayText());
-        // Probably don't have enough data just yet.
-        // TODO: timeout if we never get enough.
-        return false;
+        if (delayMs > delayMax)
+        {
+            LOG_DBG("parseHeader: Exception caught with "
+                    << messagesize << " bytes, shutdown: " << exc.displayText() << ", delay "
+                    << delayMs.count() << "ms");
+            asyncShutdown();
+        }
+        else
+        {
+            LOG_DBG("parseHeader: Exception caught with "
+                    << messagesize << " bytes, continue: " << exc.displayText() << ", delay "
+                    << delayMs.count() << "ms");
+        }
+        return -1;
     }
     catch (const std::exception& exc)
     {
-        LOG_DBG("parseHeader std::exception caught with " << _inBuffer.size()
-                                                          << " bytes: " << exc.what());
-        // Probably don't have enough data just yet.
-        // TODO: timeout if we never get enough.
-        return false;
+        if (delayMs > delayMax)
+        {
+            LOG_DBG("parseHeader: Exception caught with "
+                    << messagesize << " bytes, shutdown: " << exc.what() << ", delay "
+                    << delayMs.count() << "ms");
+            asyncShutdown();
+        }
+        else
+        {
+            LOG_DBG("parseHeader: Exception caught with "
+                    << messagesize << " bytes, continue: " << exc.what() << ", delay "
+                    << delayMs.count() << "ms");
+        }
+        return -1;
+    }
+
+    return headerSize;
+}
+
+void StreamSocket::handleExpect(const std::string_view expect)
+{
+    if (!_sentHTTPContinue && Util::iequal(expect, "100-continue"))
+    {
+        LOG_TRC("parseHeader: Got Expect: 100-continue, sending Continue");
+        // FIXME: should validate authentication headers early too.
+        send("HTTP/1.1 100 Continue\r\n\r\n",
+             sizeof("HTTP/1.1 100 Continue\r\n\r\n") - 1);
+        _sentHTTPContinue = true;
+    }
+}
+
+bool StreamSocket::checkChunks(const Poco::Net::HTTPRequest& request, size_t headerSize, MessageMap& map,
+                               std::chrono::duration<float, std::milli> delayMs)
+{
+    if (!request.getChunkedTransferEncoding())
+        return true;
+
+    auto itBody = _inBuffer.begin() + headerSize;
+
+    // keep the header
+    map._spans.emplace_back(0, itBody - _inBuffer.begin());
+
+    int chunk = 0;
+    while (itBody != _inBuffer.end())
+    {
+        auto chunkStart = itBody;
+
+        // skip whitespace
+        for (; itBody != _inBuffer.end() && isascii(*itBody) && isspace(*itBody); ++itBody)
+            ; // skip.
+
+        // each chunk is preceeded by its length in hex.
+        size_t chunkLen = 0;
+        for (; itBody != _inBuffer.end(); ++itBody)
+        {
+            int digit = HexUtil::hexDigitFromChar(*itBody);
+            if (digit >= 0)
+                chunkLen = chunkLen * 16 + digit;
+            else
+                break;
+        }
+
+        LOG_CHUNK("parseHeader: Chunk of length " << chunkLen);
+
+        for (; itBody != _inBuffer.end() && *itBody != '\n'; ++itBody)
+            ; // skip to end of line
+
+        if (itBody != _inBuffer.end())
+            itBody++; /* \n */;
+
+        // skip the chunk.
+        auto chunkOffset = itBody - _inBuffer.begin();
+        auto chunkAvailable = _inBuffer.size() - chunkOffset;
+
+        if (chunkLen == 0) // we're complete.
+        {
+            map._messageSize = chunkOffset;
+            return true;
+        }
+
+        if (chunkLen > chunkAvailable + 2)
+        {
+            LOG_DBG("parseHeader: Not enough content yet in chunk " << chunk <<
+                    " starting at offset " << (chunkStart - _inBuffer.begin()) <<
+                    " chunk len: " << chunkLen << ", available: " << chunkAvailable << ", delay " << delayMs.count() << "ms");
+            return false;
+        }
+        itBody += chunkLen;
+
+        map._spans.emplace_back(chunkOffset, chunkLen);
+
+        if (*itBody != '\r' || *(itBody + 1) != '\n')
+        {
+            LOG_ERR("parseHeader: Missing \\r\\n at end of chunk " << chunk << " of length " << chunkLen << ", delay " << delayMs.count() << "ms");
+            LOG_CHUNK("Chunk " << chunk << " is: \n"
+                               << HexUtil::dumpHex("", "", chunkStart, itBody + 1, false));
+            asyncShutdown();
+            return false; // TODO: throw something sensible in this case
+        }
+
+        LOG_CHUNK("parseHeader: Chunk "
+                  << chunk << " is: \n"
+                  << HexUtil::dumpHex("", "", chunkStart, itBody + 1, false));
+
+        itBody+=2;
+        chunk++;
+    }
+    LOG_TRC("parseHeader: Not enough chunks yet, so far " << chunk << " chunks of total length " << (itBody - _inBuffer.begin()) << ", delay " << delayMs.count() << "ms");
+    return false;
+}
+
+bool StreamSocket::parseHeader(const std::string_view clientName, size_t headerSize, size_t bufferSize,
+                               const Poco::Net::HTTPRequest& request,
+                               std::chrono::duration<float, std::milli> delayMs,
+                               MessageMap& map)
+{
+    assert(map._headerSize == 0 && map._messageSize == 0);
+
+    map._headerSize = headerSize;
+    map._messageSize = map._headerSize;
+
+    const std::streamsize contentLength = request.getContentLength();
+    const std::streamsize available = bufferSize;
+
+    LOG_INF("parseHeader: " << clientName << " HTTP Request: " << request.getMethod()
+                            << ", uri: [" << request.getURI() << "] " << request.getVersion()
+                            << ", sz[header " << map._headerSize << ", content "
+                            << contentLength << "], offset " << headerSize << ", chunked "
+                            << request.getChunkedTransferEncoding() << ", "
+                            << [&](auto& log) { Util::joinPair(log, request, " / "); });
+
+    if (contentLength != Poco::Net::HTTPMessage::UNKNOWN_CONTENT_LENGTH)
+    {
+        if (available < contentLength)
+        {
+            LOG_DBG("parseHeader: Not enough content yet: ContentLength: "
+                    << contentLength << ", available: " << available << ", delay "
+                    << delayMs.count() << "ms");
+            return false;
+        }
+        map._messageSize += contentLength;
     }
 
     return true;
@@ -1446,10 +1830,11 @@ bool StreamSocket::compactChunks(MessageMap& map)
     if (!map._spans.size())
         return false; // single message.
 
-    LOG_CHUNK("Pre-compact " << map._spans.size() << " chunks: \n" <<
-              Util::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
+    LOG_CHUNK(
+        "Pre-compact " << map._spans.size() << " chunks: \n"
+                       << HexUtil::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
 
-    char *first = &_inBuffer[0];
+    char *first = _inBuffer.data();
     char *dest = first;
     for (const auto &span : map._spans)
     {
@@ -1462,14 +1847,15 @@ bool StreamSocket::compactChunks(MessageMap& map)
     size_t gap = map._messageSize - newEnd;
     _inBuffer.erase(_inBuffer.begin() + newEnd, _inBuffer.begin() + map._messageSize);
 
-    LOG_CHUNK("Post-compact with erase of " << newEnd << " to " << map._messageSize << " giving: \n" <<
-              Util::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
+    LOG_CHUNK("Post-compact with erase of "
+              << newEnd << " to " << map._messageSize << " giving: \n"
+              << HexUtil::dumpHex("", "", _inBuffer.begin(), _inBuffer.end(), false));
 
     // shrink our size to fit
     map._messageSize -= gap;
 
 #if ENABLE_DEBUG
-    std::ostringstream oss;
+    std::ostringstream oss(Util::makeDumpStateStream());
     dumpState(oss);
     LOG_TRC("Socket state: " << oss.str());
 #endif
@@ -1480,7 +1866,7 @@ bool StreamSocket::compactChunks(MessageMap& map)
 bool StreamSocket::sniffSSL() const
 {
     // Only sniffing the first bytes of a socket.
-    if (_bytesSent > 0 || _bytesRecvd != _inBuffer.size() || _bytesRecvd < 6)
+    if (bytesSent() > 0 || bytesRcvd() != _inBuffer.size() || bytesRcvd() < 6)
         return false;
 
     // 0x0000  16 03 01 02 00 01 00 01
@@ -1488,8 +1874,6 @@ bool StreamSocket::sniffSSL() const
             _inBuffer[1] == 0x03 && // SSL 3.0 / TLS 1.x
             _inBuffer[5] == 0x01);  // Handshake: CLIENT_HELLO
 }
-
-#endif // !MOBILEAPP
 
 namespace {
     /// To make the protected 'computeAccept' accessible.
@@ -1504,7 +1888,7 @@ namespace {
         static std::string generateKey()
         {
             auto random = Util::rng::getBytes(16);
-            return macaron::Base64::Encode(std::string(random.begin(), random.end()));
+            return macaron::Base64::Encode(std::string_view(random.data(), random.size()));
         }
     };
 }
@@ -1519,18 +1903,21 @@ std::string WebSocketHandler::generateKey()
     return PublicComputeAccept::generateKey();
 }
 
+#endif // !MOBILEAPP
+
 // Required by Android and iOS apps.
 namespace http
 {
-    std::string getAgentString()
-    {
-        return "COOLWSD HTTP Agent " COOLWSD_VERSION;
-    }
+std::string getAgentString() { return "COOLWSD HTTP Agent " + Util::getCoolVersion(); }
 
-    std::string getServerString()
-    {
-        return "COOLWSD HTTP Server " COOLWSD_VERSION;
-    }
+std::string getServerString()
+{
+    CONFIG_STATIC const bool sig = ConfigUtil::getBool("security.server_signature", false);
+    if (sig)
+        return "COOLWSD HTTP Server " + Util::getCoolVersion();
+
+    return " ";
+}
 }
 
 extern "C" {

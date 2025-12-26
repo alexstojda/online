@@ -92,9 +92,7 @@ public:
     {
         Poco::Net::HTTPResponse response;
         std::istream& responseStream = _session->receiveResponse(response);
-        const std::string result(std::istreambuf_iterator<char>(responseStream), {});
-        // std::cerr << "Got response '" << result << "'\n";
-        return result;
+        return std::string(std::istreambuf_iterator<char>(responseStream), {});
     }
 
     int getResponseInt()
@@ -198,7 +196,7 @@ struct Client : public Poco::Util::Application
         std::shared_ptr<WebSocket> ws = session.getWebSocket();
 
         std::string send = "hello there";
-        ws->sendFrame(&send[0], send.length(),
+        ws->sendFrame(send.data(), send.length(),
                       WebSocket::SendFlags::FRAME_TEXT);
 
         for (size_t i = 0; i < 10; i++)

@@ -9,8 +9,8 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Track Changes', function (
 		cy.viewport(1400, 600);
 		helper.setupAndLoadDocument('writer/track_changes.odt');
 		desktopHelper.switchUIToCompact();
-		cy.cGet('#sidebar').click({force: true}); // Hide sidebar.
-		desktopHelper.selectZoomLevel('50');
+		cy.cGet('#toolbar-up [id^="sidebar"] button:visible').click();
+		desktopHelper.selectZoomLevel('50', false);
 	});
 
 	function confirmChange(action) {
@@ -39,24 +39,29 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Track Changes', function (
 
 	it('Accept All', function () {
 		helper.typeIntoDocument('Hello World');
+		cy.wait(3000);
 		for (var n = 0; n < 2; n++) {
-			cy.cGet('#insertannotation').click({force: true});
-			cy.cGet('#annotation-modify-textarea-new').type('some text' + n);
-			cy.cGet('#annotation-save-new').click();
+			desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+			cy.cGet('#insertannotation').click();
+			cy.cGet('#annotation-modify-textarea-new').type('some text' + n, { force: true });
+			cy.cGet('#annotation-save-new').click({force: true});
+			cy.cGet('.jsdialog-overlay').click();
 			// Wait for animation
 			cy.wait(500);
 		}
 		enableRecord();
 
-		cy.cGet('#insertannotation').click({force: true});
-		cy.cGet('#annotation-modify-textarea-new').type('some text2');
-		cy.cGet('#annotation-save-new').click();
+		desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+		cy.cGet('#insertannotation').click();
+		cy.cGet('#annotation-modify-textarea-new').type('some text2', { force: true });
+		cy.cGet('#annotation-save-new').click({force: true});
+		cy.cGet('.jsdialog-overlay').click();
 		cy.wait(500);
 		helper.typeIntoDocument('{home}');
 		cy.cGet('div.cool-annotation').should('have.length', 3);
 
 		cy.cGet('#comment-container-2').should('contain','some text1');
-		cy.cGet('#comment-container-2 .cool-annotation-menubar').click();
+		cy.cGet('#comment-container-2 .cool-annotation-menubar .cool-annotation-menu').click();
 		cy.cGet('body').contains('.context-menu-item', 'Remove').click();
 		cy.cGet('#comment-container-2').should('have.class','tracked-deleted-comment-show');
 		cy.cGet('#comment-container-2').should('contain','some text1');
@@ -80,24 +85,29 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Track Changes', function (
 	it('Reject All', function () {
 		helper.setDummyClipboardForCopy();
 		helper.typeIntoDocument('Hello World');
+		cy.wait(3000);
 		for (var n = 0; n < 2; n++) {
-			cy.cGet('#insertannotation').click({force: true});
-			cy.cGet('#annotation-modify-textarea-new').type('some text' + n);
-			cy.cGet('#annotation-save-new').click();
+			desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+			cy.cGet('#insertannotation').click();
+			cy.cGet('#annotation-modify-textarea-new').type('some text' + n, { force: true });
+			cy.cGet('#annotation-save-new').click({force: true});
+			cy.cGet('.jsdialog-overlay').click();
 			// Wait for animation
 			cy.wait(500);
 		}
 		enableRecord();
 
-		cy.cGet('#insertannotation').click({force: true});
-		cy.cGet('#annotation-modify-textarea-new').type('some text2');
-		cy.cGet('#annotation-save-new').click();
+		desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+		cy.cGet('#insertannotation').click();
+		cy.cGet('#annotation-modify-textarea-new').type('some text2', { force: true });
+		cy.cGet('#annotation-save-new').click({force: true});
+		cy.cGet('.jsdialog-overlay').click();
 		cy.wait(500);
 		helper.typeIntoDocument('{home}');
 		cy.cGet('div.cool-annotation').should('have.length', 3);
 
 		cy.cGet('#comment-container-2').should('contain','some text1');
-		cy.cGet('#comment-container-2 .cool-annotation-menubar').click();
+		cy.cGet('#comment-container-2 .cool-annotation-menubar .cool-annotation-menu').click();
 		cy.cGet('body').contains('.context-menu-item', 'Remove').click();
 		cy.cGet('#comment-container-2').should('have.class','tracked-deleted-comment-show');
 		cy.cGet('#comment-container-2').should('contain','some text1');
@@ -123,15 +133,18 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Track Changes', function (
 
 	it.skip('Comment Undo-Redo', function () {
 		for (var n = 0; n < 2; n++) {
-			cy.cGet('#insertannotation').click({force: true});
+			desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+			cy.cGet('#insertannotation').click();
 			cy.cGet('#annotation-modify-textarea-new').type('some text' + n);
 			cy.cGet('#annotation-save-new').click();
+			cy.cGet('.jsdialog-overlay').click();
 			// Wait for animation
 			cy.wait(500);
 		}
 		enableRecord();
 
-		cy.cGet('#insertannotation').click({force: true});
+		desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+		cy.cGet('#insertannotation').click();
 		cy.cGet('#annotation-modify-textarea-new').type('some text2');
 		cy.cGet('#annotation-save-new').click();
 		cy.wait(500);
@@ -154,7 +167,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Track Changes', function (
 
 		// undo removed comment
 		cy.cGet('#comment-container-2').should('contain','some text1');
-		cy.cGet('#comment-container-2 .cool-annotation-menubar').click();
+		cy.cGet('#comment-container-2 .cool-annotation-menubar .cool-annotation-menu').click();
 		cy.cGet('body').contains('.context-menu-item', 'Remove').click();
 		cy.cGet('#comment-container-2').should('have.class','tracked-deleted-comment-show');
 		cy.cGet('div.cool-annotation').should('have.length', 3);

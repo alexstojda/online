@@ -12,19 +12,25 @@
  * JSDialog.StatusBar - statusbar component
  */
 
-/* global $ app JSDialog _ _UNO */
+/* global $ app JSDialog _ _UNO  getPermissionModeElements URLPopUpSection */
 class StatusBar extends JSDialog.Toolbar {
 	constructor(map) {
-		super(map, 'toolbar-down');
+		super(map, 'Statusbar', 'toolbar-down');
 
 		map.on('doclayerinit', this.onDocLayerInit, this);
 		map.on('languagesupdated', this.onLanguagesUpdated, this);
 		map.on('commandstatechanged', this.onCommandStateChanged, this);
-		map.on('contextchange', this.onContextChange.bind(this), this);
-		map.on('updatepermission', this.onPermissionChanged, this);
+		app.events.on('contextchange', this.onContextChange.bind(this));
+		app.events.on('updatepermission', this.onPermissionChanged.bind(this));
 		map.on('updatestatepagenumber', this.onPageChange, this);
 		map.on('search', this.onSearch, this);
 		map.on('zoomend', this.onZoomEnd, this);
+		map.on('initmodificationindicator', this.onInitModificationIndicator, this);
+		map.on('updatemodificationindicator', this.onUpdateModificationIndicator, this);
+	}
+
+	isSaveIndicatorActive() {
+		return window.useStatusbarSaveIndicator;
 	}
 
 	localizeStateTableCell(text) {
@@ -57,19 +63,17 @@ class StatusBar extends JSDialog.Toolbar {
 			this.showItem('statusselectionmode-container', false);
 		} else {
 			this.enableItem('languagestatus', true);
-			this.showItem('insertmode-container', true);
-			this.showItem('statusselectionmode-container', true);
 		}
 		this.updateVisibilityForToolbar(context);
 	}
 
 	onContextChange(event) {
-		this._updateToolbarsVisibility(event.context);
+		this._updateToolbarsVisibility(event.detail.context);
 	}
 
 	callback(objectType, eventType, object, data, builder) {
 		if (object.id === 'search-input' || object.id === 'search') {
-			// its handled by window.setupSearchInput
+			// its handled by widget itself
 			return;
 		} else if (object.id === 'zoom') {
 			var selected = this._generateZoomItems().filter((item) => { return item.id === data; });
@@ -105,49 +109,28 @@ class StatusBar extends JSDialog.Toolbar {
 	}
 
 	onSearch(e) {
-		var searchInput = L.DomUtil.get('search-input');
+		var searchInput = window.L.DomUtil.get('search-input');
 		if (e.count === 0) {
 			this.enableItem('searchprev', false);
 			this.enableItem('searchnext', false);
-			this.showItem('cancelsearch', false);
-			L.DomUtil.addClass(searchInput, 'search-not-found');
+			if (window.mode.isMobile()) {
+				this.enableItem('cancelsearch', false);
+			} else {
+				this.showItem('cancelsearch', false);
+			}
+			window.L.DomUtil.addClass(searchInput, 'search-not-found');
 			$('#findthis').addClass('search-not-found');
-			this.map.resetSelection();
+			app.searchService.resetSelection();
 			setTimeout(function () {
 				$('#findthis').removeClass('search-not-found');
-				L.DomUtil.removeClass(searchInput, 'search-not-found');
+				window.L.DomUtil.removeClass(searchInput, 'search-not-found');
 			}, 800);
 		}
 	}
 
 	onZoomEnd() {
-		var zoomPercent = 100;
-		var zoomSelected = null;
-		switch (this.map.getZoom()) {
-			case 1:  zoomPercent =  20; zoomSelected = 'zoom20'; break;  // 0.2102
-			case 2:  zoomPercent =  25; zoomSelected = 'zoom25'; break;  // 0.2500
-			case 3:  zoomPercent =  30; zoomSelected = 'zoom30'; break;  // 0.2973
-			case 4:  zoomPercent =  35; zoomSelected = 'zoom35'; break;  // 0.3535
-			case 5:  zoomPercent =  40; zoomSelected = 'zoom40'; break;  // 0.4204
-			case 6:  zoomPercent =  50; zoomSelected = 'zoom50'; break;  // 0.5
-			case 7:  zoomPercent =  60; zoomSelected = 'zoom60'; break;  // 0.5946
-			case 8:  zoomPercent =  70; zoomSelected = 'zoom70'; break;  // 0.7071
-			case 9:  zoomPercent =  85; zoomSelected = 'zoom85'; break;  // 0.8409
-			case 10: zoomPercent = 100; zoomSelected = 'zoom100'; break; // 1
-			case 11: zoomPercent = 120; zoomSelected = 'zoom120'; break; // 1.1892
-			// Why do we call this 150% even if it is actually closer to 140%
-			case 12: zoomPercent = 150; zoomSelected = 'zoom150'; break; // 1.4142
-			case 13: zoomPercent = 170; zoomSelected = 'zoom170'; break; // 1.6818
-			case 14: zoomPercent = 200; zoomSelected = 'zoom200'; break; // 2
-			case 15: zoomPercent = 235; zoomSelected = 'zoom235'; break; // 2.3784
-			case 16: zoomPercent = 280; zoomSelected = 'zoom280'; break; // 2.8284
-			case 17: zoomPercent = 335; zoomSelected = 'zoom335'; break; // 3.3636
-			case 18: zoomPercent = 400; zoomSelected = 'zoom400'; break; // 4
-			default:
-				var zoomRatio = this.map.getZoomScale(this.map.getZoom(), this.map.options.zoom);
-				zoomPercent = Math.round(zoomRatio * 100);
-			break;
-		}
+		var zoomPercent = this.map.getZoomPercent();
+		var zoomSelected = 'zoom' + zoomPercent;
 
 		this.builder.updateWidget(this.parentContainer,
 			{
@@ -166,11 +149,22 @@ class StatusBar extends JSDialog.Toolbar {
 		this.updateHtmlItem('StatePageNumber', state ? state : ' ');
 	}
 
-	_generateHtmlItem(id) {
+	onShowCommentsChange(e) {
+		var state = e.state;
+		var statemsg;
+		if (state === 'true')
+			statemsg = _UNO('.uno:ShowAnnotations') +': ' + _('On');
+		else if (state === 'false')
+			statemsg = _UNO('.uno:ShowAnnotations') +': ' + _('Off');
+		$('#showcomments-container').attr('default-state', state || null);
+		this.updateHtmlItem('ShowComments', state ? statemsg : ' ');
+	}
+
+	_generateHtmlItem(id, dataPriority) {
 		var isReadOnlyMode = app.map ? app.map.isReadOnlyMode() : true;
 		var canUserWrite = !app.isReadOnly();
 
-		return {
+		const item = {
 			type: 'container',
 			id: id + '-container',
 			children: [
@@ -179,23 +173,35 @@ class StatusBar extends JSDialog.Toolbar {
 			],
 			vertical: false,
 			visible: false
-		};
+		}
+
+		if (dataPriority) {
+			item.dataPriority = dataPriority;
+		}
+
+		return item;
 	}
 
-	_generateStateTableCellMenuItem(value, visible) {
+	_generateStateMenuEntry(id, text, selection) {
+		return {id: id, text: text, selected: !!(selection & parseInt(id))};
+	}
+
+	_generateStateTableCellMenuItem(selection, visible) {
 		var submenu = [
-			{id: '2', text: _('Average')},
-			{id: '8', text: _('CountA')},
-			{id: '4', text: _('Count')},
-			{id: '16', text: _('Maximum')},
-			{id: '32', text: _('Minimum')},
-			{id: '512', text: _('Sum')},
-			{id: '8192', text: _('Selection count')},
-			{id: '1', text: _('None')}
+			this._generateStateMenuEntry('2', _('Average'), selection),
+			this._generateStateMenuEntry('8', _('CountA'), selection),
+			this._generateStateMenuEntry('4', _('Count'), selection),
+			this._generateStateMenuEntry('16', _('Maximum'), selection),
+			this._generateStateMenuEntry('32', _('Minimum'), selection),
+			this._generateStateMenuEntry('512', _('Sum'), selection),
+			this._generateStateMenuEntry('8192', _('Selection count'), selection),
+			this._generateStateMenuEntry('1', _('None'), selection)
 		];
-		var selected = submenu.filter((item) => { return item.id === value; });
-		var text = selected.length ? selected[0].text : _('None');
-		return {type: 'menubutton', id: 'StateTableCellMenu', text: text, image: false, menu: submenu, visible: visible};
+		var selected = submenu
+			.filter((item) => { return item.selected; })
+			.map((item) => { return item.text; });
+		var text = selected.length ? selected.join('; ') : _('None');
+		return {type: 'menubutton', id: 'StateTableCellMenu', text: text, image: false, menu: submenu, visible: visible, dataPriority: 5};
 	}
 
 	_generateZoomItems() {
@@ -223,32 +229,30 @@ class StatusBar extends JSDialog.Toolbar {
 
 	getToolItems() {
 		return [
-			{type: 'edit',  id: 'search', placeholder: _('Search'), text: ''},
-			{type: 'customtoolitem',  id: 'searchprev', command: 'searchprev', text: _UNO('.uno:UpSearch'), enabled: false, pressAndHold: true},
-			{type: 'customtoolitem',  id: 'searchnext', command: 'searchnext', text: _UNO('.uno:DownSearch'), enabled: false, pressAndHold: true},
-			{type: 'customtoolitem',  id: 'cancelsearch', command: 'cancelsearch', text: _('Cancel the search'), visible: false},
-			{type: 'separator', id: 'searchbreak', orientation: 'vertical' },
 			this._generateHtmlItem('statusdocpos'), 					// spreadsheet
-			this._generateHtmlItem('rowcolselcount'), 					// spreadsheet
+			this._generateHtmlItem('rowcolselcount', 1), 					// spreadsheet
 			this._generateHtmlItem('statepagenumber'), 					// text
-			this._generateHtmlItem('statewordcount'), 					// text
-			this._generateHtmlItem('insertmode'),						// spreadsheet, text
-			this._generateHtmlItem('statusselectionmode'),				// text
+			this._generateHtmlItem('statewordcount', 1), 					// text
+			this._generateHtmlItem('insertmode', 5),						// spreadsheet, text
+			this._generateHtmlItem('showcomments', 4),					    // text
+			this._generateHtmlItem('statusselectionmode', 6),				// text
 			this._generateHtmlItem('slidestatus'),						// presentation
 			this._generateHtmlItem('pagestatus'),						// drawing
-			{type: 'menubutton', id: 'languagestatus:LanguageStatusMenu'},	// spreadsheet, text, presentation
-			{type: 'separator', id: 'languagestatusbreak', orientation: 'vertical', visible: false}, // spreadsheet
-			this._generateHtmlItem('statetablecell'),					// spreadsheet
-			this._generateStateTableCellMenuItem('2', false),			// spreadsheet
-			{type: 'separator', id: 'statetablebreak', orientation: 'vertical', visible: false}, // spreadsheet
+			{type: 'menubutton', id: 'languagestatus:LanguageStatusMenu', dataPriority: 3},	// spreadsheet, text, presentation
+			{type: 'separator', id: 'languagestatusbreak', orientation: 'vertical', visible: false, dataPriority: 3}, // spreadsheet
+			this._generateHtmlItem('statetablecell', 4),					// spreadsheet
+			this._generateStateTableCellMenuItem(2, false),			// spreadsheet
+			{type: 'separator', id: 'statetablebreak', orientation: 'vertical', visible: false, dataPriority: 7}, // spreadsheet
 			this._generateHtmlItem('permissionmode'),					// spreadsheet, text, presentation
 			{type: 'toolitem', id: 'signstatus', command: '.uno:Signature', w2icon: '', text: _UNO('.uno:Signature'), visible: false},
 			{type: 'spacer',  id: 'permissionspacer'},
-			{type: 'customtoolitem',  id: 'prev', command: 'prev', text: _UNO('.uno:PageUp', 'text'), pressAndHold: true},
-			{type: 'customtoolitem',  id: 'next', command: 'next', text: _UNO('.uno:PageDown', 'text'), pressAndHold: true},
-			{type: 'separator', id: 'prevnextbreak', orientation: 'vertical'},
+			this._generateHtmlItem('documentstatus', 2),					// spreadsheet, text, presentation, drawing
+			{type: 'customtoolitem',  id: 'multi-page-view', command: 'multipageview', text: _('Multi Page View'), dataPriority: 10,  visible: false}, // text
+			{type: 'customtoolitem',  id: 'prev', command: 'prev', text: _UNO('.uno:PageUp', 'text'), pressAndHold: true, dataPriority: 9},
+			{type: 'customtoolitem',  id: 'next', command: 'next', text: _UNO('.uno:PageDown', 'text'), pressAndHold: true, dataPriority: 9},
+			{type: 'separator', id: 'prevnextbreak', orientation: 'vertical', dataPriority: 9},
 		].concat(window.mode.isTablet() ? [] : [
-			{type: 'customtoolitem',  id: 'zoomreset', command: 'zoomreset', text: _('Reset zoom'), icon: 'zoomreset.svg'},
+			{type: 'customtoolitem',  id: 'zoomreset', command: 'zoomreset', text: _('Reset zoom'), icon: 'zoomreset.svg', dataPriority: 8},
 			{type: 'customtoolitem',  id: 'zoomout', command: 'zoomout', text: _UNO('.uno:ZoomMinus'), icon: 'minus.svg'},
 			{type: 'menubutton', id: 'zoom', text: '100', selected: 'zoom100', menu: this._generateZoomItems(), image: false},
 			{type: 'customtoolitem',  id: 'zoomin', command: 'zoomin', text: _UNO('.uno:ZoomPlus'), icon: 'plus.svg'}
@@ -259,25 +263,31 @@ class StatusBar extends JSDialog.Toolbar {
 		if (this.parentContainer.firstChild)
 			return;
 
-		this.parentContainer.innerHTML = '';
+		this.parentContainer.replaceChildren();
 		this.builder.build(this.parentContainer, this.getToolItems());
-
 		this.onLanguagesUpdated();
-		window.setupSearchInput();
-		JSDialog.MakeScrollable(this.parentContainer, this.parentContainer.querySelector('div'));
+		JSDialog.MakeStatusPriority(this.parentContainer.querySelector('div'), this.getToolItems());
 		JSDialog.RefreshScrollables();
 	}
 
-	onDocLayerInit() {
-		var showStatusbar = this.map.uiManager.getBooleanDocTypePref('ShowStatusbar', true);
+
+	initialize() {
+		const showStatusbar = this.map.uiManager.getBooleanDocTypePref('ShowStatusbar', true);
+
 		if (showStatusbar)
 			this.map.uiManager.showStatusBar();
 		else
 			this.map.uiManager.hideStatusBar(true);
 
-		var docType = this.map.getDocType();
+		const statusbarState = showStatusbar ? 'true' : 'false';
+		app.map['stateChangeHandler'].setItemValue('showstatusbar', statusbarState);
+		this.map.fire('commandstatechanged', {commandName : 'showstatusbar', state : statusbarState});
+	}
 
-		switch (docType) {
+	onDocLayerInit() {
+		this.initialize();
+
+		switch (this.map.getDocType()) {
 		case 'spreadsheet':
 			this.showItem('prev', false);
 			this.showItem('next', false);
@@ -294,6 +304,7 @@ class StatusBar extends JSDialog.Toolbar {
 				this.showItem('StateTableCellMenu', !app.map.isReadOnlyMode());
 				this.showItem('statetablebreak', !app.map.isReadOnlyMode());
 				this.showItem('permissionmode-container', true);
+				this.showItem('documentstatus-container', true);
 			}
 			break;
 
@@ -306,6 +317,11 @@ class StatusBar extends JSDialog.Toolbar {
 				this.showItem('languagestatus', !app.map.isReadOnlyMode());
 				this.showItem('languagestatusbreak', !app.map.isReadOnlyMode());
 				this.showItem('permissionmode-container', true);
+				this.showItem('showcomments-container', true);
+				this.showItem('documentstatus-container', true);
+
+				// Disable for now.
+				//this.showItem('multi-page-view', true);
 			}
 			break;
 
@@ -315,6 +331,7 @@ class StatusBar extends JSDialog.Toolbar {
 				this.showItem('languagestatus', !app.map.isReadOnlyMode());
 				this.showItem('languagestatusbreak', !app.map.isReadOnlyMode());
 				this.showItem('permissionmode-container', true);
+				this.showItem('documentstatus-container', true);
 			}
 			break;
 		case 'drawing':
@@ -323,6 +340,7 @@ class StatusBar extends JSDialog.Toolbar {
 				this.showItem('languagestatus', !app.map.isReadOnlyMode());
 				this.showItem('languagestatusbreak', !app.map.isReadOnlyMode());
 				this.showItem('permissionmode-container', true);
+				this.showItem('documentstatus-container', true);
 			}
 			break;
 		}
@@ -372,11 +390,28 @@ class StatusBar extends JSDialog.Toolbar {
 	}
 
 	onPermissionChanged(event) {
-		var isReadOnlyMode = event.perm === 'readonly';
+		var isReadOnlyMode = event.detail.perm === 'readonly';
 		if (isReadOnlyMode) {
 			$('#toolbar-down').addClass('readonly');
 		} else {
 			$('#toolbar-down').removeClass('readonly');
+		}
+
+		var canUserWrite = window.ThisIsAMobileApp ? !app.isReadOnly() : this.map['wopi'].UserCanWrite;
+		var NotEditDocMode = false;
+		if (app.map['stateChangeHandler'].getItemValue('EditDoc') !== undefined) {
+			NotEditDocMode = app.map['stateChangeHandler'].getItemValue('EditDoc') === "false"; // can be true, false or disabled
+			if (NotEditDocMode)
+				app.map.uiManager.showSnackbar(_('To prevent accidental changes, the author has set this file to open as view-only'));
+		}
+
+		canUserWrite = canUserWrite && !NotEditDocMode;
+
+		var permissionContainer = document.getElementById('permissionmode-container');
+		if (permissionContainer) {
+			while (permissionContainer.firstChild)
+				permissionContainer.removeChild(permissionContainer.firstChild);
+			permissionContainer.appendChild(getPermissionModeElements(isReadOnlyMode, canUserWrite, this.map));
 		}
 
 		this.builder.updateWidget(this.parentContainer, {
@@ -384,7 +419,7 @@ class StatusBar extends JSDialog.Toolbar {
 			type: 'htmlcontent',
 			htmlId: 'permissionmode',
 			isReadOnlyMode: isReadOnlyMode,
-			canUserWrite: !app.isReadOnly()
+			canUserWrite: canUserWrite
 		});
 
 		JSDialog.RefreshScrollables();
@@ -420,18 +455,21 @@ class StatusBar extends JSDialog.Toolbar {
 			this.updateHtmlItem('RowColSelCount', state ? state : _('Select multiple cells'), !state);
 		}
 		else if (commandName === '.uno:InsertMode') {
-			this.updateHtmlItem('InsertMode', state ? L.Styles.insertMode[state].toLocaleString() : _('Insert mode: inactive'), !state);
+			this.updateHtmlItem('InsertMode', state ? window.L.Styles.insertMode[state].toLocaleString() : ' ', !state);
 
 			$('#InsertMode').removeClass();
 			$('#InsertMode').addClass('jsdialog ui-badge insert-mode-' + state);
+			var isDefaultState = state === 'true' || state === '';
+			$('#insertmode-container').attr('default-state', isDefaultState || null);
 
-			if ((state === 'false' || !state) && app.definitions.urlPopUpSection.isOpen()) {
+			if ((state === 'false' || !state) && URLPopUpSection.isOpen()) {
 				this.map.hyperlinkUnderCursor = null;
-				app.definitions.urlPopUpSection.closeURLPopUp();
+				URLPopUpSection.closeURLPopUp();
 			}
 		}
 		else if (commandName === '.uno:StatusSelectionMode' || commandName === '.uno:SelectionMode') {
-			this.updateHtmlItem('StatusSelectionMode', state ? L.Styles.selectionMode[state].toLocaleString() : _('Selection mode: inactive'), !state);
+			$('#statusselectionmode-container').attr('default-state', state === '0' || null);
+			this.updateHtmlItem('StatusSelectionMode', state ? window.L.Styles.selectionMode[state].toLocaleString() : _('Selection mode: inactive'), !state);
 		}
 		else if (commandName == '.uno:StateTableCell') {
 			this.updateHtmlItem('StateTableCell', state ? this.localizeStateTableCell(state) : ' ');
@@ -444,11 +482,19 @@ class StatusBar extends JSDialog.Toolbar {
 			if (state === '0')
 				state = '1';
 
+			try {
+				state = parseInt(state);
+			} catch (e) { console.error(e); state = 1; }
+
 			this.builder.updateWidget(this.parentContainer, this._generateStateTableCellMenuItem(state, true));
 			JSDialog.RefreshScrollables();
 		}
 		else if (commandName === '.uno:StatePageNumber') {
 			this.onPageChange(e);
+			return;
+		}
+		else if (commandName === 'showannotations') {
+			this.onShowCommentsChange(e);
 			return;
 		}
 		else if (commandName === '.uno:StateWordCount') {
@@ -463,6 +509,18 @@ class StatusBar extends JSDialog.Toolbar {
 				state = this.toLocalePattern('Page %1 of %2', 'Slide (\\d+) of (\\d+)', state, '%1', '%2');
 				this.updateHtmlItem('PageStatus', state ? state : ' ');
 			}
+		}
+		else if (commandName === '.uno:EditDoc') {
+			state = state !== "false";
+			$('#permissionmode-container').attr('default-state', this.map.isEditMode() || null);
+			this.onPermissionChanged({detail : {
+				perm: state && this.map.isEditMode() ? "edit" : "readonly"
+			} });
+		}
+		else if (commandName === '.uno:Signature') {
+			// Use the same handler as the 'signaturestatus:' protocol message, which is
+			// sent right after document load.
+			this.map.onChangeSignStatus(state);
 		}
 	}
 
@@ -497,6 +555,53 @@ class StatusBar extends JSDialog.Toolbar {
 		}
 
 		JSDialog.MenuDefinitions.set('LanguageStatusMenu', menuEntries);
+	}
+
+    updateDefaultStateAttribute() {
+        const docstatcontainer = document.getElementById('documentstatus-container');
+        const documentStatus = document.getElementById('DocumentStatus');
+        if (documentStatus && (!documentStatus.textContent || documentStatus.textContent.trim() === '')) {
+            docstatcontainer.setAttribute('default-state', 'true');
+        } else if (docstatcontainer.hasAttribute('default-state')) {
+            docstatcontainer.removeAttribute('default-state');
+        }
+    }
+
+	onInitModificationIndicator(lastmodtime) {
+		if (!this.isSaveIndicatorActive())
+			return;
+
+		const docstatcontainer = document.getElementById('documentstatus-container');
+		if (lastmodtime == null) {
+			if (docstatcontainer !== null && docstatcontainer !== undefined) {
+				docstatcontainer.classList.add('hidden');
+			}
+			return;
+		}
+		docstatcontainer.classList.remove('hidden');
+        this.updateDefaultStateAttribute()
+
+		this.map.fire('modificationindicatorinitialized');
+	}
+
+	// status can be '', 'SAVING', 'MODIFIED' or 'SAVED'
+	onUpdateModificationIndicator(e) {
+		if (!this.isSaveIndicatorActive())
+			return;
+
+		if (this._lastModstatus !== e.status) {
+			this.updateHtmlItem('DocumentStatus', e.status);
+			this._lastModStatus = e.status;
+
+            // Update default-state attribute after updating status
+            this.updateDefaultStateAttribute()
+		}
+		if (e.lastSaved !== null && e.lastSaved !== undefined) {
+			const lastSaved = document.getElementById('last-saved');
+			if (lastSaved !== null && lastSaved !== undefined) {
+				lastSaved.textContent = e.lastSaved;
+			}
+		}
 	}
 }
 

@@ -28,11 +28,11 @@
 #include <Poco/Net/NetException.h>
 #include <Poco/URI.h>
 
-#include <Log.hpp>
 #include <JsonUtil.hpp>
-#include <Util.hpp>
+#include <Log.hpp>
 #include <Protocol.hpp>
-#include "COOLWSD.hpp"
+#include <Util.hpp>
+#include <common/ConfigUtil.hpp>
 
 using Poco::Base64Decoder;
 using Poco::Base64Encoder;
@@ -94,7 +94,7 @@ const std::string JWTAuth::getAccessToken()
 
     LOG_INF("Sig generated is : " << encodedSig);
 
-    const std::string jwtToken = encodedBody + '.' + encodedSig;
+    std::string jwtToken = encodedBody + '.' + encodedSig;
     LOG_INF("JWT token generated: " << jwtToken);
 
     return jwtToken;
@@ -135,7 +135,7 @@ bool JWTAuth::verify(const std::string& accessToken)
         if (encodedSig != tokens[2])
         {
             LOG_ERR("JWTAuth: verification failed; Expected: " << encodedSig << ", Received: " << tokens[2]);
-            if (!Util::isFuzzing())
+            if constexpr (!Util::isFuzzing())
             {
                 return false;
             }
@@ -162,7 +162,7 @@ bool JWTAuth::verify(const std::string& accessToken)
         if (curtime > decodedExptime)
         {
             LOG_INF("JWTAuth:verify: JWT expired; curtime:" << curtime << ", exp:" << decodedExptime);
-            if (!Util::isFuzzing())
+            if constexpr (!Util::isFuzzing())
             {
                 return false;
             }
@@ -196,7 +196,7 @@ const std::string JWTAuth::createPayload()
 {
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     std::time_t curtime = std::chrono::system_clock::to_time_t(now);
-    int expirySeconds = COOLWSD::getConfigValue<int>("security.jwt_expiry_secs", 1800);
+    int expirySeconds = ConfigUtil::getConfigValue<int>("security.jwt_expiry_secs", 1800);
     const std::string exptime = std::to_string(curtime + expirySeconds);
 
     // TODO: Some sane code to represent JSON objects

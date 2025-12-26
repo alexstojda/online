@@ -11,12 +11,14 @@
 
 #pragma once
 
+#include <common/Log.hpp>
+#include <common/StringVector.hpp>
+#include <common/Uri.hpp>
+#include <common/Util.hpp>
+#include <net/HttpRequest.hpp>
+
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/URI.h>
-
-#include <common/StringVector.hpp>
-#include <common/Util.hpp>
-#include <common/Log.hpp>
 
 /**
  * A class to encapsulate various useful pieces from the request.
@@ -79,7 +81,7 @@
  * Note that the options are still encoded and need decoding separately.
  *
  * Due to the multi-layer nature of the URI, it raises many difficulties, not least
- * the fact that it has multiple query parameters ('?' sections). It also has foreslash
+ * the fact that it has multiple query parameters ('?' sections). It also has slash
  * delimiters after query parameters.
  *
  * The different sections are henceforth given names to help both in documenting and
@@ -88,9 +90,8 @@
  * /cool/<encoded-document-URI+options>/ws?WOPISrc=<encoded-document-URI>&compat=/ws[/<sessionId>/<command>/<serial>]
  *       |--------documentURI---------|            |-------WOPISrc------|        |--------------compat--------------|
  *                            |options|                                               |sessionId| |command| |serial|
- *       |---------------------------LegacyDocumentURI---------------------------|
  *
- * Alternatively, the LegacyDocumentURI (encoded) could be hexified, as follows:
+ * Alternatively, the documentURI (encoded) could be hexified, as follows:
  * /cool/0x123456789/ws?WOPISrc=<encoded-document-URI>&compat=/ws[/<sessionId>/<command>/<serial>]
  */
 class RequestDetails
@@ -98,11 +99,10 @@ class RequestDetails
 public:
 
     /// The fields of the URI.
-    enum class Field
+    enum class Field : std::uint8_t
     {
         Type,
         DocumentURI,
-        LegacyDocumentURI, //< Legacy, to be removed.
         WOPISrc,
         Compat,
         SessionId,
@@ -111,27 +111,29 @@ public:
     };
 
 private:
+    STATE_ENUM(Method, unknown, GET, HEAD, POST);
 
-    bool _isGet : 1;
-    bool _isHead : 1;
-    bool _isProxy : 1;
-    bool _isWebSocket : 1;
-    std::string _uriString;
-    std::string _proxyPrefix;
-    std::string _hostUntrusted;
-    std::string _documentURI;
     StringVector _pathSegs;
     std::map<std::string, std::string> _params;
     std::map<Field, std::string> _fields;
     std::map<std::string, std::string> _docUriParams;
+    std::string _uriString;
+    std::string _proxyPrefix;
+    std::string _hostUntrusted;
+    Method _method;
+    bool _isProxy : 1;
+    bool _isWebSocket : 1;
+    bool _closeConnection : 1;
+
+    static Method stringToMethod(std::string_view method);
 
     void dehexify();
     void processURI();
 
 public:
-
     RequestDetails(Poco::Net::HTTPRequest &request, const std::string& serviceRoot);
-    RequestDetails(const std::string &mobileURI);
+    RequestDetails(http::RequestParser& request, const std::string& serviceRoot);
+    RequestDetails(std::string mobileURI);
 
     /// Constructs from its components.
     /// wopiSrc is typically encoded.
@@ -152,14 +154,14 @@ public:
     static std::string getDocKey(const std::string& uri) { return getDocKey(sanitizeURI(uri)); }
 
     /// Returns false if the WOPISrc is not encoded correctly.
-    static bool validateWOPISrc(const std::string& uri) { return !Util::needsURIEncoding(uri); }
+    static bool validateWOPISrc(const std::string& uri) { return !Uri::needsEncoding(uri); }
 
     /// This is a per-document, per-user request key.
     /// If a user makes two requests on the same document at the same time,
     /// they will have the same request-key and we won't differentiate between them.
     static std::string getRequestKey(const std::string& wopiSrc, const std::string& accessToken)
     {
-        const std::string decodedWopiSrc = Util::decodeURIComponent(wopiSrc);
+        const std::string decodedWopiSrc = Uri::decode(wopiSrc);
         const Poco::URI wopiSrcSanitized = RequestDetails::sanitizeURI(decodedWopiSrc);
 
         std::string requestKey = RequestDetails::getDocKey(wopiSrcSanitized);
@@ -183,10 +185,6 @@ public:
 
         return std::string();
     }
-
-    // matches the WOPISrc if used. For load balancing
-    // must be 2nd element in the path after /cool/<here>
-    std::string getLegacyDocumentURI() const { return getField(Field::LegacyDocumentURI); }
 
     /// The DocumentURI, decoded. Doesn't contain WOPISrc or any other appendages.
     std::string getDocumentURI() const { return getField(Field::DocumentURI); }
@@ -242,20 +240,28 @@ public:
     {
         return _isWebSocket;
     }
+    bool closeConnection() const
+    {
+        return _closeConnection;
+    }
     bool isGet() const
     {
-        return _isGet;
+        return _method == Method::GET;
     }
     bool isGet(const char *path) const
     {
-        return _isGet && _uriString == path;
+        return _method == Method::GET && _uriString == path;
     }
     bool isGetOrHead(const char *path) const
     {
-        return (_isGet || _isHead) && _uriString == path;
+        return (_method == Method::GET || _method == Method::HEAD) && _uriString == path;
+    }
+    bool isPost() const
+    {
+        return _method == Method::POST;
     }
 
-    bool equals(std::size_t index, const char* string) const
+    bool equals(std::size_t index, const std::string_view string) const
     {
         return _pathSegs.equals(index, string);
     }
@@ -285,17 +291,39 @@ public:
         return it != _fields.end() ? it->second : std::string();
     }
 
-    bool equals(const Field field, const char* string) const
+    bool equals(const Field field, const std::string_view string) const
     {
         const auto it = _fields.find(field);
-        return it != _fields.end() ? it->second == string : (string == nullptr || *string == '\0');
+        return it != _fields.end() ? it->second == string : string.empty();
     }
 
-    std::string toString() const
+    bool operator==(const RequestDetails& rhs) const
+    {
+        if (_method != rhs._method)
+            return false;
+        if (_isProxy != rhs._isProxy)
+            return false;
+        if (_isWebSocket != rhs._isWebSocket)
+            return false;
+        if (_closeConnection != rhs._closeConnection)
+            return false;
+        if (_uriString != rhs._uriString)
+            return false;
+        if (_proxyPrefix != rhs._proxyPrefix)
+            return false;
+        if (_hostUntrusted != rhs._hostUntrusted)
+            return false;
+
+        return Util::equal(_params, rhs._params) && Util::equal(_fields, rhs._fields) &&
+               Util::equal(_docUriParams, rhs._docUriParams) &&
+               Util::equal(_pathSegs, rhs._pathSegs);
+    }
+
+    [[nodiscard]] std::string toString() const
     {
         std::ostringstream oss;
-        oss << _uriString << ' ' << (_isGet?"G":"")
-            << (_isHead?"H":"") << (_isProxy?"Proxy":"")
+        oss << _uriString << ' ' << nameShort(_method)
+            << (_isProxy?"Proxy":"")
             << (_isWebSocket?"WebSocket":"");
         oss << ", host: " << _hostUntrusted;
         oss << ", path: " << _pathSegs.size();
@@ -305,5 +333,11 @@ public:
         return oss.str();
     }
 };
+
+inline std::ostream& operator<<(std::ostream& os, const RequestDetails& details)
+{
+    os << details.toString();
+    return os;
+}
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

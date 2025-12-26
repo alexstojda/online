@@ -17,13 +17,13 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Sheet Operations.', functi
 
 	it.skip('Switching sheet sets the view that contains cell-cursor', function () {
 		calcHelper.assertNumberofSheets(1);
-		helper.typeIntoInputField('input#addressInput-input', 'A1');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A1');
 		calcHelper.ensureViewContainsCellCursor();
 		cy.cGet('#spreadsheet-toolbar #insertsheet').click();
 		calcHelper.assertNumberofSheets(2);
 		cy.cGet('#spreadsheet-tab1').click();
 		calcHelper.ensureViewContainsCellCursor();
-		helper.typeIntoInputField('input#addressInput-input', 'A200');
+		helper.typeIntoInputField(helper.addressInputSelector, 'A200');
 		calcHelper.ensureViewContainsCellCursor();
 		cy.cGet('#spreadsheet-tab0').click();
 		calcHelper.ensureViewContainsCellCursor();
@@ -66,6 +66,17 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Sheet Operations.', functi
 		cy.cGet('.spreadsheet-tab.spreadsheet-tab-selected').should('have.text', 'renameSheet');
 	});
 
+	it('Rename sheet using keyboard only', function () {
+		calcHelper.assertNumberofSheets(1);
+		cy.cGet('.spreadsheet-tab.spreadsheet-tab-selected').should('have.text', 'Sheet1');
+		calcHelper.selectOptionFromContextMenu('Rename Sheet...');
+		cy.cGet('#modal-dialog-rename-calc-sheet').should('exist');
+		cy.cGet('#input-modal-input').should('have.focus').clear().type('renameSheet{Enter}');
+		cy.cGet('#modal-dialog-rename-calc-sheet').should('not.exist');
+		cy.cGet('.spreadsheet-tab.spreadsheet-tab-selected').should('have.text', 'renameSheet');
+	});
+
+
 	it('Hide/Show sheet', function () {
 		calcHelper.assertNumberofSheets(1);
 		cy.cGet('#spreadsheet-toolbar #insertsheet').click();
@@ -76,7 +87,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Sheet Operations.', functi
 		//show sheet
 		calcHelper.selectOptionFromContextMenu('Show Sheet');
 		cy.cGet('#show-sheets-modal').should('exist');
-		cy.cGet('#hidden-part-checkbox-1').check();
+		cy.cGet('#hidden-part-checkbox-Sheet2').check();
 		cy.cGet('#show-sheets-modal-response').click();
 		calcHelper.assertNumberofSheets(2);
 	});
@@ -92,5 +103,20 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Sheet Operations.', functi
 		//right
 		calcHelper.selectOptionFromContextMenu('Move Sheet Right');
 		cy.cGet('#spreadsheet-tab0').should('have.text', 'Sheet1');
+	});
+
+	it('Open sheet list and select a sheet', function () {
+		calcHelper.assertNumberofSheets(1);
+		cy.cGet('#spreadsheet-toolbar #insertsheet').click();
+		calcHelper.assertNumberofSheets(2);
+		// Open sheet list popup
+		cy.cGet('#spreadsheet-toolbar #sheetlist').click();
+		cy.cGet('#sheetlist-dropdown').should('be.visible');
+		cy.cGet('#sheetlist-dropdown #sheetlist-entries .ui-combobox-entry ').should('have.length', 2);
+		cy.cGet('#sheetlist-dropdown #sheetlist-entries .ui-combobox-entry ').eq(1).should('have.class', 'selected');
+		// Select first sheet
+		cy.cGet('#sheetlist-dropdown #sheetlist-entries .ui-combobox-entry ').eq(0).click();
+		cy.cGet('#sheetlist-dropdown').should('not.exist');
+		cy.cGet('#spreadsheet-tab0').should('have.class', 'spreadsheet-tab-selected');
 	});
 });

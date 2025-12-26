@@ -15,6 +15,18 @@ https://docs.cypress.io/guides/getting-started/installing-cypress.html#npm-insta
 For CI you might need to install some additional dependencies:
 https://docs.cypress.io/guides/guides/continuous-integration.html#Dependencies
 
+Note:
+If you have installed Chromium via snap (default on Ubuntu), you need to specify the full path
+to the binary:
+```
+CYPRESS_BROWSER="/snap/chromium/current/usr/lib/chromium-browser/chrome" make check
+```
+
+or add this to your `~/.bashrc` to make it persist:
+
+```
+export CYPRESS_BROWSER="/snap/chromium/current/usr/lib/chromium-browser/chrome"
+```
 
 Running tests
 -------------
@@ -90,6 +102,10 @@ https://docs.cypress.io/guides/core-concepts/test-runner.html
 To open desktop tests in the test runner:
 
     make run-desktop
+
+`xorg-xhost` is required to run the interactive test runner,
+see `Makefile.am` for details. If missing, `make run-desktop`
+fails with an error: Missing X server or $DISPLAY.
 
 To open mobile tests in the test runner:
 
@@ -173,6 +189,19 @@ The implementation of interference testing can be found in
 cypress_test/integration_tests/common/interference_user_spec.js
 test file.
 
+Running multi-user tests
+------------------------
+
+Multi-user test files are in `integration_tests/multiuser` directory.
+
+To run the multi-user tests on the shell:
+
+    make check-multi [spec=writer/notebookbar_spec.js]
+
+To run the multi-user tests in the interactive test runner:
+
+    make run-multi [spec=writer/notebookbar_spec.js]
+
 Running tests in different browsers
 -----------------------------------
 
@@ -206,15 +235,11 @@ Limitations:
 Running tests with php-proxy
 ----------------------------
 
-You can run any test runner command with php-proxy with setting
-CYPRESS_INTEGRATION environment variable. For example:
+You can tests with proxy.php which uses ProxyProtocol in coolwsd. It is primarily used in richdocumentscode - https://github.com/CollaboraOnline/richdocumentscode
 
-CYPRESS_INTEGRATION="php-proxy" make check
+make check-php-proxy
 
-Prerequisites:
-* Download php-proxy script:
-https://github.com/CollaboraOnline/richdocumentscode/blob/master/proxy.php
-* Put it under /srv/www/htdocs/richproxy/ folder.
+It downloads https://github.com/CollaboraOnline/richdocumentscode/blob/master/proxy.php and start php server in docker.
 
 Other useful flags
 ------------------
@@ -230,7 +255,7 @@ Unfortunately this does not work for multi-user tests.
 2. ENABLE_CONSOLE_LOG
 
 With this flag we can enable logging for console.error() messages and so they
-will be displayed in the command line. It's useful when we can reproduce a test
+will be displayed in the terminal. It's useful when we can reproduce a test
 failure only in headless mode and we need to debug the client-side JS code.
 
     ENABLE_CONSOLE_LOG="1" make check-mobile spec=writer/apply_font_spec.js

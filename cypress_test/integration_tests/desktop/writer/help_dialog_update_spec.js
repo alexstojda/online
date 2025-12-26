@@ -1,4 +1,4 @@
-// This spec file doesnot test anything and it is use to update
+// This spec file does not test anything and it is use to update
 // help dialog screenshots. You can run this spec using:
 // make UPDATE_SCREENSHOT=true check-desktop spec=writer/help_dialog_update_spec.js
 // UPDATE_SCREENSHOT needs to be true otherwise cypress will not run the spec file and
@@ -92,7 +92,6 @@ describe(['tagscreenshot'], 'Help dialog screenshot updation', function() {
 		cy.cGet('#inserttable').click();
 		cy.cGet('.inserttable-grid > :nth-child(4) > :nth-child(4)').trigger('mouseover');
 
-		helper.waitUntilIdle('#inserttable-popup');
 		cy.cGet('#inserttable-popup').screenshot('insert-table', {padding: 30});
 
 		copyScreenshot('insert-table.png');
@@ -101,7 +100,6 @@ describe(['tagscreenshot'], 'Help dialog screenshot updation', function() {
 	it('Word count', function() {
 		cy.cGet('#menu-tools').click();
 		cy.cGet('body').contains('#menu-tools li a', 'Word Count...').click();
-		helper.waitUntilIdle('.lokdialog_container');
 		cy.cGet('.lokdialog_container').screenshot('word-count');
 		copyScreenshot('word-count.png');
 	});

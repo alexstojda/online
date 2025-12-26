@@ -9,11 +9,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 /*
- * L.Control.Dialog used for displaying alerts
+ * window.L.Control.Dialog used for displaying alerts
  */
 
 /* global _ sanitizeUrl JSDialog */
-L.Control.AlertDialog = L.Control.extend({
+window.L.Control.AlertDialog = window.L.Control.extend({
 	onAdd: function (map) {
 		// TODO: Better distinction between warnings and errors
 		map.on('error', this._onError, this);
@@ -36,6 +36,8 @@ L.Control.AlertDialog = L.Control.extend({
 			}
 			else
 				this._map.uiManager.showConfirmModal('cool_alert', '', e.msg, _('Close'), function() { /* Do nothing. */ }, true);
+
+			window.app.console.error('AlertDialog: ' + e.msg);
 		}
 		else if (e.cmd == 'load' && e.kind == 'docunloading') {
 			// Handled by transparently retrying.
@@ -83,7 +85,7 @@ L.Control.AlertDialog = L.Control.extend({
 					],
 					buttons: [
 						{
-							text: _('Don\'t show this again'),
+							text: _('Don’t show this again'),
 							callback: function() {
 								JSDialog.setShowAgain(alertId, false);
 								return false; // Close modal
@@ -106,10 +108,12 @@ L.Control.AlertDialog = L.Control.extend({
 			msg = msg.replace('{0}', e.kind);
 			msg = msg.replace('{1}', e.cmd);
 			this._map.uiManager.showInfoModal('cool_alert', '', msg, '', _('Close'), function() { /* Do nothing. */ }, false);
+
+			window.app.console.error('AlertDialog: ' + msg);
 		}
 	}
 });
 
-L.control.alertDialog = function (options) {
-	return new L.Control.AlertDialog(options);
+window.L.control.alertDialog = function (options) {
+	return new window.L.Control.AlertDialog(options);
 };

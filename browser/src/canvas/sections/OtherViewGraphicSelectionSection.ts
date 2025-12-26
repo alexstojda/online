@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -13,27 +15,26 @@
 class OtherViewGraphicSelectionSection extends CanvasSectionObject {
     documentObject: boolean = true;
     interactable: boolean = false; // We don't bother with events.
-    zIndex: number = L.CSections.DefaultForDocumentObjects.processingOrder;
-    drawingOrder: number = L.CSections.DefaultForDocumentObjects.drawingOrder;
-    processingOrder: number = L.CSections.DefaultForDocumentObjects.processingOrder;
+    zIndex: number = app.CSections.DefaultForDocumentObjects.processingOrder;
+    drawingOrder: number = app.CSections.DefaultForDocumentObjects.drawingOrder;
+    processingOrder: number = app.CSections.DefaultForDocumentObjects.processingOrder;
 
     static sectionNamePrefix = 'OtherViewGraphicSelection ';
     static sectionPointers: Array<OtherViewGraphicSelectionSection> = [];
 
     constructor(viewId: number, rectangle: cool.SimpleRectangle, part: number, mode: number) {
-        super();
+        super(OtherViewGraphicSelectionSection.sectionNamePrefix + viewId);
 
         this.size = [rectangle.pWidth, rectangle.pHeight];
         this.position = [rectangle.pX1, rectangle.pY1];
-        this.sectionProperties.color = L.LOUtil.rgbToHex(L.LOUtil.getViewIdColor(viewId));
-        this.name = OtherViewGraphicSelectionSection.sectionNamePrefix + viewId;
+        this.sectionProperties.color = app.LOUtil.rgbToHex(app.LOUtil.getViewIdColor(viewId));
 
         this.sectionProperties.viewId = viewId;
         this.sectionProperties.part = part;
         this.sectionProperties.mode = mode;
     }
 
-    onDraw(frameCount?: number, elapsedTime?: number, subsetBounds?: Bounds): void {
+    onDraw(frameCount?: number, elapsedTime?: number): void {
         this.context.strokeStyle = this.sectionProperties.color;
         this.context.lineWidth = 2;
         this.context.strokeRect(-0.5, -0.5, this.size[0], this.size[1]);
@@ -54,12 +55,12 @@ class OtherViewGraphicSelectionSection extends CanvasSectionObject {
     public static addOrUpdateGraphicSelectionIndicator(viewId: number, rectangleData: Array<string>, part: number, mode: number) {
         let rectangle = new cool.SimpleRectangle(0, 0, 0, 0);
         if (rectangleData)
-            rectangle = new app.definitions.simpleRectangle(parseInt(rectangleData[0]), parseInt(rectangleData[1]), parseInt(rectangleData[2]), parseInt(rectangleData[3]));
+            rectangle = new cool.SimpleRectangle(parseInt(rectangleData[0]), parseInt(rectangleData[1]), parseInt(rectangleData[2]), parseInt(rectangleData[3]));
 
         const sectionName = OtherViewGraphicSelectionSection.sectionNamePrefix + viewId;
         let section: OtherViewGraphicSelectionSection;
         if (app.sectionContainer.doesSectionExist(sectionName)) {
-            section = app.sectionContainer.getSectionWithName(sectionName);
+            section = app.sectionContainer.getSectionWithName(sectionName) as OtherViewGraphicSelectionSection;
             section.sectionProperties.part = part;
             section.sectionProperties.mode = mode;
             section.size[0] = rectangle.pWidth;
@@ -79,7 +80,7 @@ class OtherViewGraphicSelectionSection extends CanvasSectionObject {
     public static removeView(viewId: number) {
         const sectionName = OtherViewGraphicSelectionSection.sectionNamePrefix + viewId;
         if (app.sectionContainer.doesSectionExist(sectionName)) {
-            const section = app.sectionContainer.getSectionWithName(sectionName);
+            const section = app.sectionContainer.getSectionWithName(sectionName) as OtherViewGraphicSelectionSection;
             OtherViewGraphicSelectionSection.sectionPointers.splice(OtherViewGraphicSelectionSection.sectionPointers.indexOf(section), 1);
             app.sectionContainer.removeSection(sectionName);
             app.sectionContainer.requestReDraw();

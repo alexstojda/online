@@ -13,14 +13,6 @@
 # * ONLINE_EXTRA_BUILD_OPTIONS - extra build options for online
 # * NO_DOCKER_IMAGE - if set, don't build the docker image itself, just do all the preps
 
-# check we can sudo without asking a pwd
-echo "Trying if sudo works without a password"
-echo
-echo "If you get a password prompt now, break, and fix your setup using 'sudo visudo'; add something like:"
-echo "yourusername ALL=(ALL) NOPASSWD: /sbin/setcap"
-echo
-sudo echo "works"
-
 # Check env variables
 if [ -z "$DOCKER_HUB_REPO" ]; then
   DOCKER_HUB_REPO="mydomain/collaboraonline"
@@ -31,7 +23,7 @@ fi;
 echo "Using Docker Hub Repository: '$DOCKER_HUB_REPO' with tag '$DOCKER_HUB_TAG'."
 
 if [ -z "$CORE_BRANCH" ]; then
-  CORE_BRANCH="distro/collabora/co-22.05"
+  CORE_BRANCH="distro/collabora/co-25.04"
 fi;
 echo "Building core branch '$CORE_BRANCH'"
 
@@ -76,9 +68,9 @@ mkdir -p "$INSTDIR"
 ##### build static poco #####
 
 if test ! -f poco/lib/libPocoFoundation.a ; then
-    wget https://github.com/pocoproject/poco/archive/poco-1.11.1-release.tar.gz
-    tar -xzf poco-1.11.1-release.tar.gz
-    cd poco-poco-1.11.1-release/
+    wget https://pocoproject.org/releases/poco-1.12.5p2/poco-1.12.5p2-all.tar.gz
+    tar -xzf poco-1.12.5p2-all.tar.gz
+    cd poco-1.12.5p2-all/
     ./configure --static --no-tests --no-samples --no-sharedlibs --cflags="-fPIC" --omit=Zip,Data,Data/SQLite,Data/ODBC,Data/MySQL,MongoDB,PDF,CppParser,PageCompiler,Redis,Encodings,ActiveRecord --prefix=$BUILDDIR/poco
     make -j $(nproc)
     make install
@@ -98,7 +90,7 @@ fi
 
 # online repo
 if test ! -d online ; then
-  git clone "$COLLABORA_ONLINE_REPO" online || exit 1
+  git clone --depth=1 "$COLLABORA_ONLINE_REPO" online || exit 1
 fi
 
 ( cd online && git fetch --all && git checkout -f $COLLABORA_ONLINE_BRANCH && git clean -f -d && git pull -r ) || exit 1
@@ -116,7 +108,7 @@ fi
 ##### LOKit (core) #####
 
 # build
-if [ "$CORE_BRANCH" == "distro/collabora/co-22.05" ]; then
+if [ "$CORE_BRANCH" == "distro/collabora/co-25.04" ]; then
   ( cd core && ./autogen.sh --with-distro=CPLinux-LOKit --disable-epm --without-package-format --disable-symbols ) || exit 1
 else
   ( cd core && ./autogen.sh --with-distro=LibreOfficeOnline ) || exit 1
@@ -131,7 +123,7 @@ cp -a core/instdir "$INSTDIR"/opt/lokit
 
 # build
 ( cd online && ./autogen.sh ) || exit 1
-( cd online && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --enable-silent-rules --with-lokit-path="$BUILDDIR"/core/include --with-lo-path=/opt/lokit --with-poco-includes=$BUILDDIR/poco/include --with-poco-libs=$BUILDDIR/poco/lib $ONLINE_EXTRA_BUILD_OPTIONS) || exit 1
+( cd online && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --enable-silent-rules --disable-tests --with-lokit-path="$BUILDDIR"/core/include --with-lo-path=/opt/lokit --with-poco-includes=$BUILDDIR/poco/include --with-poco-libs=$BUILDDIR/poco/lib $ONLINE_EXTRA_BUILD_OPTIONS) || exit 1
 ( cd online && make -j $(nproc)) || exit 1
 
 # copy stuff
@@ -139,9 +131,10 @@ cp -a core/instdir "$INSTDIR"/opt/lokit
 
 ##### online branding #####
 if test -d online-branding ; then
+  if ! which sass &> /dev/null; then npm install -g sass; fi
   cd online-branding
-  ./brand.sh $INSTDIR/opt/lokit $INSTDIR/usr/share/coolwsd/browser/dist 6 # CODE
-  ./brand.sh $INSTDIR/opt/lokit $INSTDIR/usr/share/coolwsd/browser/dist 7 # Nextcloud Office
+  ./brand.sh $INSTDIR/opt/lokit $INSTDIR/usr/share/coolwsd/browser/dist CODE # CODE
+  ./brand.sh $INSTDIR/opt/lokit $INSTDIR/usr/share/coolwsd/browser/dist NC-theme-community # Nextcloud Office
   cd ..
 fi
 

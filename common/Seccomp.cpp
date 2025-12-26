@@ -15,11 +15,19 @@
 
 #include <config.h>
 
-#include <sysexits.h>
 #include "Seccomp.hpp"
+
+#include <common/Log.hpp>
+#include <common/SigUtil.hpp>
 
 #include <dlfcn.h>
 #include <ftw.h>
+#include <sys/resource.h>
+#include <sys/time.h>
+#include <sysexits.h>
+#include <unistd.h>
+#include <utime.h>
+
 #ifdef __linux__
 #include <linux/audit.h>
 #include <linux/filter.h>
@@ -28,17 +36,9 @@
 #endif
 #include <malloc.h>
 #include <signal.h>
-#include <sys/capability.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #endif // __linux__
-#include <sys/resource.h>
-#include <sys/time.h>
-#include <unistd.h>
-#include <utime.h>
-
-#include <common/Log.hpp>
-#include <common/SigUtil.hpp>
 
 #if DISABLE_SECCOMP == 0
 #ifndef SYS_SECCOMP
@@ -71,24 +71,24 @@ static void handleSysSignal(int /* signal */,
                             siginfo_t *info,
                             void *context)
 {
-	ucontext_t *uctx = static_cast<ucontext_t *>(context);
+    ucontext_t* uctx = static_cast<ucontext_t*>(context);
 
     SigUtil::signalLogOpen();
     SigUtil::signalLogPrefix();
     SigUtil::signalLog("SIGSYS trapped with code: ");
-    SigUtil::signalLogNumber(info->si_code);
+    SigUtil::signalLogNumber(static_cast<std::size_t>(info->si_code));
     SigUtil::signalLog(" and context ");
-    SigUtil::signalLogNumber(reinterpret_cast<size_t>(context));
+    SigUtil::signalLogNumber(reinterpret_cast<std::size_t>(context));
     SigUtil::signalLog("\n");
 
-	if (info->si_code != SYS_SECCOMP || !uctx)
-		return;
+    if (info->si_code != SYS_SECCOMP || !uctx)
+        return;
 
     unsigned int syscall = SECCOMP_SYSCALL (uctx);
 
     SigUtil::signalLogPrefix();
     SigUtil::signalLog(" seccomp trapped signal, un-authorized sys-call: ");
-    SigUtil::signalLogNumber(syscall);
+    SigUtil::signalLogNumber(static_cast<std::size_t>(syscall));
     SigUtil::signalLog("\n");
 
     SigUtil::dumpBacktrace();
@@ -108,6 +108,10 @@ bool lockdown([[maybe_unused]] Type type)
     #define ACCEPT_SYSCALL(name) \
         BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, __NR_##name, 0, 1), \
         BPF_STMT(BPF_RET+BPF_K, SECCOMP_RET_ALLOW)
+
+    #define REJECT_SYSCALL(name, err) \
+        BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, __NR_##name, 0, 1), \
+        BPF_STMT(BPF_RET+BPF_K, SECCOMP_RET_ERRNO | (err & SECCOMP_RET_DATA))
 
     #define KILL_SYSCALL_FULL(fullname) \
         BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, fullname, 0, 1), \
@@ -158,6 +162,10 @@ bool lockdown([[maybe_unused]] Type type)
         KILL_SYSCALL(shmat),
         KILL_SYSCALL(shmctl),
 #endif
+        REJECT_SYSCALL(execve, EPERM),
+#ifdef __NR_execveat
+        REJECT_SYSCALL(execveat, EPERM),
+#endif
         KILL_SYSCALL(getitimer),
         KILL_SYSCALL(setitimer),
         KILL_SYSCALL(sendfile),
@@ -187,6 +195,7 @@ bool lockdown([[maybe_unused]] Type type)
         KILL_SYSCALL(sync),   // I/O perf.
         KILL_SYSCALL(mount),
         KILL_SYSCALL(umount2),
+        KILL_SYSCALL(setns),
         KILL_SYSCALL(swapon),
         KILL_SYSCALL(swapoff),
         KILL_SYSCALL(reboot), // !
@@ -264,7 +273,8 @@ bool lockdown([[maybe_unused]] Type type)
 
 namespace Rlimit {
 
-void setRLimit(rlim_t confLim, int resource, const std::string &resourceText, const std::string &unitText)
+void setRLimit(rlim_t confLim, int resource, const std::string& resourceText,
+               const std::string& unitText)
 {
     rlim_t lim = confLim;
     if (lim <= 0)
@@ -287,10 +297,24 @@ void setRLimit(rlim_t confLim, int resource, const std::string &resourceText, co
             LOG_INF(resourceText << " is " << setLimTextWithUnit << " after setting it to " << limTextWithUnit << '.');
         }
         else
-            LOG_SYS("Failed to get " << resourceText << '.');
+            LOG_SYS("Failed to get " << resourceText << " after trying to set it to "
+                                     << limTextWithUnit);
     }
     else
-        LOG_INF("Ignored setting " << resourceText << " to " << limTextWithUnit << '.');
+    {
+        rlimit rlim = { 0, 0 };
+        if (getrlimit(resource, &rlim) == 0)
+        {
+            const std::string curLimTextWithUnit(
+                (rlim.rlim_max == RLIM_INFINITY) ? "unlimited"
+                                                 : std::to_string(rlim.rlim_max) + ' ' + unitText);
+            LOG_INF("Ignored setting " << resourceText << " to " << limTextWithUnit
+                                       << ", current limit is " << curLimTextWithUnit);
+        }
+        else
+            LOG_SYS("Failed to get " << resourceText << " while ignoring to set it to "
+                                     << limTextWithUnit);
+    }
 }
 
 bool handleSetrlimitCommand(const StringVector& tokens)

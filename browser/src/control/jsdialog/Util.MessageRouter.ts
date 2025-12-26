@@ -18,6 +18,8 @@ declare var JSDialog: any;
 class JSDialogMessageRouter {
 	// show labels instead of editable fields in message boxes
 	private _preProcessMessageDialog(msgData: WidgetJSON) {
+		if (!msgData.children) return;
+
 		for (var i in msgData.children) {
 			var child = msgData.children[i];
 			if (child.type === 'multilineedit') child.type = 'fixedtext';
@@ -44,7 +46,11 @@ class JSDialogMessageRouter {
 
 			var isNotebookbarInitialized =
 				app.socket._map.uiManager && app.socket._map.uiManager.notebookbar;
-			if (msgData.jsontype === 'notebookbar' && !isNotebookbarInitialized) {
+			if (
+				(msgData.jsontype === 'notebookbar' && !isNotebookbarInitialized) ||
+				(msgData.jsontype === 'addressinputfield' &&
+					!app.socket._map.addressInputField)
+			) {
 				setTimeout(fireJSDialogEvent, 1000);
 				return;
 			} else if (fireJSDialogEvent() === true) {
@@ -101,6 +107,8 @@ class JSDialogMessageRouter {
 			app.socket._map.fire('jsdialog', { data: msgData, callback: callbackFn });
 		} else if (msgData.jsontype === 'sidebar') {
 			app.socket._map.fire('sidebar', { data: msgData });
+		} else if (msgData.jsontype === 'navigator') {
+			app.socket._map.fire('navigator', { data: msgData });
 		} else if (msgData.jsontype === 'formulabar') {
 			app.socket._map.fire('formulabar', { data: msgData });
 		} else if (msgData.jsontype === 'notebookbar') {
@@ -113,6 +121,8 @@ class JSDialogMessageRouter {
 					}
 				}
 			}
+		} else if (msgData.jsontype === 'quickfind') {
+			app.socket._map.fire('quickfind', { data: msgData });
 		} else {
 			console.warn(
 				'Unhandled jsdialog message: {jsontype: "' +

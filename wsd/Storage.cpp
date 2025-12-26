@@ -13,25 +13,14 @@
 
 #include <chrono>
 #include <memory>
-#include <iconv.h>
 #include <string>
 
 #include <Poco/Exception.h>
 
 #if !MOBILEAPP
 
-#include <Poco/Net/AcceptCertificateHandler.h>
-#include <Poco/Net/Context.h>
-#include <Poco/Net/HTTPClientSession.h>
-#include <Poco/Net/HTTPRequest.h>
-#include <Poco/Net/HTTPResponse.h>
-#include <Poco/Net/HTTPSClientSession.h>
-#include <Poco/Net/KeyConsoleHandler.h>
-#include <Poco/Net/NameValueCollection.h>
-#include <Poco/Net/SSLManager.h>
-
 #include <cassert>
-#include <errno.h>
+#include <cerrno>
 
 #include <Auth.hpp>
 #include <HostUtil.hpp>
@@ -42,19 +31,22 @@
 #endif
 
 #include <Poco/StreamCopier.h>
+#include <Poco/Path.h>
 #include <Poco/URI.h>
 
+#include <CommandControl.hpp>
 #include <Common.hpp>
 #include <Exceptions.hpp>
-#include <Storage.hpp>
 #include <Log.hpp>
+#include <NetUtil.hpp>
+#include <Storage.hpp>
 #include <Unit.hpp>
 #include <Util.hpp>
+#include <common/ConfigUtil.hpp>
 #include <common/FileUtil.hpp>
 #include <common/JsonUtil.hpp>
 #include <common/TraceEvent.hpp>
-#include <NetUtil.hpp>
-#include <CommandControl.hpp>
+#include <wsd/COOLWSD.hpp>
 
 #ifdef IOS
 #include <ios.h>
@@ -62,34 +54,50 @@
 #include "androidapp.hpp"
 #elif defined(GTKAPP)
 #include "gtk.hpp"
-#elif WASMAPP
-#include "wasmapp.hpp"
 #endif // IOS
 
+#if ENABLE_LOCAL_FILESYSTEM
 bool StorageBase::FilesystemEnabled;
-bool StorageBase::SSLAsScheme = true;
-bool StorageBase::SSLEnabled = false;
+#endif
 
 #if !MOBILEAPP
 
-std::string StorageBase::getLocalRootPath() const
+namespace {
+
+std::string getLocalJailPath(const std::string& localStorePath, const std::string& jailPath)
 {
-    std::string localPath = _jailPath;
+    std::string localPath = jailPath;
     if (localPath[0] == '/')
     {
         // Remove the leading /
         localPath.erase(0, 1);
     }
 
-    return FileUtil::buildLocalPathToJail(COOLWSD::EnableMountNamespaces, _localStorePath, std::move(localPath));
+    return FileUtil::buildLocalPathToJail(COOLWSD::EnableMountNamespaces, localStorePath, std::move(localPath));
 }
+
+}
+
+std::string StorageBase::getLocalRootPath() const
+{
+    return getLocalJailPath(_localStorePath, _jailPath);
+}
+
+std::string StorageBase::getJailPresetsPath() const
+{
+    return getLocalJailPath(_localStorePath, JAILED_CONFIG_ROOT);
+}
+
 #endif
 
 void StorageBase::initialize()
 {
 #if !MOBILEAPP
     const auto& app = Poco::Util::Application::instance();
+
+#if ENABLE_LOCAL_FILESYSTEM
     FilesystemEnabled = app.config().getBool("storage.filesystem[@allow]", false);
+#endif
 
     //parse wopi.storage.host only when there is no storage.wopi.alias_groups entry in config
     if (!app.config().has("storage.wopi.alias_groups"))
@@ -103,86 +111,17 @@ void StorageBase::initialize()
 
     HostUtil::parseAliases(app.config());
 
-#if ENABLE_SSL
-    // FIXME: should use our own SSL socket implementation here.
-    Poco::Crypto::initializeCrypto();
-    Poco::Net::initializeSSL();
+    if (COOLWSD::IndirectionServerEnabled && COOLWSD::GeolocationSetup)
+        HostUtil::parseAllowedWSOrigins(app.config());
 
-    // Init client
-    Poco::Net::Context::Params sslClientParams;
-
-    // false default for upgrade to preserve legacy configuration
-    // in-config-file defaults are true.
-    SSLAsScheme = COOLWSD::getConfigValue<bool>("storage.ssl.as_scheme", false);
-
-    // Fallback to ssl.enable if not set - for back compatibility & simplicity.
-    SSLEnabled = COOLWSD::getConfigValue<bool>(
-        "storage.ssl.enable", COOLWSD::getConfigValue<bool>("ssl.enable", true));
-
-#if ENABLE_DEBUG
-    char *StorageSSLEnabled = getenv("STORAGE_SSL_ENABLE");
-    if (StorageSSLEnabled != NULL)
-    {
-        if (!strcasecmp(StorageSSLEnabled, "true"))
-            SSLEnabled = true;
-        else if (!strcasecmp(StorageSSLEnabled, "false"))
-            SSLEnabled = false;
-    }
-#endif
-
-    if (SSLEnabled || SSLAsScheme)
-    {
-        if (COOLWSD::isSSLEnabled())
-        {
-            sslClientParams.certificateFile = COOLWSD::getPathFromConfigWithFallback("storage.ssl.cert_file_path", "ssl.cert_file_path");
-            sslClientParams.privateKeyFile = COOLWSD::getPathFromConfigWithFallback("storage.ssl.key_file_path", "ssl.key_file_path");
-            sslClientParams.caLocation = COOLWSD::getPathFromConfigWithFallback("storage.ssl.ca_file_path", "ssl.ca_file_path");
-        }
-        else
-        {
-            sslClientParams.certificateFile = COOLWSD::getPathFromConfig("storage.ssl.cert_file_path");
-            sslClientParams.privateKeyFile = COOLWSD::getPathFromConfig("storage.ssl.key_file_path");
-            sslClientParams.caLocation = COOLWSD::getPathFromConfig("storage.ssl.ca_file_path");
-        }
-        sslClientParams.cipherList = COOLWSD::getPathFromConfigWithFallback("storage.ssl.cipher_list", "ssl.cipher_list");
-        const bool sslVerification = COOLWSD::getConfigValue<bool>("ssl.ssl_verification", true);
-        sslClientParams.verificationMode = !sslVerification ? Poco::Net::Context::VERIFY_NONE : Poco::Net::Context::VERIFY_STRICT;
-        sslClientParams.loadDefaultCAs = true;
-    }
-    else
-        sslClientParams.verificationMode = Poco::Net::Context::VERIFY_NONE;
-
-    Poco::SharedPtr<Poco::Net::PrivateKeyPassphraseHandler> consoleClientHandler = new Poco::Net::KeyConsoleHandler(false);
-    Poco::SharedPtr<Poco::Net::InvalidCertificateHandler> invalidClientCertHandler = new Poco::Net::AcceptCertificateHandler(false);
-
-    Poco::Net::Context::Ptr sslClientContext = new Poco::Net::Context(Poco::Net::Context::CLIENT_USE, sslClientParams);
-    sslClientContext->disableProtocols(Poco::Net::Context::Protocols::PROTO_SSLV2 |
-                                       Poco::Net::Context::Protocols::PROTO_SSLV3 |
-                                       Poco::Net::Context::Protocols::PROTO_TLSV1);
-    Poco::Net::SSLManager::instance().initializeClient(std::move(consoleClientHandler),
-                                                       std::move(invalidClientCertHandler),
-                                                       std::move(sslClientContext));
-
-    // Initialize our client SSL context.
-    ssl::Manager::initializeClientContext(
-        sslClientParams.certificateFile, sslClientParams.privateKeyFile, sslClientParams.caLocation,
-        sslClientParams.cipherList,
-        sslClientParams.verificationMode == Poco::Net::Context::VERIFY_NONE
-            ? ssl::CertificateVerification::Disabled
-            : ssl::CertificateVerification::Required);
-    if (!ssl::Manager::isClientContextInitialized())
-        LOG_ERR("Failed to initialize Client SSL.");
-    else
-        LOG_INF("Initialized Client SSL.");
-#endif
-#else
+#else // MOBILEAPP
     FilesystemEnabled = true;
-#endif
+#endif // MOBILEAPP
 }
 
 #if !MOBILEAPP
 
-bool isLocalhost(const std::string& targetHost)
+static bool isLocalhost(const std::string& targetHost)
 {
     const std::string targetAddress = net::resolveHostAddress(targetHost);
 
@@ -200,7 +139,8 @@ bool isLocalhost(const std::string& targetHost)
 
 #endif
 
-StorageBase::StorageType StorageBase::validate(const Poco::URI& uri, bool takeOwnership)
+StorageBase::StorageType StorageBase::validate(const Poco::URI& uri,
+                                               [[maybe_unused]] bool takeOwnership)
 {
     if (uri.isRelative() || uri.getScheme() == "file")
     {
@@ -214,7 +154,25 @@ StorageBase::StorageType StorageBase::validate(const Poco::URI& uri, bool takeOw
             return StorageBase::StorageType::Unauthorized;
         }
 #endif
-        if (FilesystemEnabled || takeOwnership)
+
+        if (takeOwnership)
+        {
+            LOG_DBG("Validated URI [" << COOLWSD::anonymizeUrl(uri.toString())
+                                      << "] as Conversion");
+            // Normalize the path.
+            Poco::Path path = Poco::Path(uri.getPath());
+            if (!path.isAbsolute() || !path.isFile() ||
+                !path.makeAbsolute().toString().starts_with(COOLWSD::ChildRoot))
+            {
+                LOG_ERR("Invalid path to document to convert [" << uri.toString() << ']');
+                return StorageBase::StorageType::Unsupported;
+            }
+
+            return StorageBase::StorageType::Conversion;
+        }
+
+#if ENABLE_LOCAL_FILESYSTEM
+        if (FilesystemEnabled)
         {
             LOG_DBG("Validated URI [" << COOLWSD::anonymizeUrl(uri.toString())
                                       << "] as FileSystem");
@@ -223,8 +181,11 @@ StorageBase::StorageType StorageBase::validate(const Poco::URI& uri, bool takeOw
 
         LOG_DBG("Local Storage is disabled by default. Enable in the config file or on the "
                 "command-line to enable.");
+#else
+        LOG_DBG("Local Storage is disabled in this build. Enable in the config file.");
+#endif // ENABLE_LOCAL_FILESYSTEM
     }
-#if !MOBILEAPP
+#if !MOBILEAPP // Breaks IOS when removed.
     else if (HostUtil::isWopiEnabled())
     {
         const auto& targetHost = uri.getHost();
@@ -259,7 +220,8 @@ StorageBase::StorageType StorageBase::validate(const Poco::URI& uri, bool takeOw
 }
 
 std::unique_ptr<StorageBase> StorageBase::create(const Poco::URI& uri, const std::string& jailRoot,
-                                                 const std::string& jailPath, bool takeOwnership)
+                                                 const std::string& jailPath, bool takeOwnership,
+                                                 const AdditionalFilePocoUris& additionalFileUrisPublic)
 {
     // FIXME: By the time this gets called we have already sent to the client three
     // 'progress:' messages: "id":"find", "id":"connect" and "id":"ready". We should ideally do the checks
@@ -293,9 +255,17 @@ std::unique_ptr<StorageBase> StorageBase::create(const Poco::URI& uri, const std
                 "No acceptable WOPI hosts found matching the target host [" + uri.getHost() +
                 "] in config");
             break;
+
+        case StorageBase::StorageType::Conversion:
+            return std::make_unique<LocalStorage>(uri, jailRoot, jailPath, /*takeOwnership=*/true, additionalFileUrisPublic);
+            break;
+
+#if ENABLE_LOCAL_FILESYSTEM
         case StorageBase::StorageType::FileSystem:
             return std::make_unique<LocalStorage>(uri, jailRoot, jailPath, takeOwnership);
             break;
+#endif // ENABLE_LOCAL_FILESYSTEM
+
 #if !MOBILEAPP
         case StorageBase::StorageType::Wopi:
             return std::make_unique<WopiStorage>(uri, jailRoot, jailPath);
@@ -324,7 +294,7 @@ std::unique_ptr<LocalStorage::LocalFileInfo> LocalStorage::getLocalFileInfo()
     const std::string userId = std::to_string(LastLocalStorageId++);
     std::string userNameString;
 
-#if MOBILEAPP
+#if MOBILEAPP && !WASMAPP
     if (user_name != nullptr)
         userNameString = std::string(user_name);
 #endif
@@ -336,15 +306,27 @@ std::unique_ptr<LocalStorage::LocalFileInfo> LocalStorage::getLocalFileInfo()
 
 std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth*/,
                                                      LockContext& /*lockCtx*/,
-                                                     const std::string& /*templateUri*/)
+                                                     const std::string& /*templateUri*/,
+                                                     [[maybe_unused]]
+                                                     AdditionalFilePaths& additionalFileLocalPaths)
 {
 #if !MOBILEAPP
     // /chroot/jailId/user/doc/childId/file.ext
     const std::string filename = Poco::Path(getUri().getPath()).getFileName();
+    AdditionalFilePaths additionalFileFilenames;
+    for (const auto& it : getAdditionalFileUris())
+    {
+        additionalFileFilenames[it.first] = Poco::Path(it.second.getPath()).getFileName();
+    }
     setRootFilePath(Poco::Path(getLocalRootPath(), filename).toString());
     setRootFilePathAnonym(COOLWSD::anonymizeUrl(getRootFilePath()));
     LOG_INF("Public URI [" << COOLWSD::anonymizeUrl(getUri().getPath()) <<
             "] jailed to [" << getRootFilePathAnonym() << "].");
+    AdditionalFilePaths additionalFileJailedFilePaths;
+    for (const auto& it : additionalFileFilenames)
+    {
+        additionalFileJailedFilePaths[it.first] = Poco::Path(getLocalRootPath(), it.second).toString();
+    }
 
     // Despite the talk about URIs it seems that _uri is actually just a pathname here
     const std::string publicFilePath = getUri().getPath();
@@ -353,8 +335,18 @@ std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth
         LOG_ERR("Local file URI [" << publicFilePath << "] invalid or doesn't exist.");
         throw BadRequestException("Invalid URI: " + getUri().toString());
     }
+    AdditionalFilePaths additionalFilePublicFilePaths;
+    for (const auto& it : getAdditionalFileUris())
+    {
+        additionalFilePublicFilePaths[it.first] = it.second.getPath();
+    }
 
-    if (!FileUtil::checkDiskSpace(getRootFilePath()))
+    // Make sure the path is valid.
+    const Poco::Path downloadPath = Poco::Path(getRootFilePath()).parent();
+    Poco::File(downloadPath).createDirectories();
+
+    // Check for available space.
+    if (!FileUtil::checkDiskSpace(downloadPath.toString()))
     {
         throw StorageSpaceLowException("Low disk space for " + getRootFilePathAnonym());
     }
@@ -370,6 +362,14 @@ std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth
             const std::string dir = Poco::Path(publicFilePath).parent().toString();
             if (FileUtil::isEmptyDirectory(dir))
                 FileUtil::removeFile(dir);
+
+            for (const auto& it : additionalFilePublicFilePaths)
+            {
+                Poco::File(it.second).moveTo(additionalFileJailedFilePaths[it.first]);
+                const std::string additionalFileDir = Poco::Path(it.second).parent().toString();
+                if (FileUtil::isEmptyDirectory(additionalFileDir))
+                    FileUtil::removeFile(additionalFileDir);
+            }
         }
         catch (const Poco::Exception& exc)
         {
@@ -387,9 +387,8 @@ std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth
             && link(publicFilePath.c_str(), getRootFilePath().c_str()) == -1)
         {
             // Failed
-            LOG_INF("link(\"" << COOLWSD::anonymizeUrl(publicFilePath) << "\", \""
-                              << getRootFilePathAnonym() << "\") failed. Will copy. Linking error: "
-                              << Util::symbolicErrno(errno) << ' ' << strerror(errno));
+            LOG_INF_SYS("link(\"" << COOLWSD::anonymizeUrl(publicFilePath) << "\", \""
+                                  << getRootFilePathAnonym() << "\") failed. Will copy");
         }
     }
 
@@ -413,9 +412,17 @@ std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth
 
     // Now return the jailed path.
     if (COOLWSD::NoCapsForKit)
+    {
+        for (const auto& it : additionalFileJailedFilePaths)
+            additionalFileLocalPaths[it.first] = it.second;
         return getRootFilePath();
+    }
     else
+    {
+        for (const auto& it : additionalFileFilenames)
+            additionalFileLocalPaths[it.first] = Poco::Path(getJailPath(), it.second).toString();
         return Poco::Path(getJailPath(), filename).toString();
+    }
 
 #else // MOBILEAPP
 
@@ -426,17 +433,17 @@ std::string LocalStorage::downloadStorageFileToLocal(const Authorization& /*auth
 #endif
 }
 
-void LocalStorage::uploadLocalFileToStorageAsync(const Authorization& /*auth*/,
-                                                 LockContext& /*lockCtx*/,
-                                                 const std::string& /*saveAsPath*/,
-                                                 const std::string& /*saveAsFilename*/,
-                                                 bool /*isRename*/, const Attributes&, SocketPoll&,
-                                                 const AsyncUploadCallback& asyncUploadCallback)
+std::size_t LocalStorage::uploadLocalFileToStorageAsync(
+    const Authorization& /*auth*/, LockContext& /*lockCtx*/, const std::string& /*saveAsPath*/,
+    const std::string& /*saveAsFilename*/, bool /*isRename*/, const Attributes&,
+    const std::shared_ptr<SocketPoll>&,
+    const AsyncUploadCallback& asyncUploadCallback)
 {
     const std::string path = getUri().getPath();
 
     // Assume failure by default.
     UploadResult res = UploadResult(UploadResult::Result::FAILED, "Internal error");
+    std::size_t size = 0;
     try
     {
         LOG_TRC("Copying local file to local file storage (isCopy: " << _isCopy << ") for "
@@ -446,10 +453,12 @@ void LocalStorage::uploadLocalFileToStorageAsync(const Authorization& /*auth*/,
         if (_isCopy && Poco::File(getRootFilePathUploading()).exists())
             FileUtil::copyFileTo(getRootFilePathUploading(), path);
 
+        const FileUtil::Stat stat(path); // Don't move 'path' as it's used in the catch.
+        size = stat.size();
+
         // update its fileinfo object. This is used later to check if someone else changed the
         // document while we are/were editing it
-        setLastModifiedTime(
-            Util::getIso8601FracformatTime(FileUtil::Stat(path).modifiedTimepoint()));
+        setLastModifiedTime(Util::getIso8601FracformatTime(stat.modifiedTimepoint()));
         LOG_TRC("New FileInfo modified time in storage " << getLastModifiedTime());
         res = UploadResult(UploadResult::Result::OK);
     }
@@ -461,76 +470,16 @@ void LocalStorage::uploadLocalFileToStorageAsync(const Authorization& /*auth*/,
     }
 
     if (asyncUploadCallback)
-        asyncUploadCallback(AsyncUpload(AsyncUpload::State::Complete, res));
+    {
+        asyncUploadCallback(AsyncUpload(AsyncUpload::State::Complete, std::move(res)));
+    }
+
+    return size;
 }
-
-#if !MOBILEAPP
-
-Poco::Net::HTTPClientSession* StorageBase::getHTTPClientSession(const Poco::URI& uri)
-{
-    bool useSSL = false;
-    if (SSLAsScheme)
-    {
-        // the WOPI URI itself should control whether we use SSL or not
-        // for whether we verify vs. certificates, cf. above
-        useSSL = uri.getScheme() != "http";
-    }
-    else
-    {
-        // We decoupled the Wopi communication from client communication because
-        // the Wopi communication must have an independent policy.
-        // So, we will use here only Storage settings.
-        useSSL = SSLEnabled || COOLWSD::isSSLTermination();
-    }
-    // We decoupled the Wopi communication from client communication because
-    // the Wopi communication must have an independent policy.
-    // So, we will use here only Storage settings.
-    Poco::Net::HTTPClientSession* session = useSSL
-        ? new Poco::Net::HTTPSClientSession(uri.getHost(), uri.getPort(),
-                                            Poco::Net::SSLManager::instance().defaultClientContext())
-        : new Poco::Net::HTTPClientSession(uri.getHost(), uri.getPort());
-
-    // Set the timeout to the configured value.
-    static int timeoutSec = COOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
-    session->setTimeout(Poco::Timespan(timeoutSec, 0));
-
-    return session;
-}
-
-std::shared_ptr<http::Session> StorageBase::getHttpSession(const Poco::URI& uri)
-{
-    bool useSSL = false;
-    if (SSLAsScheme)
-    {
-        // the WOPI URI itself should control whether we use SSL or not
-        // for whether we verify vs. certificates, cf. above
-        useSSL = uri.getScheme() != "http";
-    }
-    else
-    {
-        // We decoupled the Wopi communication from client communication because
-        // the Wopi communication must have an independent policy.
-        // So, we will use here only Storage settings.
-        useSSL = SSLEnabled || COOLWSD::isSSLTermination();
-    }
-
-    const auto protocol
-        = useSSL ? http::Session::Protocol::HttpSsl : http::Session::Protocol::HttpUnencrypted;
-
-    // Create the session.
-    auto httpSession = http::Session::create(uri.getHost(), protocol, uri.getPort());
-
-    static int timeoutSec = COOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
-    httpSession->setTimeout(std::chrono::seconds(timeoutSec));
-
-    return httpSession;
-}
-
-#endif // !MOBILEAPP
 
 void LockContext::initSupportsLocks()
 {
-    if (Util::isMobileApp())
+    if constexpr (Util::isMobileApp())
         _supportsLocks = false;
     else
     {
@@ -543,19 +492,22 @@ void LockContext::initSupportsLocks()
     }
 }
 
-bool LockContext::needsRefresh(const std::chrono::steady_clock::time_point &now) const
+bool LockContext::needsRefresh(const std::chrono::steady_clock::time_point now) const
 {
-    return _supportsLocks && _isLocked && _refreshSeconds > std::chrono::seconds::zero() &&
+    return _supportsLocks && isLocked() && _refreshSeconds > std::chrono::seconds::zero() &&
            (now - _lastLockTime) >= _refreshSeconds;
 }
 
 void LockContext::dumpState(std::ostream& os) const
 {
     if (!_supportsLocks)
+    {
+        os << "\n  LockContext: Unsupported";
         return;
+    }
 
     os << "\n  LockContext:";
-    os << "\n    locked: " << _isLocked;
+    os << "\n    locked: " << isLocked();
     os << "\n    token: " << _lockToken;
     os << "\n    last locked: " << Util::getSteadyClockAsString(_lastLockTime);
 }

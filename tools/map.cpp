@@ -35,6 +35,7 @@
 #include <locale.h>
 #include <math.h>
 
+#include <common/HexUtil.hpp>
 #include <Util.hpp>
 
 #ifdef __FreeBSD__
@@ -62,29 +63,31 @@ int  DumpWidth = 32;
 #define PATH_SIZE 1000 // No harm in having it much larger than strictly necessary. Avoids compiler warning.
 #define BUFFER_SIZE 9600
 
-static int read_buffer(char *buffer, unsigned size,
-                       const char *file, char sep)
+static size_t read_buffer(char *buffer, size_t size,
+                          const char *file, char sep)
 {
-    int file_desc;
-    unsigned total_bytes = 0;
-
-    file_desc = open(file, O_RDONLY);
+    int file_desc = open(file, O_RDONLY);
     if (file_desc == -1)
         return 0;
 
-    for (;;)
-    {
-        ssize_t number_bytes = read(file_desc,
-                                    buffer + total_bytes,
-                                    size - total_bytes);
-        if (number_bytes == -1)
-        {
-            if (errno==EINTR)
-                continue;
-            break;
-        }
+    size_t total_bytes = 0;
+    size_t count = size;
+    char *ptr = buffer;
 
-        total_bytes += number_bytes;
+    while (count)
+    {
+        ssize_t number_bytes;
+
+        do {
+            number_bytes = read(file_desc, ptr, count);
+        } while (number_bytes < 0 && errno == EINTR);
+
+        if (number_bytes < 0)
+            break;
+
+        ptr += number_bytes;
+        total_bytes = ptr - buffer;
+
         if (total_bytes == size)
         {
             --total_bytes;
@@ -93,13 +96,15 @@ static int read_buffer(char *buffer, unsigned size,
 
         if (number_bytes==0)
             break;  // EOF
+
+        count -= number_bytes;
     }
 
     close(file_desc);
 
     if (total_bytes)
     {
-        int i=total_bytes;
+        size_t i = total_bytes;
 
         while (i--)
             if (buffer[i]=='\n' || buffer[i]=='\0')
@@ -320,7 +325,7 @@ public:
             std::vector<unsigned char> data;
             data.resize (map.size());
             if (lseek(mem_fd, map.getStart(), SEEK_SET) < 0 ||
-                read(mem_fd, &data[0], map.size()) != (int)map.size())
+                read(mem_fd, data.data(), map.size()) != (int)map.size())
                 error(EXIT_FAILURE, errno, "Failed to seek in /proc/%d/mem to %lld",
                       _proc_id, map.getStart());
 
@@ -343,8 +348,8 @@ static void dumpDiff(const AddrSpace &space,
 
     for (unsigned int i = 0; i < pageData.size(); i += width)
     {
-        std::string page = Util::stringifyHexLine(pageData, i, width);
-        std::string parent = Util::stringifyHexLine(parentData, i, width);
+        std::string page = HexUtil::stringifyHexLine(pageData, i, width);
+        std::string parent = HexUtil::stringifyHexLine(parentData, i, width);
 
         // page
         printf("0x%.4x  %s\n", i, page.c_str());
@@ -417,27 +422,27 @@ static void dumpPages(unsigned proc_id, unsigned parent_id, const char *type, co
 
         if (lseek(mem_fd, page, SEEK_SET) < 0)
             error(EXIT_FAILURE, errno, "Failed to seek in /proc/<pid>/mem to %lld", page);
-        if (read(mem_fd, &pageData[0], 0x1000) != 0x1000)
+        if (read(mem_fd, pageData.data(), 0x1000) != 0x1000)
             error(EXIT_FAILURE, errno, "Failed to read page %lld from /proc/<pid>/mem", page);
 
         if (lseek(parent_fd, page, SEEK_SET) < 0)
             parentData.resize(0);
-        else if (read(parent_fd, &parentData[0], 0x1000) != 0x1000)
+        else if (read(parent_fd, parentData.data(), 0x1000) != 0x1000)
             parentData.resize(0); // missing equivalent page.
 
         int touched = 0;
         const char *style;
         if (parentData.size() > 0)
         {
-            bool bZeroParent = true;
+            bool zeroParent = true;
             for (size_t i = 0; i < pageData.size(); ++i)
             {
                 if (pageData[i] != parentData[i])
                     touched++;
                 if (parentData[i] != 0)
-                    bZeroParent = false;
+                    zeroParent = false;
             }
-            if (bZeroParent)
+            if (zeroParent)
             {
                 style = "zero parent page";
                 touched = 0; // ignore tedious diff.
@@ -467,7 +472,7 @@ static void dumpPages(unsigned proc_id, unsigned parent_id, const char *type, co
             if (touched == 0) // not present in parent
             {
                 std::stringstream pageStr;
-                Util::dumpHex(pageStr, pageData, "", "", false, DumpWidth);
+                HexUtil::dumpHex(pageStr, pageData, "", "", false, DumpWidth);
                 printf("%s", pageStr.str().c_str());
             }
             else
@@ -499,14 +504,13 @@ static void dumpPages(unsigned proc_id, unsigned parent_id, const char *type, co
 
 static std::vector<char> compressBitmap(const std::vector<char> &bitmap)
 {
-    size_t i;
     std::vector<char> output;
-    for (i = 0; i < bitmap.size(); ++i)
+    for (size_t i = 0, count = bitmap.size(); i < count; ++i)
     {
         char cur;
         int cnt = 0;
         size_t j = i;
-        for (cur = bitmap[j]; bitmap[j] == cur; ++j)
+        for (cur = bitmap[j]; j < count && bitmap[j] == cur; ++j)
             ++cnt;
         output.push_back(cur);
         if (cnt > 3)
@@ -567,7 +571,7 @@ static void dump_unshared(unsigned proc_id, unsigned parent_id,
     printf ("\tunshared %5lld (%lldkB)\n", numOwn, numOwn * 4);
 
     std::vector<char> compressed = compressBitmap(bitmap);
-    printf ("\tRLE sharing bitmap:\n%s\n", &compressed[0]);
+    printf ("\tRLE sharing bitmap:\n%s\n", compressed.data());
 
     dumpPages(proc_id, parent_id, type, vunshared, space);
 

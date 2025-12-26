@@ -1,11 +1,20 @@
-.presentation-doctype #map, .drawing-doctype #map{
-	border-collapse: separate; /*To use box-shadow in Internet Explorer 9 or later, you must set border-collapse */
-	box-shadow: rgb(223, 223, 223) 0px 0px inset, var(--color-border) 1px 0px 0px inset;
-}
-
 #slide-sorter {
-	background: transparent !important;
+	background: transparent;
 }
 #presentation-controls-wrapper {
-	background: var(--color-main-background) !important;
+	background: var(--color-background-lighter);
+}
+.slideshow-vertical-center {
+	margin: 0;
+	position: absolute;
+	width: 100%;
+	top: 50%;
+	transform: translateY(-50%);
+}
+.slideshow-horizontal-center {
+	margin: 0;
+	position: absolute;
+	height: 100%;
+	left: 50%;
+	transform: translateX(-50%);
 }

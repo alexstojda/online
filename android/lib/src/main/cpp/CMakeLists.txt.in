@@ -10,35 +10,49 @@ add_library(androidapp SHARED
             ../../../../../common/CommandControl.cpp
             ../../../../../common/Crypto-stub.cpp
             ../../../../../common/FileUtil.cpp
+            ../../../../../common/FileUtil-unix.cpp
             ../../../../../common/Log.cpp
             ../../../../../common/TraceEvent.cpp
             ../../../../../common/Protocol.cpp
+            ../../../../../common/RegexUtil.cpp
             ../../../../../common/Simd.cpp
             ../../../../../common/StringVector.cpp
             ../../../../../common/Session.cpp
-            ../../../../../common/SigUtil.cpp
+            ../../../../../common/SigUtil-mobile.cpp
             ../../../../../common/SpookyV2.cpp
             ../../../../../common/Unit.cpp
+            ../../../../../common/Unit-mobile.cpp
             ../../../../../common/Util.cpp
             ../../../../../common/Util-mobile.cpp
+            ../../../../../common/Util-unix.cpp
+            ../../../../../common/Uri.cpp
             ../../../../../kit/ChildSession.cpp
             ../../../../../kit/DeltaSimd.c
             ../../../../../kit/Kit.cpp
             ../../../../../kit/KitQueue.cpp
+            ../../../../../kit/LogUI.cpp
             ../../../../../kit/KitWebSocket.cpp
             ../../../../../net/FakeSocket.cpp
+            ../../../../../net/HttpRequest.cpp
             ../../../../../net/Socket.cpp
             ../../../../../wsd/ClientSession.cpp
             ../../../../../wsd/DocumentBroker.cpp
             ../../../../../wsd/COOLWSD.cpp
+            ../../../../../wsd/dumpWsdState.cpp
             ../../../../../wsd/ClientRequestDispatcher.cpp
+            ../../../../../wsd/KitWSDGlobals.cpp
             ../../../../../wsd/RequestDetails.cpp
             ../../../../../wsd/RequestVettingStation.cpp
+            ../../../../../wsd/SlideCache.cpp
             ../../../../../wsd/Storage.cpp
             ../../../../../wsd/TileCache.cpp
             ../../../../../wsd/coolwsd-fork.cpp)
 
-target_compile_definitions(androidapp PRIVATE COOLWSD_CONFIGDIR="/assets/etc/coolwsd")
+target_compile_definitions(androidapp PRIVATE
+                           COOLWSD_CONFIGDIR="/assets/etc/coolwsd"
+                           COOLWSD_LOGLEVEL="@COOLWSD_LOGLEVEL@"
+                           NUM_PRESPAWN_CHILDREN="@NUM_PRESPAWN_CHILDREN@"
+)
 
 # According to the ABI, we need to use different source trees
 if(${ANDROID_ABI} STREQUAL "armeabi-v7a")

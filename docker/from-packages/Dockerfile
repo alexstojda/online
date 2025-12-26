@@ -11,9 +11,9 @@ ARG author
 LABEL author=${author:-"Collabora Productivity Ltd."}
 LABEL description="Collabora Online is a powerful collaborative Office suite that supports all major document, spreadsheet and presentation file formats, which you can integrate into your own infrastructure. Collabora Online provides data security and sovereignty, and is ideally suited to the demands of a modern distributed working environment. Delivering a familiar look and feel, Collabora Online represents a real alternative to other big-brands solutions, giving you control and flexibility."
 ARG releasenotes
-LABEL release.notes=${releasenotes:-"https://www.collaboraonline.com/code-24-04-release-notes/"}
+LABEL release.notes=${releasenotes:-"https://www.collaboraonline.com/code-25-04-release-notes/"}
 ARG version
-LABEL version=${version:-"24.04.1.3"}
+LABEL version=${version:-"25.04.1.1"}
 ARG coretag
 LABEL commit.history.core="https://git.libreoffice.org/core/+log/${coretag}"
 ARG onlinetag
@@ -41,32 +41,32 @@ RUN --mount=type=secret,id=secret_key \
 # Update repos before installing packages
     apt-get update && \
 # Install dependencies of installer of Collabora Online
-    apt-get -y install cpio tzdata libcap2-bin apt-transport-https gnupg2 ca-certificates curl && \
+    apt-get -y install cpio tzdata libcap2-bin apt-transport-https gnupg2 ca-certificates curl libnss-wrapper && \
 # Setup Collabora repo
-    repourl="https://collaboraonline.com/${repo:-repos}/CollaboraOnline/"; \
+    repourl="https://collaboraoffice.com/${repo:-repos}/CollaboraOnline/"; \
     secret_key=$(cat /run/secrets/secret_key); \
     if [ "$type" = "cool" ] && [ -n ${secret_key+set} ]; then \
         echo "Based on the provided build arguments Collabora Online from customer repo will be used."; \
-        repourl="${repourl}24.04/customer-deb-${secret_key}/"; \
+        repourl="${repourl}25.04/customer-deb-${secret_key}/"; \
     elif [ "$type" = "key" ]; then \
         echo "Based on the provided build arguments license key enabled Collabora Online will be used."; \
-        repourl="${repourl}24.04-key/"; \
+        repourl="${repourl}25.04-key/"; \
     else \
         echo "Based on the provided build arguments Collabora Online Development Edition will be used."; \
-        repourl="${repourl}24.04-CODE/CODE-deb/"; \
+        repourl="${repourl}25.04-CODE/CODE-deb/"; \
     fi && \
     echo "deb [signed-by=/usr/share/keyrings/collaboraonline-release-keyring.gpg] ${repourl} /" > /etc/apt/sources.list.d/collabora.list && \
 # Download Collabora package signing key
     if [ "$repo" = "repos-snapshot" ]; then \
-        curl -L https://www.collaboraonline.com/downloads/gpg/collaboraonline-snapshot-keyring.gpg --output /usr/share/keyrings/collaboraonline-snapshot-keyring.gpg; \
+        curl https://www.collaboraoffice.com/downloads/gpg/collaboraonline-snapshot-keyring.gpg --output /usr/share/keyrings/collaboraonline-snapshot-keyring.gpg; \
         sed -i "s/collaboraonline-release-keyring/collaboraonline-snapshot-keyring/" /etc/apt/sources.list.d/collabora.list; \
     else \
-        curl -L https://www.collaboraonline.com/downloads/gpg/collaboraonline-release-keyring.gpg --output /usr/share/keyrings/collaboraonline-release-keyring.gpg; \
+        curl https://www.collaboraoffice.com/downloads/gpg/collaboraonline-release-keyring.gpg --output /usr/share/keyrings/collaboraonline-release-keyring.gpg; \
     fi && \
 # Update repos again
     apt-get update && \
 # Install Collabora Online (Collabora Office is a dependency)
-    apt-get -y install coolwsd \
+    apt-get -y install coolwsd coolwsd-deprecated \
 # Install all dictionaries
                        collaboraoffice-dict-* \
 # Install all language packs
@@ -118,6 +118,12 @@ RUN --mount=type=secret,id=secret_key \
             apt-get -y install code-brand; \
         fi; \
     fi && \
+# Change cool uid/gid to 1001/1001
+    find /opt/cool -user cool -exec chown -h 1001:1001 {} \; && \
+    usermod -u 1001 cool && groupmod -g 1001 cool && \
+    chown cool:cool /etc/coolwsd/coolwsd.xml && \
+# Change permission so that other users and groups can read the config file
+    chmod 644 /etc/coolwsd/coolwsd.xml && \
 # Fix ownership of config directory that will be modified on start of the container by cool user
     chown cool:cool /etc/coolwsd && \
 # Remove perl-base, it's not needed and triggered some license scanner because of Paul Hsieh derivative license
@@ -130,14 +136,14 @@ RUN --mount=type=secret,id=secret_key \
 # FIXME
 # Use the old starter script until we find out how to replace it.
 COPY /scripts/start-collabora-online.sh /
+RUN chown cool:cool /start-collabora-online.sh && chmod u+x /start-collabora-online.sh
 
 # coolwsd listens on port 9980
 EXPOSE 9980
 
 # Switch to cool user (use numeric user id to be compatible with Kubernetes Pod Security Policies)
-USER 100
+USER 1001
 
 # FIXME
 # Use the old starter script until we find out how to replace it.
-CMD ["/start-collabora-online.sh"]
-
+ENTRYPOINT ["/start-collabora-online.sh"]

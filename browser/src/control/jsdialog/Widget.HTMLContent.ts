@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -14,7 +15,6 @@
  */
 
 declare var JSDialog: any;
-declare var L: any;
 
 interface HtmlContentJson {
 	id: string;
@@ -33,137 +33,260 @@ function sanitizeString(text: string): string {
 	return sanitizer.innerHTML;
 }
 
-function getPermissionModeHtml(isReadOnlyMode: boolean, canUserWrite: boolean) {
-	var permissionModeDiv = '<div id="PermissionMode" class="jsdialog ui-badge';
+function getPermissionModeElements(
+	isReadOnlyMode: boolean,
+	canUserWrite: boolean,
+	map: any,
+) {
+	const permissionModeDiv = document.createElement('div');
+	permissionModeDiv.className = 'jsdialog ui-badge';
+
 	if (isReadOnlyMode && !canUserWrite) {
-		permissionModeDiv +=
-			' status-readonly-mode" title="' +
-			sanitizeString(_('Permission Mode')) +
-			'"> ' +
-			sanitizeString(_('Read-only')) +
-			' </div>';
+		permissionModeDiv.classList.add('status-readonly-mode');
+		permissionModeDiv.textContent = _('Read-only');
+		permissionModeDiv.setAttribute('data-cooltip', _('Permission Mode'));
+		window.L.control.attachTooltipEventListener(permissionModeDiv, map);
 	} else if (isReadOnlyMode && canUserWrite) {
-		permissionModeDiv +=
-			' status-readonly-transient-mode" style="display: none;"></div>';
+		permissionModeDiv.classList.add('status-readonly-transient-mode');
+		permissionModeDiv.style.display = 'none';
 	} else {
-		permissionModeDiv +=
-			' status-edit-mode" title="' +
-			sanitizeString(_('Permission Mode')) +
-			'"> ' +
-			sanitizeString(_('Edit')) +
-			' </div>';
+		permissionModeDiv.classList.add('status-edit-mode');
+		permissionModeDiv.textContent = _('Edit mode');
+		permissionModeDiv.setAttribute('data-cooltip', _('Permission Mode'));
+		window.L.control.attachTooltipEventListener(permissionModeDiv, map);
 	}
+
 	return permissionModeDiv;
 }
 
-function getStatusbarItemHtml(id: string, title: string, text: string) {
-	return (
-		'<div id="' +
-		sanitizeString(id) +
-		'" class="jsdialog ui-badge" title="' +
-		sanitizeString(title) +
-		'">' +
-		sanitizeString(text) +
-		'</div>'
+function getStatusbarItemElement(
+	id: string,
+	title: string,
+	text: string,
+	builder: any,
+	renderAsButton = false,
+) {
+	const element = document.createElement(renderAsButton ? 'button' : 'div');
+	element.id = id;
+	element.className =
+		'jsdialog ui-badge' + (renderAsButton ? ' unobutton' : '');
+	element.textContent = text;
+	element.setAttribute('data-cooltip', title);
+	window.L.control.attachTooltipEventListener(element, builder.map);
+
+	return element;
+}
+
+function getPageNumberElements(text: string, builder: any) {
+	const button = getStatusbarItemElement(
+		'StatePageNumber',
+		_('Number of Pages. Click to open the Go to Page dialog box.'),
+		text,
+		builder,
+		true,
+	);
+	button.onclick = () => app.map.sendUnoCommand('.uno:GotoPage');
+	return button;
+}
+
+function getWordCountElements(text: string, builder: any) {
+	return getStatusbarItemElement(
+		'StateWordCount',
+		_('Word Counter'),
+		text,
+		builder,
 	);
 }
 
-function getPageNumberHtml(text: string) {
-	return getStatusbarItemHtml('StatePageNumber', _('Number of Pages'), text);
+function getStatusDocPosElements(text: string, builder: any) {
+	const button = getStatusbarItemElement(
+		'StatusDocPos',
+		_('Number of Sheets'),
+		text,
+		builder,
+		true,
+	);
+	button.onclick = () => app.map.sendUnoCommand('.uno:JumpToTable');
+	return button;
 }
 
-function getWordCountHtml(text: string) {
-	return getStatusbarItemHtml('StateWordCount', _('Word Counter'), text);
+function getInsertModeElements(text: string, builder: any) {
+	return getStatusbarItemElement(
+		'InsertMode',
+		_('Entering text mode'),
+		text,
+		builder,
+	);
 }
 
-function getStatusDocPosHtml(text: string) {
-	return getStatusbarItemHtml('StatusDocPos', _('Number of Sheets'), text);
+function getSelectionModeElements(text: string, builder: any) {
+	return getStatusbarItemElement(
+		'StatusSelectionMode',
+		_('Selection Mode'),
+		text,
+		builder,
+	);
 }
 
-function getInsertModeHtml(text: string) {
-	return getStatusbarItemHtml('InsertMode', _('Entering text mode'), text);
-}
-
-function getSelectionModeHtml(text: string) {
-	return getStatusbarItemHtml('StatusSelectionMode', _('Selection Mode'), text);
-}
-
-function getRowColSelCountHtml(text: string) {
-	return getStatusbarItemHtml(
+function getRowColSelCountElements(text: string, builder: any) {
+	return getStatusbarItemElement(
 		'RowColSelCount',
 		_('Selected range of cells'),
 		text,
+		builder,
 	);
 }
 
-function getStateTableCellHtml(text: string) {
-	return getStatusbarItemHtml('StateTableCell', _('Choice of functions'), text);
+function getStateTableCellElements(text: string, builder: any) {
+	return getStatusbarItemElement(
+		'StateTableCell',
+		_('Choice of functions'),
+		text,
+		builder,
+	);
 }
 
-function getSlideStatusHtml(text: string) {
-	return getStatusbarItemHtml('SlideStatus', _('Number of Slides'), text);
+function getSlideStatusElements(text: string, builder: any) {
+	const button = getStatusbarItemElement(
+		'SlideStatus',
+		_('Number of Slides'),
+		text,
+		builder,
+		true,
+	);
+	button.onclick = () => app.map.sendUnoCommand('.uno:GotoPage');
+	return button;
 }
 
-function getPageStatusHtml(text: string) {
-	return getStatusbarItemHtml('PageStatus', _('Number of Pages'), text);
+function getPageStatusElements(text: string, builder: any) {
+	const button = getStatusbarItemElement(
+		'PageStatus',
+		_('Number of Pages'),
+		text,
+		builder,
+		true,
+	);
+	button.onclick = () => app.map.sendUnoCommand('.uno:GotoPage');
+	return button;
 }
 
-var getHtmlFromId = function (
+function getDocumentStatusElements(text: string, builder: any) {
+	const docstat = getStatusbarItemElement(
+		'DocumentStatus',
+		_('Your changes have been saved'),
+		'',
+		builder,
+	);
+
+	if (text === 'SAVING') docstat.textContent = _('Saving...');
+	else if (text === 'SAVED') {
+		const lastSaved = document.createElement('span');
+		lastSaved.id = 'last-saved';
+		lastSaved.textContent = '';
+		lastSaved.setAttribute(
+			'data-cooltip',
+			_('Your changes have been saved') + '.',
+		);
+		window.L.control.attachTooltipEventListener(lastSaved, builder.map);
+		docstat.appendChild(lastSaved);
+	}
+
+	return docstat;
+}
+
+function getShowCommentsStatusElements(text: string, builder: any) {
+	return getStatusbarItemElement(
+		'ShowComments',
+		_('Show Comments'),
+		text,
+		builder,
+	);
+}
+
+var getElementsFromId = function (
 	id: string,
 	closeCallback: EventListenerOrEventListenerObject,
 	data: HtmlContentJson,
+	builder: any,
 ) {
 	if (id === 'iconset')
-		return (window as any).getConditionalFormatMenuHtml('iconsetoverlay', true);
+		return (window as any).getConditionalFormatMenuElements(
+			'iconsetoverlay',
+			true,
+		);
 	else if (id === 'scaleset')
-		return (window as any).getConditionalColorScaleMenuHtml(
+		return (window as any).getConditionalColorScaleMenuElements(
 			'iconsetoverlay',
 			true,
 		);
 	else if (id === 'databarset')
-		return (window as any).getConditionalDataBarMenuHtml(
+		return (window as any).getConditionalDataBarMenuElements(
 			'iconsetoverlay',
 			true,
 		);
 	else if (id === 'inserttablepopup')
-		return (window as any).getInsertTablePopupHtml(closeCallback);
-	else if (id === 'borderstylepopup')
-		return (window as any).getBorderStyleMenuHtml(closeCallback);
+		return (window as any).getInsertTablePopupElements(closeCallback);
 	else if (id === 'insertshapespopup')
-		return (window as any).getShapesPopupHtml(closeCallback);
+		return (window as any).getShapesPopupElements(closeCallback);
 	else if (id === 'insertconnectorspopup')
-		return (window as any).getConnectorsPopupHtml(closeCallback);
-	else if (id === 'userslistpopup') return L.control.createUserListWidget();
+		return (window as any).getConnectorsPopupElements(closeCallback);
+	else if (id === 'userslistpopup')
+		return window.L.control.createUserListWidget();
 	else if (id === 'permissionmode')
-		return getPermissionModeHtml(data.isReadOnlyMode, data.canUserWrite);
-	else if (id === 'statepagenumber') return getPageNumberHtml(data.text);
-	else if (id === 'statewordcount') return getWordCountHtml(data.text);
-	else if (id === 'statusdocpos') return getStatusDocPosHtml(data.text);
-	else if (id === 'insertmode') return getInsertModeHtml(data.text);
-	else if (id === 'statusselectionmode') return getSelectionModeHtml(data.text);
-	else if (id === 'rowcolselcount') return getRowColSelCountHtml(data.text);
-	else if (id === 'statetablecell') return getStateTableCellHtml(data.text);
-	else if (id === 'slidestatus') return getSlideStatusHtml(data.text);
-	else if (id === 'pagestatus') return getPageStatusHtml(data.text);
+		return getPermissionModeElements(
+			data.isReadOnlyMode,
+			data.canUserWrite,
+			builder.map,
+		);
+	else if (id === 'statepagenumber')
+		return getPageNumberElements(data.text, builder);
+	else if (id === 'statewordcount')
+		return getWordCountElements(data.text, builder);
+	else if (id === 'showcomments')
+		return getShowCommentsStatusElements(data.text, builder);
+	else if (id === 'statusdocpos')
+		return getStatusDocPosElements(data.text, builder);
+	else if (id === 'insertmode')
+		return getInsertModeElements(data.text, builder);
+	else if (id === 'statusselectionmode')
+		return getSelectionModeElements(data.text, builder);
+	else if (id === 'rowcolselcount')
+		return getRowColSelCountElements(data.text, builder);
+	else if (id === 'statetablecell')
+		return getStateTableCellElements(data.text, builder);
+	else if (id === 'slidestatus')
+		return getSlideStatusElements(data.text, builder);
+	else if (id === 'pagestatus')
+		return getPageStatusElements(data.text, builder);
+	else if (id === 'documentstatus')
+		return getDocumentStatusElements(data.text, builder);
 };
 
 function htmlContent(
 	parentContainer: Element,
 	data: HtmlContentJson,
-	builder: any,
+	builder: JSBuilder,
 ) {
-	parentContainer.innerHTML = getHtmlFromId(
+	parentContainer.replaceChildren();
+
+	const elements = getElementsFromId(
 		data.htmlId,
 		data.closeCallback,
 		data,
+		builder,
 	);
+
+	parentContainer.appendChild(elements);
 
 	// TODO: remove this and create real widget for userslistpopup
 	if (data.htmlId === 'userslistpopup')
 		setTimeout(() => builder.map.userList.renderAll(), 0);
 
 	if (data.enabled === false && parentContainer.firstChild)
-		(parentContainer.firstChild as HTMLElement).setAttribute('disabled', '');
+		(parentContainer.firstChild as HTMLElement).setAttribute(
+			'disabled',
+			'true',
+		);
 }
 
 JSDialog.htmlContent = htmlContent;

@@ -13,8 +13,8 @@
 
 #include "AdminModel.hpp"
 
-#include "net/WebSocketHandler.hpp"
-#include "COOLWSD.hpp"
+#include <net/WebSocketHandler.hpp>
+#include <common/ConfigUtil.hpp>
 
 class Admin;
 
@@ -28,12 +28,14 @@ public:
     /// Connection from remote admin socket
     AdminSocketHandler(Admin* adminManager,
                        const std::weak_ptr<StreamSocket>& socket,
-                       const Poco::Net::HTTPRequest& request);
+                       const Poco::Net::HTTPRequest& request,
+                       bool allowedOrigin);
 
     /// Handle the initial Admin WS upgrade request.
     /// @returns true if we should give this socket to the Admin poll.
     static bool handleInitialRequest(const std::weak_ptr<StreamSocket> &socket,
-                                     const Poco::Net::HTTPRequest& request);
+                                     const Poco::Net::HTTPRequest& request,
+                                     bool allowedOrigin);
 
     static void subscribeAsync(const std::shared_ptr<AdminSocketHandler>& handler);
 
@@ -45,10 +47,13 @@ private:
     void sendTextFrame(const std::string& message);
 
 private:
+    std::string _clientIPAdress;
     Admin* _admin;
     int _sessionId;
     bool _isAuthenticated;
-    std::string _clientIPAdress;
+
+    /// The next unique session-ID.
+    static std::atomic<uint64_t> NextSessionId;
 };
 
 class MonitorSocketHandler : public AdminSocketHandler
@@ -64,25 +69,25 @@ public:
     void onDisconnect() override;
 
 private:
-    bool _connecting;
     std::string _uri;
+    bool _connecting;
 };
 
 class MemoryStatsTask;
 
 /// An admin command processor.
-class Admin : public SocketPoll
+class Admin final : public SocketPoll
 {
     Admin(const Admin &) = delete;
     Admin& operator = (const Admin &) = delete;
     Admin();
 public:
-    virtual ~Admin();
+    ~Admin() override;
 
     static Admin& instance()
     {
-        static Admin admin;
-        return admin;
+        static std::shared_ptr<Admin> admin(new Admin);
+        return *admin;
     }
 
     void start();
@@ -92,16 +97,17 @@ public:
 
     void updateMonitors(std::vector<std::pair<std::string, int>>& oldMonitors);
 
-    std::vector<std::pair<std::string, int>> getMonitorList();
+    std::vector<std::pair<std::string, int>> getMonitorList() const;
 
     /// Custom poll thread function
     void pollingThread() override;
 
-    size_t getTotalMemoryUsage();
+    size_t getTotalMemoryUsage() const;
     /// Takes into account the 'memproportion' property in config file to find the amount of memory
     /// available to us.
-    size_t getTotalAvailableMemory() { return _totalAvailMemKb; }
-    size_t getTotalCpuUsage();
+    size_t getTotalAvailableMemory() const { return _totalAvailMemKb; }
+    size_t getTotalCpuUsage() const;
+    std::time_t getLastActivityTime() const;
 
     void modificationAlert(const std::string& dockey, pid_t pid, bool value);
 
@@ -112,8 +118,9 @@ public:
 
     /// Calls with same pid will increment view count, if pid already exists
     void addDoc(const std::string& docKey, pid_t pid, const std::string& filename,
-                const std::string& sessionId, const std::string& userName, const std::string& userId,
-                const int smapsFD, const std::string& wopiSrc, bool readOnly);
+                const std::string& sessionId, const std::string& userName,
+                const std::string& userId, const std::weak_ptr<FILE>& smapsFD,
+                const std::string& wopiSrc, bool readOnly);
 
     /// Decrement view count till becomes zero after which doc is removed
     void rmDoc(const std::string& docKey, const std::string& sessionId);
@@ -126,19 +133,19 @@ public:
     /// Callers must ensure that modelMutex is acquired
     AdminModel& getModel();
 
-    unsigned getMemStatsInterval();
+    unsigned getMemStatsInterval() const;
 
-    unsigned getCpuStatsInterval();
+    unsigned getCpuStatsInterval() const;
 
-    unsigned getNetStatsInterval();
+    unsigned getNetStatsInterval() const;
 
     /// Returns the log levels of wsd and forkit & kits.
-    std::string getChannelLogLevels();
+    std::string getChannelLogLevels() const;
 
     /// Sets the specified channel's log level (wsd or forkit and kits).
     void setChannelLogLevel(const std::string& channelName, std::string level);
 
-    std::string getLogLines();
+    std::string getLogLines() const;
 
     void rescheduleMemTimer(unsigned interval);
 
@@ -163,22 +170,27 @@ public:
     void scheduleMonitorConnect(const std::string &uri, std::chrono::steady_clock::time_point when);
 
     void sendMetrics(const std::shared_ptr<StreamSocket>& socket,
-                     const std::shared_ptr<http::Response>& response);
+                     const std::shared_ptr<http::Response>& response) const;
 
     void setViewLoadDuration(const std::string& docKey, const std::string& sessionId, std::chrono::milliseconds viewLoadDuration);
     void setDocWopiDownloadDuration(const std::string& docKey, std::chrono::milliseconds wopiDownloadDuration);
-    void setDocWopiUploadDuration(const std::string& docKey, const std::chrono::milliseconds uploadDuration);
-    void addSegFaultCount(unsigned segFaultCount);
+    void setDocWopiUploadDuration(const std::string& docKey,
+                                  std::chrono::milliseconds uploadDuration);
+    void addErrorExitCounters(unsigned segFaultCount, unsigned killedCount,
+                              unsigned oomKilledCount);
     void addLostKitsTerminated(unsigned lostKitsTerminated);
 
-    void getMetrics(std::ostringstream &metrics);
+    void getMetrics(std::ostream& metrics) const;
+
+    /// Will dump the metrics in the log and stderr from the Admin SocketPoll.
+    static void dumpMetrics() { instance()._dumpMetrics = true; }
 
     // delete entry from _monitorSocket map
     void deleteMonitorSocket(const std::string &uriWithoutParam);
 
     bool logAdminAction()
     {
-        return COOLWSD::getConfigValue<bool>("admin_console.logging.admin_action", true);
+        return ConfigUtil::getConfigValue<bool>("admin_console.logging.admin_action", true);
     }
 
     void routeTokenSanityCheck();
@@ -210,18 +222,22 @@ private:
     void connectToMonitorSync(const std::string &uri);
 
 private:
+    /// The model is accessed only during startup & in
+    /// the Admin Poll thread.
+    AdminModel _model;
+    DocProcSettings _defDocProcSettings;
+    // map to make sure only connection with unique monitor uri exists
+    std::map<std::string, std::shared_ptr<MonitorSocketHandler>> _monitorSockets;
+
     /// The total installed system memory (RAM).
     /// Technically, can be augmented at runtime, but we don't update it.
     const size_t _totalSysMemKb;
     /// The total available memory to our process, per memproportion.
     size_t _totalAvailMemKb;
 
-    /// The model is accessed only during startup & in
-    /// the Admin Poll thread.
-    AdminModel _model;
-    int _forKitPid;
     size_t _lastTotalMemory;
-    size_t _lastJiffies;
+    mutable size_t _lastJiffies;
+    size_t _cleanupIntervalMs;
     uint64_t _lastSentCount;
     uint64_t _lastRecvCount;
     std::string _forkitLogLevel;
@@ -240,20 +256,20 @@ private:
     };
     std::vector<MonitorConnectRecord> _pendingConnects;
 
+    int _forKitPid;
+
     int _cpuStatsTaskIntervalMs;
     int _memStatsTaskIntervalMs;
     int _netStatsTaskIntervalMs;
-    size_t _cleanupIntervalMs;
-    DocProcSettings _defDocProcSettings;
 
-    // Don't update any more frequently than this since it's excessive.
-    static const int MinStatsIntervalMs;
-    static const int DefStatsIntervalMs;
-
-    // map to make sure only connection with unique monitor uri exists
-    std::map<std::string, std::shared_ptr<MonitorSocketHandler>> _monitorSockets;
+    /// When set, the metrics will be dumped into the log and stderr.
+    std::atomic_bool _dumpMetrics;
 
     std::atomic<bool> _closeMonitor = false;
+
+    // Don't update any more frequently than this since it's excessive.
+    static constexpr int MinStatsIntervalMs = 50;
+    static constexpr int DefStatsIntervalMs = 1000;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

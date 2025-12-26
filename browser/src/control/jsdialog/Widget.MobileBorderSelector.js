@@ -19,7 +19,7 @@
  * }
  */
 
-/* global _ JSDialog $ */
+/* global _ JSDialog $ app */
 
 function _getCurrentBorderNumber(builder) {
 	var outer = builder.map['stateChangeHandler'].getItemValue('.uno:BorderOuter');
@@ -68,8 +68,8 @@ function _borderControlItem(parentContainer, data, builder, i, selected) {
 	var div = builder._createIdentifiable('div', 'unotoolbutton mobile-wizard ui-content unospan', parentContainer, data);
 
 	var buttonId = 'border-' + i;
-	button = L.DomUtil.create('img', 'ui-content borderbutton', div);
-	L.LOUtil.setImage(button, 'fr0' + i + '.svg', builder.map);
+	button = window.L.DomUtil.create('img', 'ui-content borderbutton', div);
+	app.LOUtil.setImage(button, 'lc_fr0' + i + '.svg', builder.map);
 	button.id = buttonId;
 	if (selected)
 		$(button).addClass('selected');
@@ -77,22 +77,22 @@ function _borderControlItem(parentContainer, data, builder, i, selected) {
 	$(div).click(function () {
 		var color = 0;
 		// Find our associated color picker
-		var item = L.LOUtil.findItemWithAttributeRecursive(data.parent, 'command', '.uno:FrameLineColor');
+		var item = app.LOUtil.findItemWithAttributeRecursive(data.parent, 'command', '.uno:FrameLineColor');
 		if (item)
-			color = builder._getCurrentColor(item, builder);
+			color = JSDialog.getCurrentColor(item, builder);
 		window.setBorderStyle(i, color);
 	});
 }
 
 JSDialog.mobileBorderSelector = function (parentContainer, data, builder) {
-	var mainContainer = L.DomUtil.create('div', builder.options.cssClass + ' ui-mobileborderselector', parentContainer);
+	var mainContainer = window.L.DomUtil.create('div', builder.options.cssClass + ' ui-mobileborderselector', parentContainer);
 	mainContainer.id = data.id;
 
 	if (data.enabled === false) {
 		mainContainer.disabled = true;
 	}
 
-	var bordercontrollabel = L.DomUtil.create('label', builder.options.cssClass + ' ui-text', mainContainer);
+	var bordercontrollabel = window.L.DomUtil.create('label', builder.options.cssClass + ' ui-text', mainContainer);
 	bordercontrollabel.textContent = _('Cell borders');
 	bordercontrollabel.id = data.id + 'label';
 	var current = _getCurrentBorderNumber(builder);

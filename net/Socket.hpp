@@ -11,17 +11,20 @@
 
 #pragma once
 
+#if !MOBILEAPP
 #include <poll.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#endif
 
 #include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -32,13 +35,12 @@
 
 #include <common/StateEnum.hpp>
 #include "Log.hpp"
+#include "NetUtil.hpp"
 #include "Util.hpp"
 #include "Buffer.hpp"
 #include "SigUtil.hpp"
 
-#if MOBILEAPP
 #include "FakeSocket.hpp"
-#endif
 
 #ifdef __linux__
 #define HAVE_ABSTRACT_UNIX_SOCKETS
@@ -67,6 +69,8 @@ namespace Poco
 }
 
 class Socket;
+std::ostream& operator<<(std::ostream& os, const Socket &s);
+
 class Watchdog;
 class SocketPoll;
 
@@ -74,25 +78,19 @@ class SocketPoll;
 /// between polls to clarify thread ownership.
 class SocketDisposition final
 {
-    STATE_ENUM(Type, CONTINUE, CLOSED, MOVE, TRANSFER);
+    STATE_ENUM(Type, CONTINUE, CLOSED, TRANSFER);
 
 public:
-    typedef std::function<void(const std::shared_ptr<Socket> &)> MoveFunction;
+    using MoveFunction = std::function<void(const std::shared_ptr<Socket>&)>;
 
-    SocketDisposition(const std::shared_ptr<Socket> &socket) :
-        _disposition(Type::CONTINUE),
-        _toPoll(nullptr),
-        _socket(socket)
+    SocketDisposition(const std::shared_ptr<Socket> &socket)
+        : _socket(socket)
+        , _toPoll(nullptr)
+        , _disposition(Type::CONTINUE)
     {}
     ~SocketDisposition()
     {
         assert (!_socketMove);
-    }
-    // not the method you want.
-    void setMove(MoveFunction moveFn)
-    {
-        _socketMove = std::move(moveFn);
-        _disposition = Type::MOVE;
     }
     /** move, correctly change ownership of and insert into a new poll.
      * @transferFn is called as a callback inside the new poll, which
@@ -113,7 +111,6 @@ public:
     {
         return _socket;
     }
-    bool isMove() const { return _disposition == Type::MOVE; }
     bool isClosed() const { return _disposition == Type::CLOSED; }
     bool isTransfer() const { return  _disposition == Type::TRANSFER; }
     bool isContinue() const { return _disposition == Type::CONTINUE; }
@@ -122,11 +119,18 @@ public:
     void execute();
 
 private:
-    Type _disposition;
     MoveFunction _socketMove;
-    SocketPoll *_toPoll;
     std::shared_ptr<Socket> _socket;
+    SocketPoll *_toPoll;
+    Type _disposition;
 };
+
+class SocketThreadOwnerChange;
+
+namespace ThreadChecks
+{
+    extern std::atomic<bool> Inhibit;
+}
 
 /// A non-blocking, streaming socket.
 class Socket
@@ -134,58 +138,95 @@ class Socket
 public:
     static constexpr int DefaultSendBufferSize = 16 * 1024;
     static constexpr int MaximumSendBufferSize = 128 * 1024;
-    static std::atomic<bool> InhibitThreadChecks;
 
-    enum Type { IPv4, IPv6, All, Unix };
+    enum class Type : uint8_t { IPv4, IPv6, All, Unix };
+    static constexpr std::string_view toString(Type t);
 
     // NB. see other Socket::Socket by init below.
-    Socket(Type type)
-        : _fd(createSocket(type))
+    Socket(Type type,
+           std::chrono::steady_clock::time_point creationTime = std::chrono::steady_clock::now())
+        : _creationTime(creationTime)
+        , _lastSeenTime(_creationTime)
+        , _bytesSent(0)
+        , _bytesRcvd(0)
+        , _clientPort(0)
+        , _fd(createSocket(type))
+        , _type(type)
+        , _isShutdown(_fd < 0)
     {
-        init(type);
+        init();
     }
 
     virtual ~Socket()
     {
         LOG_TRC("Socket dtor");
 
-        // Doesn't block on sockets; no error handling needed.
-#if !MOBILEAPP
-        ::close(_fd);
-        LOG_DBG("Closed socket to [" << clientAddress() << ']');
-#else
-        fakeSocketClose(_fd);
-#endif
+        closeFD(); // In case we haven't closed yet.
     }
 
-    /// Create socket of the given type.
-    static int createSocket(Type type);
+    /// Returns true iff we have a valid FD and haven't called shutdown(2).
+    /// Note: this is needed because shutting down and closing are independent.
+    bool isOpen() const { return _fd >= 0 && !_isShutdown; }
 
-    void setClientAddress(const std::string& address)
+    /// Returns true if this socket FD has been shutdown, but not necessarily closed.
+    bool isShutdown() const { return _isShutdown; }
+
+    constexpr Type type() const { return _type; }
+    constexpr bool isIPType() const { return Type::IPv4 == _type || Type::IPv6 == _type; }
+    void setClientAddress(std::string address, unsigned int port = 0)
     {
-        _clientAddress = address;
+        _clientAddress = std::move(address);
+        _clientPort = port;
     }
 
-    const std::string& clientAddress() const
-    {
-        return _clientAddress;
-    }
+    const std::string& clientAddress() const { return _clientAddress; }
+    unsigned int clientPort() const { return _clientPort; }
 
     /// Returns the OS native socket fd.
-    int getFD() const { return _fd; }
+    constexpr int getFD() const { return _fd; }
+
+    std::ostream& streamStats(std::ostream& os, std::chrono::steady_clock::time_point now) const;
+    std::string getStatsString(std::chrono::steady_clock::time_point now) const;
+
+    virtual std::ostream& stream(std::ostream& os) const  { return streamImpl(os); }
+
+    /// Returns monotonic creation timestamp
+    constexpr std::chrono::steady_clock::time_point getCreationTime() const { return _creationTime; }
+    /// Returns monotonic timestamp of last received signal from remote
+    constexpr std::chrono::steady_clock::time_point getLastSeenTime() const { return _lastSeenTime; }
+
+    /// Sets monotonic timestamp of last received signal from remote
+    void setLastSeenTime(const std::chrono::steady_clock::time_point now) { _lastSeenTime = now; }
+
+    /// Returns bytes sent statistic
+    constexpr uint64_t bytesSent() const { return _bytesSent; }
+    /// Returns bytes received statistic
+    constexpr uint64_t bytesRcvd() const { return _bytesRcvd; }
+
+    /// Get input/output statistics on this stream
+    void getIOStats(uint64_t& sent, uint64_t& recv) const
+    {
+        sent = _bytesSent;
+        recv = _bytesRcvd;
+    }
 
     /// Shutdown the socket.
     /// TODO: Support separate read/write shutdown.
-    virtual void shutdown()
+    void syncShutdown()
     {
-        if (_noShutdown)
-            return;
-        LOG_TRC("Socket shutdown RDWR.");
+        if (!_noShutdown)
+        {
+            LOG_TRC("Socket shutdown RDWR. " << *this);
+            if (!_isShutdown)
+            {
+                setShutdown();
 #if !MOBILEAPP
-        ::shutdown(_fd, SHUT_RDWR);
+                ::shutdown(_fd, SHUT_RDWR);
 #else
-        fakeSocketShutdown(_fd);
+                fakeSocketShutdown(_fd);
 #endif
+            }
+        }
     }
 
     /// Prepare our poll record; adjust @timeoutMaxMs downwards
@@ -202,27 +243,34 @@ public:
     /// Do we have internally queued incoming / outgoing data ?
     virtual bool hasBuffered() const { return false; }
 
+    /// Returns the total capacity of all data buffers.
+    virtual std::size_t totalBufferCapacity() const { return 0; }
+
+#if !MOBILEAPP
     /// manage latency issues around packet aggregation
     void setNoDelay()
     {
-#if !MOBILEAPP
-        const int val = 1;
-        if (::setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &val, sizeof(val)) == -1)
+        if constexpr (!Util::isMobileApp())
         {
-            static std::once_flag once;
-            std::call_once(once,
-                           [&]() {
-                               LOG_WRN("Failed setsockopt TCP_NODELAY. Will not report further "
-                                       "failures to set TCP_NODELAY: "
-                                       << strerror(errno));
-                           });
+            const int val = 1;
+            if (::setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char*)&val, sizeof(val)) == -1)
+            {
+                static std::once_flag once;
+                std::call_once(once,
+                               [&]()
+                               {
+                                   LOG_WRN("Failed setsockopt TCP_NODELAY. Will not report further "
+                                           "failures to set TCP_NODELAY: "
+                                           << strerror(errno));
+                               });
+            }
         }
-#endif
     }
 
-#if !MOBILEAPP
     /// Uses peercreds to get prisoner PID if present or -1
     int getPid() const;
+
+#endif // !MOBILEAPP
 
     /// Sets the kernel socket send buffer in size bytes.
     /// Note: TCP will allocate twice this size for admin purposes,
@@ -231,41 +279,47 @@ public:
     /// Note: the upper limit is set via /proc/sys/net/core/wmem_max,
     /// and there is an unconfigurable lower limit as well.
     /// Returns true on success only.
-    bool setSocketBufferSize(const int size)
+    bool setSocketBufferSize([[maybe_unused]] const int size)
     {
+#if !MOBILEAPP
         int rc = ::setsockopt(_fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
 
         _sendBufferSize = getSocketBufferSize();
-        if (rc != 0 || _sendBufferSize < 0 )
+        if (rc != 0 || _sendBufferSize < 0)
         {
             _sendBufferSize = DefaultSendBufferSize;
-            LOG_SYS("Error getting socket buffer size. Using default size of " << _sendBufferSize
-                                                                               << " bytes.");
+            LOG_SYS("Error getting socket buffer size. Using default size of "
+                    << _sendBufferSize << " bytes.");
             return false;
         }
-        else
+
+        if (_sendBufferSize > MaximumSendBufferSize * 2)
         {
-            if (_sendBufferSize > MaximumSendBufferSize * 2)
-            {
-                LOG_TRC("Clamped send buffer size to " << MaximumSendBufferSize << " from "
-                                                       << _sendBufferSize);
-                _sendBufferSize = MaximumSendBufferSize;
-            }
-            else
-                LOG_TRC("Set socket buffer size to " << _sendBufferSize);
-            return true;
+            LOG_TRC("Clamped send buffer size to " << MaximumSendBufferSize << " from "
+                                                   << _sendBufferSize);
+            _sendBufferSize = MaximumSendBufferSize;
         }
+        else
+            LOG_TRC("Set socket buffer size to " << _sendBufferSize);
+
+        return true;
+#else
+        return false;
+#endif
     }
 
     /// Gets the actual send buffer size in bytes, -1 for failure.
     int getSocketBufferSize() const
     {
+#if !MOBILEAPP
         int size;
-        unsigned int len = sizeof(size);
+        socklen_t len = sizeof(size);
         const int rc = ::getsockopt(_fd, SOL_SOCKET, SO_SNDBUF, &size, &len);
         return rc == 0 ? size : -1;
-    }
+#else
+        return -1;
 #endif
+    }
 
     /// Gets our fast cache of the socket buffer size
     int getSendBufferSize() const { return (Util::isMobileApp() ? INT_MAX : _sendBufferSize); }
@@ -318,35 +372,13 @@ public:
 
     virtual void dumpState(std::ostream&) {}
 
-    /// Set the thread-id we're bound to
-    void setThreadOwner(const std::thread::id &id)
-    {
-        if (id != _owner)
-        {
-            LOG_TRC("Thread affinity set to " << Log::to_string(id) << " (was "
-                                              << Log::to_string(_owner) << ')');
-            _owner = id;
-        }
-    }
-
-    /// Reset the thread-id while it's in transition.
-    void resetThreadOwner()
-    {
-        if (std::thread::id() != _owner)
-        {
-            LOG_TRC("Resetting thread affinity while in transit (was " << Log::to_string(_owner)
-                                                                       << ')');
-            _owner = std::thread::id();
-        }
-    }
-
     /// Returns the owner thread's id.
     const std::thread::id& getThreadOwner() const { return _owner; }
 
     /// Asserts in the debug builds, otherwise just logs.
     void assertCorrectThread(const char* fileName = "", int lineNo = 0) const
     {
-        if (!InhibitThreadChecks)
+        if (!ThreadChecks::Inhibit)
             Util::assertCorrectThread(_owner, fileName, lineNo);
     }
 
@@ -355,59 +387,169 @@ public:
     // Ensure that no further input is processed from this socket
     virtual void ignoreInput()
     {
-        LOG_TRC("Ignore further input on socket.");
+        LOG_TRC("Ignore further input on socket");
         _ignoreInput = true;
     }
+
+    // arg to emphasize what is allowed do this
+    // close in advance of the ctor
+    void closeFD(const SocketPoll& /*rPoll*/) { closeFD(); }
+
 protected:
     /// Construct based on an existing socket fd.
     /// Used by accept() only.
-    Socket(const int fd, Type type)
-        : _fd(fd)
+    Socket(const int fd, Type type,
+           std::chrono::steady_clock::time_point creationTime = std::chrono::steady_clock::now())
+        : _creationTime(creationTime)
+        , _lastSeenTime(_creationTime)
+        , _bytesSent(0)
+        , _bytesRcvd(0)
+        , _clientPort(0)
+        , _fd(fd)
+        , _type(type)
+        , _isShutdown(_fd < 0)
     {
-        init(type);
+        init();
     }
 
     inline void logPrefix(std::ostream& os) const { os << '#' << _fd << ": "; }
 
+    /// Adds `len` sent bytes to statistic
+    void notifyBytesSent(uint64_t len) { _bytesSent += len; }
+    /// Adds `len` received bytes to statistic
+    void notifyBytesRcvd(uint64_t len) { _bytesRcvd += len; }
+
     /// avoid doing a shutdown before close
     void setNoShutdown() { _noShutdown = true; }
 
-private:
-    void init(Type type)
+    /// Explicitly marks this socket FD as shut down, but not necessarily closed.
+    void setShutdown() { _isShutdown = true; }
+
+    /// Set the thread-id we're bound to
+    virtual void setThreadOwner(const std::thread::id &id)
     {
-        if (type != Type::Unix)
+        if (id != _owner)
+        {
+            LOG_TRC("Thread affinity of Socket set to " << Log::to_string(id) << " (was "
+                                                        << Log::to_string(_owner) << ')');
+            _owner = id;
+        }
+    }
+
+    /// Reset the thread-id while it's in transition.
+    virtual void resetThreadOwner()
+    {
+        if (std::thread::id() != _owner)
+        {
+            LOG_TRC("Resetting thread affinity of Socket while in transit (was "
+                    << Log::to_string(_owner) << ')');
+            _owner = std::thread::id();
+        }
+    }
+
+private:
+    friend class SocketThreadOwnerChange;
+
+    /// Create socket of the given type.
+    /// return >= 0 for a successfully created socket, -1 on error
+    static int createSocket(Type type);
+
+    std::ostream& streamImpl(std::ostream& os) const;
+    std::string toStringImpl() const;
+
+    void init()
+    {
+#if !MOBILEAPP
+        if (_type != Type::Unix && _fd >= 0)
             setNoDelay();
+#endif
         _ignoreInput = false;
         _noShutdown = false;
         _sendBufferSize = DefaultSendBufferSize;
         _owner = std::this_thread::get_id();
-        LOG_TRC("Created socket. Thread affinity set to " << Log::to_string(_owner));
+        LOG_DBG("Created socket. Thread affinity set to " << Log::to_string(_owner) << ", "
+                                                          << toStringImpl());
 
-#if !MOBILEAPP
-#if ENABLE_DEBUG
-        if (std::getenv("COOL_ZERO_BUFFER_SIZE"))
+        if constexpr (!Util::isMobileApp())
         {
-            const int oldSize = getSocketBufferSize();
-            setSocketBufferSize(0);
-            LOG_TRC("Buffer size: " << getSendBufferSize() << " (was " << oldSize << ')');
+#if ENABLE_DEBUG
+            if (std::getenv("COOL_ZERO_BUFFER_SIZE") && _fd >= 0)
+            {
+                const int oldSize = getSocketBufferSize();
+                setSocketBufferSize(0);
+                LOG_TRC("Buffer size: " << getSendBufferSize() << " (was " << oldSize << ')');
+            }
+#endif
         }
-#endif
-#endif
     }
 
-private:
+    /// Close the socket FD.
+    /// Internal implementation, always private.
+    void closeFD()
+    {
+        // explicit closeFD called, or initial createSocket failure
+        if (_fd < 0)
+            return;
+
+            // Doesn't block on sockets; no error handling needed.
+#if !MOBILEAPP
+        ::close(_fd);
+#else
+        fakeSocketClose(_fd);
+#endif
+
+        LOG_DBG("Closed socket " << toStringImpl()); // Should be logged exactly once.
+
+        // Invalidate the FD by negating to preserve the original value.
+        if (_fd > 0)
+            _fd = -_fd;
+        else if (_fd == 0) // Unlikely, but technically possible.
+            _fd = -1;
+    }
+
     std::string _clientAddress;
-    const int _fd;
 
-    // If _ignoreInput is true no more input from this socket will be processed.
-    bool _ignoreInput;
-    bool _noShutdown;
-
-    int _sendBufferSize;
+    const std::chrono::steady_clock::time_point _creationTime;
+    std::chrono::steady_clock::time_point _lastSeenTime;
+    uint64_t _bytesSent;
+    uint64_t _bytesRcvd;
 
     /// We check the owner even in the release builds, needs to be always correct.
     std::thread::id _owner;
+
+    unsigned int _clientPort;
+    int _fd;
+    int _sendBufferSize;
+
+    const Type _type;
+
+    /// True if this socket is shut down.
+    bool _isShutdown;
+    // If _ignoreInput is true no more input from this socket will be processed.
+    bool _ignoreInput;
+    bool _noShutdown;
 };
+
+// Allow SocketPoll and SocketDisposition to call Socket::setThreadOwner
+// without exposing the entirety of Socket's internals to them
+class SocketThreadOwnerChange
+{
+private:
+    friend class SocketDisposition;
+    friend class SocketPoll;
+
+    static void setThreadOwner(Socket& socket, const std::thread::id &id)
+    {
+        socket.setThreadOwner(id);
+    }
+
+    static void resetThreadOwner(Socket& socket)
+    {
+        socket.resetThreadOwner();
+    }
+};
+
+inline std::ostream& operator<<(std::ostream& os, const Socket &s) { return s.stream(os); }
 
 class StreamSocket;
 class MessageHandlerInterface;
@@ -416,8 +558,6 @@ class MessageHandlerInterface;
 class ProtocolHandlerInterface :
     public std::enable_shared_from_this<ProtocolHandlerInterface>
 {
-    int _fdSocket; //< The socket file-descriptor.
-
 protected:
     /// We own a message handler, after decoding the socket data we pass it on as messages.
     std::shared_ptr<MessageHandlerInterface> _msgHandler;
@@ -431,13 +571,21 @@ protected:
 public:
     ProtocolHandlerInterface()
         : _fdSocket(-1)
+        , _owner(std::this_thread::get_id())
     {
     }
 
     // ------------------------------------------------------------------
     // Interface for implementing low level socket goodness from streams.
     // ------------------------------------------------------------------
-    virtual ~ProtocolHandlerInterface() { }
+    virtual ~ProtocolHandlerInterface() = default;
+
+    /// Asserts in the debug builds, otherwise just logs.
+    void assertCorrectThread(const char* fileName = "", int lineNo = 0) const
+    {
+        if (!ThreadChecks::Inhibit)
+            Util::assertCorrectThread(_owner, fileName, lineNo);
+    }
 
     /// Called when the socket is newly created to
     /// set the socket associated with this ResponseClient.
@@ -457,8 +605,9 @@ public:
     virtual int getPollEvents(std::chrono::steady_clock::time_point now,
                               int64_t &timeoutMaxMicroS) = 0;
 
-    /// Do we need to handle a timeout ?
-    virtual void checkTimeout(std::chrono::steady_clock::time_point /* now */) {}
+    /// Checks whether a timeout has occurred. Method will shutdown connection and socket on timeout.
+    /// Returns true in case of a timeout, caller shall stop processing
+    virtual bool checkTimeout(std::chrono::steady_clock::time_point /* now */) { return false; }
 
     /// Do some of the queued writing.
     virtual void performWrites(std::size_t capacity) = 0;
@@ -468,35 +617,41 @@ public:
 
     /// Called when the socket is disconnected and will be destroyed.
     /// Will be called exactly once.
-    virtual void onDisconnect() {}
+    virtual void onDisconnect() = 0;
 
     // -----------------------------------------------------------------
     //            Interface for external MessageHandlers
     // -----------------------------------------------------------------
-public:
+
     void setMessageHandler(const std::shared_ptr<MessageHandlerInterface> &msgHandler)
     {
+        ASSERT_CORRECT_THREAD();
         _msgHandler = msgHandler;
     }
 
     /// Clear all external references
-    virtual void dispose() { _msgHandler.reset(); }
+    virtual void dispose()
+    {
+        ASSERT_CORRECT_THREAD();
+        _msgHandler.reset();
+    }
 
     /// Sends a text message.
     /// Returns the number of bytes written (including frame overhead) on success,
     /// 0 for closed/invalid socket, and -1 for other errors.
-    virtual int sendTextMessage(const char* msg, const size_t len, bool flush = false) const = 0;
+    virtual int sendTextMessage(const char* msg, size_t len, bool flush = false) const = 0;
 
     /// Convenience wrapper
-    int sendTextMessage(const std::string &msg, bool flush = false) const
+    int sendTextMessage(const std::string_view msg, bool flush = false) const
     {
+        ASSERT_CORRECT_THREAD();
         return sendTextMessage(msg.data(), msg.size(), flush);
     }
 
     /// Sends a binary message.
     /// Returns the number of bytes written (including frame overhead) on success,
     /// 0 for closed/invalid socket, and -1 for other errors.
-    virtual int sendBinaryMessage(const char *data, const size_t len, bool flush = false) const = 0;
+    virtual int sendBinaryMessage(const char* data, size_t len, bool flush = false) const = 0;
 
     /// Shutdown the socket and specify if the endpoint is going away or not (useful for WS).
     /// Optionally provide a message sent in the close frame (useful for WS).
@@ -505,8 +660,59 @@ public:
 
     virtual void getIOStats(uint64_t &sent, uint64_t &recv) = 0;
 
+    void dumpState(std::ostream& os) const { dumpState(os, "\n\t"); }
+
     /// Append pretty printed internal state to a line
-    virtual void dumpState(std::ostream& os) const { os << '\n'; }
+    virtual void dumpState(std::ostream& os, const std::string& indent) const
+    {
+        os << indent;
+    }
+
+private:
+    friend class ProtocolThreadOwnerChange;
+
+    void setThreadOwner(const std::thread::id &id)
+    {
+        if (id != _owner)
+        {
+            LOG_TRC("Thread affinity of ProtocolHandlerInterface set to "
+                    << Log::to_string(id) << " (was " << Log::to_string(_owner) << ')');
+            _owner = id;
+        }
+    }
+
+    void resetThreadOwner()
+    {
+        if (std::thread::id() != _owner)
+        {
+            LOG_TRC("Resetting thread affinity of ProtocolHandlerInterface while in transit (was "
+                    << Log::to_string(_owner) << ')');
+            _owner = std::thread::id();
+        }
+    }
+
+    int _fdSocket; ///< The socket file-descriptor.
+    std::thread::id _owner;
+};
+
+class StreamSocket;
+
+// Allow Socket to call ProtocolHandlerInterface::setThreadOwner
+// without exposing the entirety of ProtocolHandlerInterface's internals to it
+class ProtocolThreadOwnerChange
+{
+    friend class StreamSocket;
+
+    static void setThreadOwner(ProtocolHandlerInterface& handler, const std::thread::id &id)
+    {
+        handler.setThreadOwner(id);
+    }
+
+    static void resetThreadOwner(ProtocolHandlerInterface& handler)
+    {
+        handler.resetThreadOwner();
+    }
+
 };
 
 // Forward declare WebSocketHandler, which is inherited from ProtocolHandlerInterface.
@@ -516,7 +722,7 @@ class WebSocketHandler;
 class SimpleSocketHandler : public ProtocolHandlerInterface
 {
 public:
-    SimpleSocketHandler() {}
+    SimpleSocketHandler() = default;
     int sendTextMessage(const char*, const size_t, bool) const override { return 0; }
     int sendBinaryMessage(const char*, const size_t, bool) const override { return 0; }
     void shutdown(bool, const std::string &) override {}
@@ -534,7 +740,7 @@ protected:
     {
     }
 
-    virtual ~MessageHandlerInterface() {}
+    virtual ~MessageHandlerInterface() = default;
 
 public:
     /// Setup, after construction for shared_from_this
@@ -621,14 +827,13 @@ public:
 
     /// Default poll time - useful to increase for debugging.
     static constexpr std::chrono::microseconds DefaultPollTimeoutMicroS = std::chrono::seconds(64);
-    static std::atomic<bool> InhibitThreadChecks;
 
     /// Stop the polling thread.
     void stop()
     {
-        LOG_DBG("Stopping SocketPoll thread " << _name);
+        LOG_DBG("Stopping " << logInfo());
         _stop = true;
-        if (!Util::isMobileApp())
+        if constexpr (!Util::isMobileApp())
         {
             // We don't want to risk some callbacks in _newCallbacks being invoked when we start
             // running a thread for this SocketPoll again.
@@ -671,7 +876,7 @@ public:
     /// Asserts in the debug builds, otherwise just logs.
     void assertCorrectThread(const char* fileName = "?", int lineNo = 0) const
     {
-        if (!InhibitThreadChecks && isAlive())
+        if (!ThreadChecks::Inhibit && isAlive())
             Util::assertCorrectThread(_owner, fileName, lineNo);
     }
 
@@ -681,7 +886,7 @@ public:
     /// Poll the sockets for available data to read or buffer to write.
     /// Returns the return-value of poll(2): 0 on timeout,
     /// -1 for error, and otherwise the number of events signalled.
-    int poll(std::chrono::microseconds timeoutMax) { return poll(timeoutMax.count()); }
+    int poll(std::chrono::microseconds timeoutMax, bool justPoll = false) { return poll(timeoutMax.count(), justPoll); }
 
     /// Poll the sockets for available data to read or buffer to write.
     /// Returns the return-value of poll(2): 0 on timeout,
@@ -716,7 +921,7 @@ public:
         // There is a race when shutting down because
         // SocketPoll threads exit when shutting down.
         if (!isAlive() && !SigUtil::getShutdownRequestFlag())
-            LOG_WRN("Waking up dead poll thread ["
+            LOG_DBG("WARNING: Waking up dead poll thread ["
                     << _name << "], started: " << (_threadStarted ? "true" : "false")
                     << ", finished: " << _threadFinished);
 
@@ -737,20 +942,43 @@ public:
             LOG_TRC("Inserting socket #" << newSocket->getFD() << ", address ["
                                          << newSocket->clientAddress() << "], into " << _name);
             // sockets in transit are un-owned.
-            newSocket->resetThreadOwner();
+            SocketThreadOwnerChange::resetThreadOwner(*newSocket);
 
             std::lock_guard<std::mutex> lock(_mutex);
-            const bool wasEmpty = _newSockets.empty() && _newCallbacks.empty();
+            const bool wasEmpty = taskQueuesEmpty();
             _newSockets.emplace_back(std::move(newSocket));
             if (wasEmpty)
                 wakeup();
         }
     }
 
-    /// Takes socket from @fromPoll and moves it to this current
-    /// poll. Blocks until the transfer is complete.
-    void takeSocket(const std::shared_ptr<SocketPoll> &fromPoll,
-                    const std::shared_ptr<Socket> &socket);
+    /// Schedules an async transfer of a socket from this SocketPoll to
+    /// @toPoll.
+    ///
+    /// @cbAfterArrivalInNewPoll is called when socket is inserted in @toPoll.
+    /// See insertNewSocket
+    ///
+    /// @cbAfterRemovalFromOldPoll is called when socket has been removed
+    /// from this SocketPoll. May be nullptr.
+    void transferSocketTo(const std::weak_ptr<Socket>& socket,
+                          const std::weak_ptr<SocketPoll>& toPoll,
+                          SocketDisposition::MoveFunction cbAfterArrivalInNewPoll,
+                          std::function<void()> cbAfterRemovalFromOldPoll)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        const bool wasEmpty = taskQueuesEmpty();
+        _pendingTransfers.emplace_back(socket, toPoll,
+                                       std::move(cbAfterArrivalInNewPoll),
+                                       std::move(cbAfterRemovalFromOldPoll));
+        if (wasEmpty)
+            wakeup();
+    }
+
+    /// Takes socket from @fromPoll and moves it to @toPoll.
+    /// Blocks until the socket is removed from @fromPoll.
+    static void takeSocket(const std::shared_ptr<SocketPoll>& fromPoll,
+                           const std::shared_ptr<SocketPoll>& toPoll,
+                           const std::shared_ptr<Socket>& socket);
 
 #if !MOBILEAPP
     /// Inserts a new remote websocket to be polled.
@@ -769,14 +997,14 @@ public:
         const std::shared_ptr<ProtocolHandlerInterface>& websocketHandler);
 #endif
 
-    typedef std::function<void()> CallbackFn;
+    using CallbackFn = std::function<void()>;
 
     /// Add a callback to be invoked in the polling thread
-    void addCallback(const CallbackFn& fn)
+    void addCallback(CallbackFn fn)
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        const bool wasEmpty = _newSockets.empty() && _newCallbacks.empty();
-        _newCallbacks.emplace_back(fn);
+        const bool wasEmpty = taskQueuesEmpty();
+        _newCallbacks.emplace_back(std::move(fn));
         if (wasEmpty)
             wakeup();
     }
@@ -815,6 +1043,11 @@ public:
         return false;
     }
 
+    bool isRunOnClientThread() const
+    {
+        return _runOnClientThread;
+    }
+
     void disableWatchdog();
     void enableWatchdog();
 
@@ -851,7 +1084,7 @@ private:
     }
 
     /// Actual poll implementation
-    int poll(int64_t timeoutMaxMicroS);
+    int poll(int64_t timeoutMaxMicroS, bool justPoll = false);
 
     /// Initialize the poll fds array with the right events
     void setupPollFds(std::chrono::steady_clock::time_point now,
@@ -882,38 +1115,81 @@ private:
         _pollFds[size].revents = 0;
     }
 
+    std::string logInfo() const {
+        std::ostringstream os;
+        os << "SocketPoll[this " << std::hex << this << std::dec
+           << ", thread[name " << _name
+           << ", id[owner " << Log::to_string(_owner)
+           << ", caller " << Log::to_string(std::this_thread::get_id())
+           << "]]]";
+        return os.str();
+    }
+
     /// The polling thread entry.
     /// Used to set the thread name and mark the thread as stopped when done.
     void pollingThreadEntry();
 
+    bool taskQueuesEmpty() const
+    {
+        return _newSockets.empty() && _newCallbacks.empty() && _pendingTransfers.empty();
+    }
+
+    struct SocketTransfer
+    {
+        std::weak_ptr<Socket> _socket;
+        std::weak_ptr<SocketPoll> _toPoll;
+        SocketDisposition::MoveFunction _cbAfterArrivalInNewPoll;
+        std::function<void()> _cbAfterRemovalFromOldPoll;
+
+        SocketTransfer(std::weak_ptr<Socket> socket,
+                       std::weak_ptr<SocketPoll> toPoll,
+                       SocketDisposition::MoveFunction cbAfterArrivalInNewPoll,
+                       std::function<void()> cbAfterRemovalFromOldPoll)
+            : _socket(std::move(socket))
+            , _toPoll(std::move(toPoll))
+            , _cbAfterArrivalInNewPoll(std::move(cbAfterArrivalInNewPoll))
+            , _cbAfterRemovalFromOldPoll(std::move(cbAfterRemovalFromOldPoll))
+       {
+       }
+    };
+
+    void transfer(const SocketTransfer& pendingTransfer);
+
+    /// Protects _newSockets, _newCallbacks and _pendingTransfers
+    std::mutex _mutex;
+
     /// Debug name used for logging.
     const std::string _name;
 
-    /// main-loop wakeup pipe
-    int _wakeup[2];
     /// The sockets we're controlling
     std::vector<std::shared_ptr<Socket>> _pollSockets;
-    /// We start handling the poll results of the above sockets at a different index each time, to
-    /// not arbitrarily prioritize some
-    size_t _pollStartIndex;
-    /// Protects _newSockets and _newCallbacks
-    std::mutex _mutex;
     std::vector<std::shared_ptr<Socket>> _newSockets;
     std::vector<CallbackFn> _newCallbacks;
+    std::vector<SocketTransfer> _pendingTransfers;
+
     /// The fds to poll.
     std::vector<pollfd> _pollFds;
 
-    /// Flag the thread to stop.
-    std::atomic<bool> _stop;
+    /// main-loop wakeup pipe
+    int _wakeup[2];
+    /// We start handling the poll results of the above sockets at a different index each time, to
+    /// not arbitrarily prioritize some
+    size_t _pollStartIndex;
     /// The polling thread.
     std::thread _thread;
-    std::atomic<int64_t> _threadStarted;
-    std::atomic<bool> _threadFinished;
-    std::atomic<bool> _runOnClientThread;
     std::thread::id _owner;
+    /// Flag the thread to stop.
+    std::atomic<int64_t> _threadStarted;
+#if !MOBILEAPP
+    std::atomic<uint64_t> _watchdogTime;
+#endif
+
     /// Time-stamp for profiling
     int _ownerThreadId;
-    std::atomic<uint64_t> _watchdogTime;
+
+    std::atomic<bool> _stop;
+    std::atomic<bool> _threadFinished;
+    std::atomic<bool> _runOnClientThread;
 };
 
 /// A SocketPoll that will stop polling and
@@ -930,81 +1206,109 @@ public:
     }
 };
 
-enum SharedFDType { SMAPS, URPToKit, URPFromKit };
+STATE_ENUM(SharedFDType, SMAPS, URPToKit, URPFromKit);
 
-/// A plain, non-blocking, data streaming socket.
+enum HostType : uint8_t { LocalHost, Other };
+
+// A plain, non-blocking, data streaming socket.
 class StreamSocket : public Socket,
                      public std::enable_shared_from_this<StreamSocket>
 {
 public:
-    enum ReadType
-    {
-        NormalRead,
-        UseRecvmsgExpectFD
-    };
+    STATE_ENUM(ReadType, NormalRead, UseRecvmsgExpectFD);
 
     /// Create a StreamSocket from native FD.
-    StreamSocket(std::string host, const int fd, Type type, bool /* isClient */,
-                 ReadType readType = NormalRead) :
-        Socket(fd, type),
-        _hostname(std::move(host)),
-        _bytesSent(0),
-        _bytesRecvd(0),
-        _wsState(WSState::HTTP),
-        _closed(false),
-        _sentHTTPContinue(false),
-        _shutdownSignalled(false),
-        _readType(readType),
-        _inputProcessingEnabled(true)
+    StreamSocket(std::string host, const int fd, Type type, bool isClient,
+                 HostType hostType, ReadType readType = ReadType::NormalRead,
+                 std::chrono::steady_clock::time_point creationTime = std::chrono::steady_clock::now() )
+        : Socket(fd, type, creationTime)
+        , _hostname(std::move(host))
+        , _wsState(WSState::HTTP)
+        , _readType(readType)
+        , _shutdownSignalled(false)
+        , _inputProcessingEnabled(true)
+        , _doneDisconnect(false)
+        , _isClient(isClient)
+        , _isLocalHost(hostType == LocalHost)
+        , _sentHTTPContinue(false)
     {
         LOG_TRC("StreamSocket ctor");
+        if (isExternalCountedConnection())
+            ++ExternalConnectionCount;
     }
 
-    ~StreamSocket()
+    ~StreamSocket() override
     {
         LOG_TRC("StreamSocket dtor called with pending write: " << _outBuffer.size()
                                                                 << ", read: " << _inBuffer.size());
-
-        if (!_closed)
-        {
-            ASSERT_CORRECT_SOCKET_THREAD(this);
-            if (_socketHandler)
-                _socketHandler->onDisconnect();
-            _socketHandler.reset();
-        }
+        ensureDisconnected();
+        _socketHandler.reset();
 
         if (!_shutdownSignalled)
         {
             _shutdownSignalled = true;
-            StreamSocket::closeConnection();
+            StreamSocket::shutdownConnection();
+        }
+        if (isExternalCountedConnection())
+            --ExternalConnectionCount;
+    }
+
+    /// Emit 'onDisconnect' if it has not been done
+    void ensureDisconnected()
+    {
+        ASSERT_CORRECT_SOCKET_THREAD(this);
+        if (!_doneDisconnect)
+        {
+            _doneDisconnect = true;
+            if (_socketHandler)
+            {
+                _socketHandler->onDisconnect();
+
+                // The SocketHandler has a weak pointer to us and we could
+                // be getting destroyed at this point, so it won't get a
+                // reference to us from the weak pointer, and so can't disconnect.
+                if (!isShutdown())
+                {
+                    asyncShutdown(); // signal
+                    shutdownConnection(); // real -> setShutdown()
+                }
+            }
+        }
+
+        if (isOpen())
+        {
+            // Note: Ensure proper semantics of onDisconnect()
+            LOG_WRN("Socket still open post onDisconnect(), forced shutdown.");
         }
     }
 
-    bool isClosed() const { return _closed; }
     bool isWebSocket() const { return _wsState == WSState::WS; }
     void setWebSocket() { _wsState = WSState::WS; }
+    bool isLocalHost() const { return _isLocalHost; }
 
     /// Returns the peer hostname, if set.
     const std::string& hostname() const { return _hostname; }
 
-    /// Just trigger the async shutdown.
-    virtual void shutdown() override
+    std::ostream& stream(std::ostream& os) const override;
+
+    /// Checks whether StreamSocket is due for forced removal, e.g. by inactivity. Method will shutdown connection and socket on forced removal.
+    /// Returns true in case of forced removal, caller shall stop processing
+    bool checkRemoval(std::chrono::steady_clock::time_point now);
+
+    void asyncShutdown()
     {
         _shutdownSignalled = true;
-        LOG_TRC("Async shutdown requested.");
+        LOG_TRC("Async shutdown requested");
     }
 
-    virtual void ignoreInput() override
+    void ignoreInput() override
     {
         Socket::ignoreInput();
         _inBuffer.clear();
     }
 
     /// Perform the real shutdown.
-    virtual void closeConnection()
-    {
-        Socket::shutdown();
-    }
+    virtual void shutdownConnection() { syncShutdown(); }
 
     int getPollEvents(std::chrono::steady_clock::time_point now,
                       int64_t &timeoutMaxMicroS) override
@@ -1017,14 +1321,20 @@ public:
         return events;
     }
 
-    virtual bool hasBuffered() const override
+    bool hasBuffered() const override
     {
         return !_outBuffer.empty() || !_inBuffer.empty();
     }
 
+    std::size_t totalBufferCapacity() const override
+    {
+        return _outBuffer.capacity() + _inBuffer.capacity();
+    }
+
     /// Create a pair of connected stream sockets
-    static bool socketpair(std::shared_ptr<StreamSocket> &parent,
-                           std::shared_ptr<StreamSocket> &child);
+    static bool socketpair(std::chrono::steady_clock::time_point creationTime,
+                           std::shared_ptr<StreamSocket>& parent,
+                           std::shared_ptr<StreamSocket>& child);
 
     /// Send data to the socket peer.
     void send(const char* data, const int len, const bool doFlush = true)
@@ -1060,12 +1370,17 @@ public:
     /// Will always shutdown the socket.
     bool sendAndShutdown(http::Response& response);
 
-    /// Safely flush any outgoing data.
-    inline void flush()
+    /// Safely attempt to write any outgoing data.
+    /// Returns true iff no data is left in the buffer.
+    inline bool attemptWrites()
     {
         if (!_outBuffer.empty())
             writeOutgoingData();
+
+        return _outBuffer.empty();
     }
+
+#if !MOBILEAPP
 
     /// Sends data with file descriptor as control data.
     /// Can be used only with Unix sockets.
@@ -1076,7 +1391,7 @@ public:
         // Flush existing non-ancillary data
         // so that our non-ancillary data will
         // match ancillary data.
-        flush();
+        attemptWrites();
 
         msghdr msg;
         iovec iov[1];
@@ -1090,7 +1405,7 @@ public:
         msg.msg_iovlen = 1;
 
         const size_t fds_size = sizeof(int) * fds.size();
-        char adata[CMSG_SPACE(fds_size)];
+        auto* adata = static_cast<char*>(alloca(CMSG_SPACE(fds_size)));
         cmsghdr *cmsg = (cmsghdr*)adata;
         cmsg->cmsg_type = SCM_RIGHTS;
         cmsg->cmsg_level = SOL_SOCKET;
@@ -1105,7 +1420,7 @@ public:
 #ifdef LOG_SOCKET_DATA
         if (len > 0)
             LOG_TRC("(Unix) outBuffer (" << len << " bytes):\n"
-                                         << Util::dumpHex(std::string(data, len)));
+                                         << HexUtil::dumpHex(std::string(data, len)));
 #endif
 
         //FIXME: retry on EINTR?
@@ -1115,6 +1430,7 @@ public:
         else
             LOG_TRC("Wrote " << wrote << " bytes of " << len);
     }
+#endif // !MOBILEAPP
 
     /// Reads data by invoking readData() and buffering.
     /// Returns the last return from writeData. 0 implies socket is closed.
@@ -1128,73 +1444,91 @@ public:
             return false; // error - close it.
         }
 
-#if !MOBILEAPP
-        // SSL decodes blocks of 16Kb, so for efficiency we use the same.
-        char buf[16 * 1024];
         ssize_t len = 0;
-        int last_errno = 0;
-        do
+        if constexpr (!Util::isMobileApp())
         {
-            // Drain the read buffer.
-            // Note: we read as much as possible as
-            // we are typically capped by hardware buffer
-            // size anyway, and better to drain it fast.
+            // SSL decodes blocks of 16Kb, so for efficiency we use the same.
+            char buf[16 * 1024];
+            int last_errno = 0;
             do
             {
-                len = readData(buf, sizeof(buf));
-                if (len < 0)
-                    last_errno = errno; // Save only on error.
+                // Drain the read buffer.
+                // Note: we read as much as possible as
+                // we are typically capped by hardware buffer
+                // size anyway, and better to drain it fast.
+                do
+                {
+                    len = readData(buf, sizeof(buf));
+                    if (len < 0)
+                        last_errno = errno; // Save only on error.
 
-                if (len < 0 && last_errno != EAGAIN && last_errno != EWOULDBLOCK)
-                    LOG_SYS_ERRNO(last_errno,
-                                  "Read failed, have " << _inBuffer.size() << " buffered bytes");
-                else if (len < 0)
-                    LOGA_TRC(Socket, "Read failed ("
-                            << len << "), have " << _inBuffer.size() << " buffered bytes ("
-                            << Util::symbolicErrno(last_errno) << ": " << std::strerror(last_errno)
-                            << ')');
-                else if (len == 0)
-                    LOGA_TRC(Socket, "Read closed (0), have " << _inBuffer.size() << " buffered bytes");
-                else // Success.
-                    LOGA_TRC(Socket, "Read " << len << " bytes in addition to " << _inBuffer.size()
-                             << " buffered bytes"
+                    if (len < 0 && last_errno != EAGAIN && last_errno != EWOULDBLOCK)
+                    {
+                        if (last_errno == ECONNRESET && _inBuffer.empty())
+                        {
+                            // Unexpected, but often intentional on an idle connection.
+                            LOGA_TRC(Socket, "Read failed because the connection is reset by peer, "
+                                             "have 0 buffered bytes: ECONNRESET");
+                        }
+                        else
+                        {
+                            // Unexpected read error while draining the read buffer.
+                            LOG_ERR_ERRNO(last_errno, "Read failed, have " << _inBuffer.size()
+                                                                           << " buffered bytes");
+                        }
+                    }
+                    else if (len < 0)
+                        LOGA_TRC(Socket, "Read failed (" << len << "), have " << _inBuffer.size()
+                                                         << " buffered bytes ("
+                                                         << Util::symbolicErrno(last_errno) << ": "
+                                                         << std::strerror(last_errno) << ')');
+                    else if (len == 0)
+                        LOGA_TRC(Socket,
+                                 "Read closed (0), have " << _inBuffer.size() << " buffered bytes");
+                    else // Success.
+                        LOGA_TRC(Socket,
+                                 "Read " << len << " bytes in addition to " << _inBuffer.size()
+                                         << " buffered bytes"
 #ifdef LOG_SOCKET_DATA
-                             << (len ? Util::dumpHex(std::string(buf, len), ":\n") : std::string())
+                                         << (len ? HexUtil::dumpHex(std::string(buf, len), ":\n")
+                                                 : std::string())
 #endif
-                    );
-            } while (len < 0 && last_errno == EINTR);
+                        );
+                } while (len < 0 && last_errno == EINTR);
 
-            if (len > 0)
-            {
-                LOG_ASSERT_MSG(len <= ssize_t(sizeof(buf)),
-                               "Read more data than the buffer size");
-                _bytesRecvd += len;
-                _inBuffer.append(&buf[0], len);
-            }
-            // else poll will handle errors.
+                if (len > 0)
+                {
+                    assert(len <= ssize_t(sizeof(buf)) && "Read more data than the buffer size");
+                    notifyBytesRcvd(len);
+                    const size_t origSize = _inBuffer.size();
+                    _inBuffer.append(&buf[0], len);
+                    if (origSize < 104857600 && _inBuffer.size() > 104857600)
+                        LOG_WRN("inBuffer for " << getFD() << " has grown to " << _inBuffer.size() << " bytes");
+                }
+                // else poll will handle errors.
+            } while (len == static_cast<ssize_t>(sizeof(buf)));
+
+            // Restore errno from the read call.
+            errno = last_errno;
         }
-        while (len == (sizeof(buf)));
-
-        // Restore errno from the read call.
-        errno = last_errno;
-#else
-        LOG_TRC("readIncomingData #" << getFD());
-        ssize_t available = fakeSocketAvailableDataLength(getFD());
-        ssize_t len;
-        if (available == -1)
-            len = -1;
-        else if (available == 0)
-            len = 0;
         else
         {
-            std::vector<char>buf(available);
-            len = readData(buf.data(), available);
-            assert(len == available);
-            _bytesRecvd += len;
-            assert(_inBuffer.empty());
-            _inBuffer.append(buf.data(), len);
+            LOG_TRC("readIncomingData #" << getFD());
+            ssize_t available = fakeSocketAvailableDataLength(getFD());
+            if (available == -1)
+                len = -1;
+            else if (available == 0)
+                len = 0;
+            else
+            {
+                std::vector<char> buf(available);
+                len = readData(buf.data(), available);
+                assert(len == available);
+                notifyBytesRcvd(len);
+                assert(_inBuffer.empty());
+                _inBuffer.append(buf.data(), len);
+            }
         }
-#endif
 
         return len;
     }
@@ -1203,30 +1537,36 @@ public:
     void setHandler(std::shared_ptr<ProtocolHandlerInterface> handler)
     {
         LOG_TRC("setHandler");
+        resetHandler(); // don't disconnect the pre-upgrade handler
         _socketHandler = std::move(handler);
+        ProtocolThreadOwnerChange::setThreadOwner(*_socketHandler, getThreadOwner());
         _socketHandler->onConnect(shared_from_this());
     }
 
+    /// Explicitly avoids onDisconnect
     void resetHandler()
     {
         LOG_TRC("resetHandler");
         _socketHandler.reset();
     }
 
-    /// Create a socket of type TSocket given an FD and a handler.
+    /// Create a socket of type TSocket derived from StreamSocket given an FD and a handler.
     /// We need this helper since the handler needs a shared_ptr to the socket
     /// but we can't have a shared_ptr in the ctor.
     template <typename TSocket>
-    static std::shared_ptr<TSocket> create(std::string hostname, const int fd, Type type, bool isClient,
-                                           std::shared_ptr<ProtocolHandlerInterface> handler,
-                                           ReadType readType = NormalRead)
+    static std::shared_ptr<TSocket>
+    create(std::string hostname, int fd, Type type, bool isClient, HostType hostType,
+           std::shared_ptr<ProtocolHandlerInterface> handler,
+           ReadType readType = ReadType::NormalRead,
+           std::chrono::steady_clock::time_point creationTime = std::chrono::steady_clock::now())
+        requires(std::is_base_of_v<StreamSocket, TSocket>)
     {
         // Without a handler we make no sense object.
         if (!handler)
             throw std::runtime_error("StreamSocket " + std::to_string(fd) +
                                      " expects a valid SocketHandler instance.");
 
-        auto socket = std::make_shared<TSocket>(std::move(hostname), fd, type, isClient, readType);
+        auto socket = std::make_shared<TSocket>(std::move(hostname), fd, type, isClient, hostType, readType, creationTime);
         socket->setHandler(std::move(handler));
 
         return socket;
@@ -1250,12 +1590,6 @@ public:
     }
 
     /// Remove the first @count bytes from input buffer
-    void eraseFirstInputBytes(const MessageMap &map)
-    {
-        eraseFirstInputBytes(map._headerSize);
-    }
-
-    /// Remove the first @count bytes from input buffer
     void eraseFirstInputBytes(const std::size_t count)
     {
         size_t toErase = std::min(count, _inBuffer.size());
@@ -1270,19 +1604,20 @@ public:
     /// returns true if we did any re-sizing/movement of _inBuffer.
     bool compactChunks(MessageMap& map);
 
+    ssize_t readHeader(std::string_view clientName, std::istream& message, size_t messagesize,
+                       Poco::Net::HTTPRequest& request,
+                       std::chrono::duration<float, std::milli> delayMs);
+
     /// Detects if we have an HTTP header in the provided message and
     /// populates a request for that.
-    bool parseHeader(const char *clientLoggingName,
-                     Poco::MemoryInputStream &message,
-                     Poco::Net::HTTPRequest &request,
-                     MessageMap& map);
+    bool parseHeader(std::string_view clientName, size_t headerSize, size_t bufferSize,
+                     const Poco::Net::HTTPRequest& request,
+                     std::chrono::duration<float, std::milli> delayMs, MessageMap& map);
 
-    /// Get input/output statistics on this stream
-    void getIOStats(uint64_t &sent, uint64_t &recv)
-    {
-        sent = _bytesSent;
-        recv = _bytesRecvd;
-    }
+    void handleExpect(std::string_view expect);
+
+    bool checkChunks(const Poco::Net::HTTPRequest& request, size_t headerSize, MessageMap& map,
+                     std::chrono::duration<float, std::milli> delayMs);
 
     Buffer& getInBuffer() { return _inBuffer; }
 
@@ -1293,8 +1628,9 @@ public:
 
     int getIncomingFD(SharedFDType eType) const
     {
-        if (eType < _incomingFDs.size())
-            return _incomingFDs[eType];
+        const size_t eTypeIdx = static_cast<size_t>(eType);
+        if (eTypeIdx < _incomingFDs.size())
+            return _incomingFDs[eTypeIdx];
         return -1;
     }
 
@@ -1305,7 +1641,7 @@ public:
     /// buffer for an optimal transmission.
     int getSendBufferCapacity() const
     {
-        if (Util::isMobileApp())
+        if constexpr (Util::isMobileApp())
             return INT_MAX; // We want to always send a single record in one go
         const int capacity = getSendBufferSize();
         return std::max<int>(0, capacity - _outBuffer.size());
@@ -1321,10 +1657,6 @@ public:
         return std::string();
     }
 
-protected:
-
-    std::vector<std::pair<size_t, size_t>> findChunks(Poco::Net::HTTPRequest &request);
-
     /// Called when a polling event is received.
     /// @events is the mask of events that triggered the wake.
     void handlePoll(SocketDisposition &disposition,
@@ -1332,26 +1664,43 @@ protected:
                     const int events) override
     {
         ASSERT_CORRECT_SOCKET_THREAD(this);
+        assert((getFD() >= 0 || isShutdown()) && "Socket is closed but not marked correctly");
 
-        _socketHandler->checkTimeout(now);
+        if (_socketHandler->checkTimeout(now))
+        {
+            assert(isShutdown() && "checkTimeout should have issued shutdown");
+            setShutdown();
+            LOGA_DBG(Socket, "socket timeout: " << getStatsString(now) << ", " << *this);
+            disposition.setClosed();
+            return;
+        }
+
+        if (!isOpen() || checkRemoval(now))
+        {
+            disposition.setClosed();
+            return;
+        }
 
         if (!events && _inBuffer.empty())
             return;
+
+        setLastSeenTime(now);
 
         bool closed = (events & (POLLHUP | POLLERR | POLLNVAL));
 
         if (events & POLLIN)
         {
-            // readIncomingData returns false only if the read len is 0 (closed).
+            // readIncomingData returns 0 only if the read len is 0 (closed).
             // Oddly enough, we don't necessarily get POLLHUP after read(2) returns 0.
             const int read = readIncomingData();
             const int last_errno = errno;
             LOGA_TRC(Socket, "Incoming data buffer "
-                    << _inBuffer.size() << " bytes, read result: " << read << ", events: 0x"
-                    << std::hex << events << std::dec << " (" << (closed ? "closed" : "not closed")
-                    << ')'
+                                 << _inBuffer.size() << " bytes, read result: " << read
+                                 << ", events: 0x" << std::hex << events << std::dec << " ("
+                                 << (closed ? "closed" : "not closed") << ')'
 #ifdef LOG_SOCKET_DATA
-                    << (!_inBuffer.empty() ? Util::dumpHex(_inBuffer, ":\n") : std::string())
+                                 << (!_inBuffer.empty() ? HexUtil::dumpHex(_inBuffer, ":\n")
+                                                        : std::string())
 #endif
             );
 
@@ -1369,7 +1718,8 @@ protected:
             }
             else if (read == 0 || (read < 0 && (last_errno == EPIPE || last_errno == ECONNRESET)))
             {
-                LOG_DBG("Closed after reading");
+                // There is nothing more to read; either we got EOF, or we drained after ECONNRESET.
+                LOG_DBG("Closed after reading. Read result: " << read << " errno: " << Util::symbolicErrno(last_errno));
                 closed = true;
             }
         }
@@ -1382,6 +1732,9 @@ protected:
 
             try
             {
+                // Keep the current handler alive, while the incoming message is handled.
+                std::shared_ptr<ProtocolHandlerInterface> socketHandler(_socketHandler);
+
                 _socketHandler->handleIncomingMessage(disposition);
             }
             catch (const std::exception& exception)
@@ -1395,7 +1748,7 @@ protected:
                 disposition.setClosed();
             }
 
-            if (disposition.isMove() || disposition.isTransfer())
+            if (disposition.isTransfer())
                 return;
         }
 
@@ -1414,7 +1767,7 @@ protected:
             if (_shutdownSignalled && _outBuffer.empty())
             {
                 LOG_TRC("Shutdown Signaled. Close Connection.");
-                closeConnection();
+                shutdownConnection();
                 closed = true;
                 break;
             }
@@ -1437,27 +1790,19 @@ protected:
                     }
                 }
             }
-        }
-        while (oldSize != _outBuffer.size());
+        } while (oldSize != _outBuffer.size());
 
         if (closed)
         {
             LOG_TRC("Closed. Firing onDisconnect.");
-            _closed = true;
-            _socketHandler->onDisconnect();
+            ensureDisconnected();
+            setShutdown();
+            disposition.setClosed();
         }
-
-        if (_closed)
+        else if (!isOpen())
             disposition.setClosed();
     }
 
-    void handshakeFail()
-    {
-        if (_socketHandler)
-            _socketHandler->onHandshakeFail();
-    }
-
-public:
     /// Override to write data out to socket.
     /// Returns the last return from writeData.
     virtual int writeOutgoingData()
@@ -1481,16 +1826,19 @@ public:
 
                 // 0 len is unspecified result, according to man write(2).
                 if (len < 0 && last_errno != EAGAIN && last_errno != EWOULDBLOCK)
-                    LOG_SYS_ERRNO(last_errno, "Socket write returned " << len);
+                    LOG_ERR_ERRNO(last_errno, "Socket write returned " << len);
                 else if (len <= 0) // Trace errno for debugging, even for "unspecified result."
                     LOGA_TRC(Socket, "Write failed, have " << _outBuffer.size() << " buffered bytes ("
                              << Util::symbolicErrno(last_errno) << ": "
                              << std::strerror(last_errno) << ')');
                 else // Success.
-                    LOGA_TRC(Socket, "Wrote " << len << " bytes of " << _outBuffer.size() << " buffered data"
+                    LOGA_TRC(Socket,
+                             "Wrote "
+                                 << len << " bytes of " << _outBuffer.size() << " buffered data"
 #ifdef LOG_SOCKET_DATA
-                            << (len ? Util::dumpHex(std::string(_outBuffer.getBlock(), len), ":\n")
-                                    : std::string())
+                                 << (len ? HexUtil::dumpHex(std::string(_outBuffer.getBlock(), len),
+                                                            ":\n")
+                                         : std::string())
 #endif
                     );
             }
@@ -1500,7 +1848,7 @@ public:
             {
                 LOG_ASSERT_MSG(len <= ssize_t(_outBuffer.size()),
                                "Consumed more data than available");
-                _bytesSent += len;
+                notifyBytesSent(len);
                 _outBuffer.eraseFirst(len);
             }
             else
@@ -1521,7 +1869,16 @@ public:
 
     void dumpState(std::ostream& os) override;
 
+    static size_t getExternalConnectionCount() { return ExternalConnectionCount; }
+
 protected:
+    void handshakeFail()
+    {
+        if (_socketHandler)
+            _socketHandler->onHandshakeFail();
+    }
+
+#if !MOBILEAPP
     /// Reads data with file descriptors as control data if received.
     /// Can be used only with Unix sockets.
     int readFDs(char* buf, int len, std::vector<int>& fds)
@@ -1556,27 +1913,29 @@ protected:
                 size_t fds_count = static_cast<size_t>(cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
                 int* fdsField = (int*)CMSG_DATA(cmsg);
                 fds.assign(fdsField, fdsField + fds_count);
-                if (_readType == UseRecvmsgExpectFD)
+                if (_readType == ReadType::UseRecvmsgExpectFD)
                 {
-                    _readType = NormalRead;
+                    _readType = ReadType::NormalRead;
                 }
             }
         }
 
         return ret;
     }
+#endif // !MOBILEAPP
 
     /// Override to handle reading of socket data differently.
     virtual int readData(char* buf, int len)
     {
         ASSERT_CORRECT_SOCKET_THREAD(this);
+        assert((getFD() >= 0 || isShutdown()) && "Socket is closed but not marked correctly");
 
         // avoided in readIncomingData
         if (ignoringInput())
             return -1;
 
 #if !MOBILEAPP
-        if (_readType == UseRecvmsgExpectFD)
+        if (_readType == ReadType::UseRecvmsgExpectFD)
             return readFDs(buf, len, _incomingFDs);
 
 #if ENABLE_DEBUG
@@ -1594,6 +1953,8 @@ protected:
     virtual int writeData(const char* buf, const int len)
     {
         ASSERT_CORRECT_SOCKET_THREAD(this);
+        assert((getFD() >= 0 || isShutdown()) && "Socket is closed but not marked correctly");
+
 #if !MOBILEAPP
 #if ENABLE_DEBUG
         if (simulateSocketError(false))
@@ -1615,7 +1976,20 @@ protected:
         return _shutdownSignalled;
     }
 
-protected:
+    void setThreadOwner(const std::thread::id &id) override
+    {
+        Socket::setThreadOwner(id);
+        if (_socketHandler)
+            ProtocolThreadOwnerChange::setThreadOwner(*_socketHandler, id);
+    }
+
+    void resetThreadOwner() override
+    {
+        Socket::resetThreadOwner();
+        if (_socketHandler)
+            ProtocolThreadOwnerChange::resetThreadOwner(*_socketHandler);
+    }
+
 #if ENABLE_DEBUG
     /// Return true and set errno to simulate an error
     bool simulateSocketError(bool read);
@@ -1625,29 +1999,38 @@ private:
     /// The hostname (or IP) of the peer we are connecting to.
     const std::string _hostname;
 
-    /// Client handling the actual data.
-    std::shared_ptr<ProtocolHandlerInterface> _socketHandler;
-
     Buffer _inBuffer;
     Buffer _outBuffer;
 
-    uint64_t _bytesSent;
-    uint64_t _bytesRecvd;
+    std::vector<int> _incomingFDs;
 
-    enum class WSState { HTTP, WS } _wsState;
+    /// Client handling the actual data.
+    std::shared_ptr<ProtocolHandlerInterface> _socketHandler;
 
-    /// True if we are already closed.
-    bool _closed;
+    STATE_ENUM(WSState, HTTP, WS);
+    WSState _wsState;
 
-    /// True if we've received a Continue in response to an Expect: 100-continue
-    bool _sentHTTPContinue;
+    ReadType _readType;
 
     /// True when shutdown was requested via shutdown().
     /// It's accessed from different threads.
     std::atomic_bool _shutdownSignalled;
-    std::vector<int> _incomingFDs;
-    ReadType _readType;
     std::atomic_bool _inputProcessingEnabled;
+
+    /// Did we emit the onDisconnect event yet
+    bool _doneDisconnect;
+
+    /// True if owner is in client role, otherwise false (server)
+    bool _isClient:1;
+
+    /// True if host is localhost
+    bool _isLocalHost:1;
+
+    /// True if we've received a Continue in response to an Expect: 100-continue
+    bool _sentHTTPContinue:1;
+
+    bool isExternalCountedConnection() const { return !_isClient && isIPType(); }
+    static std::atomic<size_t> ExternalConnectionCount; // accepted external TCP IPv4/IPv6 socket count
 };
 
 enum class WSOpCode : unsigned char {

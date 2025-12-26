@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -14,12 +15,12 @@
 
 /* global app */
 
-class FormulaUsagePopup extends L.Control.AutoCompletePopup {
+class FormulaUsagePopup extends AutoCompletePopup {
 	usageText: string;
 	newPopupData: PopupData;
 
-	constructor(map: ReturnType<typeof L.map>) {
-		super('formulausagePopup', map);
+	constructor(map: any) {
+		super(AutoCompleteDialogId.FormulaUsagePopup, map);
 		this.newPopupData = {
 			children: [
 				{
@@ -31,12 +32,14 @@ class FormulaUsagePopup extends L.Control.AutoCompletePopup {
 				} as any as WidgetJSON,
 			] as Array<WidgetJSON>,
 			jsontype: 'dialog',
-			type: 'dialog',
+			type: 'dialog', // exception: dialog but it behaves like a popup
 			cancellable: true,
-			popupParent: '',
-			clickToClose: '',
+			hasClose: false, // do not show titlebar
+			isAutoCompletePopup: true, // don't steal focus
+			popupParent: undefined,
+			clickToClose: undefined,
 			id: 'formulausagePopup',
-			title: '',
+			title: '', // no titlebar
 		} as PopupData;
 	}
 
@@ -47,7 +50,7 @@ class FormulaUsagePopup extends L.Control.AutoCompletePopup {
 	}
 
 	openFormulaUsagePopup(ev: FireEvent) {
-		this.openMentionPopup({ data: ev });
+		this.openPopup({ data: ev });
 		this.map.focus();
 	}
 
@@ -79,7 +82,3 @@ class FormulaUsagePopup extends L.Control.AutoCompletePopup {
 		return false;
 	}
 }
-
-L.control.formulausage = function (map: any) {
-	return new FormulaUsagePopup(map);
-};

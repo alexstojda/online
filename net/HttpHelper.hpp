@@ -11,42 +11,62 @@
 
 #pragma once
 
-#include "Util.hpp"
+#include <common/Uri.hpp>
+#include <HttpRequest.hpp>
+
 #include <memory>
 #include <string>
-
-#include <HttpRequest.hpp>
 
 class StreamSocket;
 
 namespace HttpHelper
 {
 /// Write headers and body for an error response.
-void sendError(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
-               const std::string& body = std::string(),
-               const std::string& extraHeader = std::string());
+inline void sendError(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
+                      std::string_view body = std::string_view(),
+                      std::string_view extraHeader = std::string_view())
+{
+    std::ostringstream oss;
+    oss << "HTTP/1.1 " << errorCode << "\r\n"
+        << "Date: " << Util::getHttpTimeNow() << "\r\n"
+        << "Content-Length: " << body.size() << "\r\n"
+        << extraHeader << "\r\n"
+        << body;
+    socket->send(oss.str());
+}
 
 /// Write headers and body for an error response. Afterwards, shutdown the socket.
-void sendErrorAndShutdown(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
-                          const std::string& body = std::string(),
-                          const std::string& extraHeader = std::string());
+inline void sendErrorAndShutdown(http::StatusCode errorCode,
+                                 const std::shared_ptr<StreamSocket>& socket,
+                                 std::string_view body = std::string_view(),
+                                 const std::string& extraHeader = std::string())
+{
+    sendError(errorCode, socket, body, extraHeader + "Connection: close\r\n");
+    socket->asyncShutdown();
+    socket->ignoreInput();
+}
 
 /// Sends file as HTTP response and shutdown the socket.
 void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
-                         http::Response& response,
-                         bool noCache = false, bool deflate = false, const bool headerOnly = false);
+                         http::Response& response, bool noCache = false, bool deflate = false,
+                         bool headerOnly = false);
+
+/// Sends file as HTTP response.
+void sendFile(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
+              http::Response& response, bool noCache = false, bool deflate = false,
+              bool headerOnly = false);
 
 /// Verifies that the given WOPISrc is properly URI-encoded.
 /// Warns if it isn't and, in debug builds, closes the socket (if given) and returns false.
 /// The idea is to only warn in release builds, but to help developers in debug builds.
 /// Returns false only in debug build.
 inline bool verifyWOPISrc(const std::string& uri, const std::string& wopiSrc,
-                          const std::shared_ptr<StreamSocket>& socket = {})
+                          [[maybe_unused]] const std::shared_ptr<StreamSocket>& socket = {})
 {
     // getQueryParameters(), which is used to extract wopiSrc, decodes the values.
     // Compare with the URI. WopiSrc is complex enough to require encoding.
     // But, if it matches, check if the WOPISrc actually needed encoding.
-    if (uri.find(wopiSrc) != std::string::npos && Util::needsURIEncoding(wopiSrc))
+    if (uri.find(wopiSrc) != std::string::npos && Uri::needsEncoding(wopiSrc))
     {
 #if !ENABLE_DEBUG
         (void)socket;

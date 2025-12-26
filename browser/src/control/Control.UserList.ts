@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -9,8 +10,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 /*
- * L.Control.UserList
+ * window.L.Control.UserList
  */
+/* global app */
 
 interface UserExtraInfo {
 	avatar: string;
@@ -33,7 +35,7 @@ interface UserEvent {
 	readonly: boolean;
 }
 
-class UserList extends L.Control {
+class UserList extends window.L.Control {
 	options: {
 		userLimitHeader: number;
 		userLimitHeaderWhenFollowing: number;
@@ -64,7 +66,7 @@ class UserList extends L.Control {
 
 	users: Map<number, User> = new Map();
 
-	onAdd(map: ReturnType<typeof L.map>) {
+	onAdd(map: any) {
 		this.map = map;
 
 		map.on('addview', this.onAddView, this);
@@ -80,6 +82,9 @@ class UserList extends L.Control {
 			this.options.oneUser = _('1 user');
 			this.options.noUser = _('0 users');
 		}
+
+		const userListElement = document.getElementById('userListSummary');
+		userListElement.setAttribute('aria-label', _('User List Summary'));
 
 		this.registerHeaderAvatarEvents();
 	}
@@ -121,21 +126,19 @@ class UserList extends L.Control {
 		app.setFollowingOff();
 	}
 
-	followUser(viewId: number) {
+	followUser(viewId: number, instantJump: boolean = true) {
 		const myViewId = this.map._docLayer._viewId;
 		const followingViewId = app.getFollowedViewId();
-		const followMyself = viewId === followingViewId;
+		const followMyself = viewId === myViewId;
+
+		if (followingViewId === viewId) return;
 
 		app.setFollowingUser(viewId);
 
 		if (followMyself) {
-			this.map._goToViewId(myViewId);
-			this.map._setFollowing(true, myViewId);
-			this.renderAll();
-			return;
+			this.map._setFollowing(true, myViewId, instantJump);
 		} else if (viewId !== -1) {
-			this.map._goToViewId(viewId);
-			this.map._setFollowing(true, viewId);
+			this.map._setFollowing(true, viewId, instantJump);
 		} else {
 			this.unfollowAll();
 			this.map._setFollowing(false, -1);
@@ -159,10 +162,10 @@ class UserList extends L.Control {
 		let img = cachedElement;
 
 		if (img === undefined) {
-			img = L.DomUtil.create('img', 'avatar-img') as HTMLImageElement;
+			img = window.L.DomUtil.create('img', 'avatar-img') as HTMLImageElement;
 		}
 
-		L.LOUtil.setUserImage(img, this.map, viewId);
+		app.LOUtil.setUserImage(img, this.map, viewId);
 
 		img.alt = this.options.userAvatarAlt.replace('{user}', username);
 
@@ -181,7 +184,7 @@ class UserList extends L.Control {
 		extraInfo: UserExtraInfo,
 		color: string,
 	) {
-		var content = L.DomUtil.create('tr', 'useritem');
+		var content = window.L.DomUtil.create('tr', 'useritem');
 		content.id = 'user-' + viewId;
 		$(document).on(
 			'click',
@@ -189,8 +192,8 @@ class UserList extends L.Control {
 			this.onUseritemClicked.bind(this),
 		);
 
-		var iconTd = L.DomUtil.create('td', 'usercolor', content);
-		var nameTd = L.DomUtil.create('td', 'username cool-font', content);
+		var iconTd = window.L.DomUtil.create('td', 'usercolor', content);
+		var nameTd = window.L.DomUtil.create('td', 'username cool-font', content);
 
 		const avatarElement = this.createAvatar(
 			undefined,
@@ -386,7 +389,7 @@ class UserList extends L.Control {
 			you = true;
 		} else {
 			username = e.username;
-			color = L.LOUtil.rgbToHex(this.map.getViewColor(e.viewId));
+			color = app.LOUtil.rgbToHex(this.map.getViewColor(e.viewId));
 			you = false;
 		}
 
@@ -398,9 +401,7 @@ class UserList extends L.Control {
 			readonly: e.readonly,
 		});
 
-		if (!you) {
-			this.showJoinLeaveMessage('join', username, color);
-		}
+		this.showJoinLeaveMessage('join', e.viewId, username, color);
 
 		this.renderAll();
 	}
@@ -414,7 +415,7 @@ class UserList extends L.Control {
 		}
 
 		if (user !== undefined) {
-			this.showJoinLeaveMessage('leave', user.username, user.color);
+			this.showJoinLeaveMessage('leave', e.viewId, user.username, user.color);
 		}
 
 		this.renderAll();
@@ -450,10 +451,15 @@ class UserList extends L.Control {
 
 	showJoinLeaveMessage(
 		type: 'join' | 'leave',
-		username: string,
+		viewId: number,
+		username: string, // As the user no longer exists when we are showing a leave message, we can't get this from the viewId
 		_color: string /* TODO: make this display in user colors */,
 	) {
 		let message;
+
+		if (viewId === this.map._docLayer._viewId) {
+			return;
+		}
 
 		if (type === 'join') {
 			message = this.options.userJoinedPopupMessage.replace('{user}', username);
@@ -479,23 +485,23 @@ class UserList extends L.Control {
 		const following = this.getFollowedUser();
 
 		const userElements = users.map(([viewId, user]) => {
-			const userLabel = L.DomUtil.create('div', 'user-list-item--name');
+			const userLabel = window.L.DomUtil.create('div', 'user-list-item--name');
 			userLabel.innerText = user.username;
 
-			const userFollowingLabel = L.DomUtil.create(
+			const userFollowingLabel = window.L.DomUtil.create(
 				'div',
 				'user-list-item--following-label',
 			);
 			userFollowingLabel.innerText = _('Following');
 
-			const userLabelContainer = L.DomUtil.create(
+			const userLabelContainer = window.L.DomUtil.create(
 				'div',
 				'user-list-item--name-container',
 			);
 			userLabelContainer.appendChild(userLabel);
 			userLabelContainer.appendChild(userFollowingLabel);
 
-			const listItem = L.DomUtil.create('div', 'user-list-item');
+			const listItem = window.L.DomUtil.create('div', 'user-list-item');
 			listItem.setAttribute('data-view-id', viewId);
 			listItem.setAttribute('role', 'button');
 
@@ -516,14 +522,15 @@ class UserList extends L.Control {
 			listItem.appendChild(userLabelContainer);
 			listItem.addEventListener('click', () => {
 				this.followUser(viewId);
+				JSDialog.CloseDropdown('userlist');
 			});
 
 			return listItem;
 		});
 
-		const followEditorWrapper = L.DomUtil.create('div', '');
+		const followEditorWrapper = window.L.DomUtil.create('div', '');
 		followEditorWrapper.id = 'follow-editor';
-		const followEditorCheckbox = L.DomUtil.create(
+		const followEditorCheckbox = window.L.DomUtil.create(
 			'input',
 			'follow-editor-checkbox jsdialog ui-checkbox',
 			followEditorWrapper,
@@ -537,7 +544,7 @@ class UserList extends L.Control {
 		(followEditorCheckbox as HTMLInputElement).checked =
 			app.isFollowingEditor();
 
-		const followEditorCheckboxLabel = L.DomUtil.create(
+		const followEditorCheckboxLabel = window.L.DomUtil.create(
 			'label',
 			'follow-editor-label',
 			followEditorWrapper,
@@ -576,7 +583,7 @@ class UserList extends L.Control {
 
 		followingChip.onclick = () => {
 			this.unfollowAll();
-			this.renderFollowingChip();
+			this.renderAll();
 		};
 
 		followingChip.title = this.options.followingChipTooltipText;
@@ -587,13 +594,13 @@ class UserList extends L.Control {
 	}
 }
 
-L.control.userList = function () {
+window.L.control.userList = function () {
 	return new UserList();
 };
 
-L.control.createUserListWidget = function () {
+window.L.control.createUserListWidget = function () {
 	// TODO: this is not interactive
-	const userlistElement = L.DomUtil.create('div');
+	const userlistElement = window.L.DomUtil.create('div');
 	app.map.userList.renderHeaderAvatarPopover(userlistElement);
-	return userlistElement.outerHTML;
+	return userlistElement;
 };

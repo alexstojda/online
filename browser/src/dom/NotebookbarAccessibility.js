@@ -3,7 +3,7 @@
 	This class is used for managing the accessibility keys of notebookbar control.
 */
 
-/* global app NotebookbarAccessibilityDefinitions _ */
+/* global JSDialog app NotebookbarAccessibilityDefinitions _ */
 
 /*
 	This class relies on following id convention (example for "Home" tab):
@@ -24,11 +24,11 @@ var NotebookbarAccessibility = function() {
 	this.tabInfoList = null; // This is to be fetched from NotebookbarAccessibilityDefinitions class at initialization.
 	this.combination = null;
 	this.filteredItem = null;
-	this.state = 0; // 0: User needs to select a tab. 1: User needs to either select an acccess key of tab content or navigate by arrow keys.
+	this.state = 0; // 0: User needs to select a tab. 1: User needs to either select an access key of tab content, or navigate by arrow keys.
 
 	this.addInfoBox = function(anchorElement) {
 		var visible = anchorElement.id.replace('-button', '');
-		visible = document.getElementById(visible);
+		visible = document.querySelector('[id^="' + visible + '"]');
 
 		if (visible)
 			visible = visible.style.display !== 'none';
@@ -60,12 +60,12 @@ var NotebookbarAccessibility = function() {
 		this.activeTabPointers.infoBoxList = [];
 
 		for (var i = 0; i < this.activeTabPointers.contentList.length; i++) {
-			var element = document.getElementById(this.activeTabPointers.contentList[i].id);
-			if (element) {
+			var element = document.querySelector('[id^="' + this.activeTabPointers.contentList[i].id + '"]');
+			if (element && element.offsetParent !== null) {
 				element.accessKey = this.activeTabPointers.contentList[i].combination;
 				this.activeTabPointers.infoBoxList.push(this.addInfoBox(element));
 			}
-			else
+			else if(!element) // element is null
 				console.warn('NotebookbarAccessibility: Element with id ' + this.activeTabPointers.contentList[i].id + ' doesn\'t exist.');
 		}
 	};
@@ -76,15 +76,9 @@ var NotebookbarAccessibility = function() {
 	*/
 	this.mayShowAcceleratorInfoBoxes = false;
 	this.onDocumentKeyDown = function(event) {
-		if (this.initialized) {
-			if (app.map && app.map.jsdialog && app.map.jsdialog.hasDialogOpened()) {
-				if (event.keyCode === 18)
-					document.body.classList.add('activate-underlines');
-			}
-			else if (event.keyCode === 18 || (event.keyCode === 18 && event.shiftKey)) {
+			 if (this.initialized && (event.keyCode === 18 || (event.keyCode === 18 && event.shiftKey))) {
 				this.mayShowAcceleratorInfoBoxes = true;
 			}
-		}
 	};
 
 	this.onDocumentKeyUp = function(event) {
@@ -141,7 +135,7 @@ var NotebookbarAccessibility = function() {
 	this.checkTabAccelerators = function() {
 		for (var tabId in this.tabInfoList) {
 			if (Object.prototype.hasOwnProperty.call(this.tabInfoList, tabId)) {
-				var element = document.getElementById(tabId);
+				var element = document.querySelector('[id^="' + tabId + '"]');
 				if (element && !element.classList.contains('hidden')) {
 					if (this.tabInfoList[tabId].combination === this.combination) {
 						this.filteredItem = this.tabInfoList[tabId];
@@ -176,9 +170,9 @@ var NotebookbarAccessibility = function() {
 		var itemWasClicked = false;
 
 		if (this.filteredItem !== null) {
-			var element = document.getElementById(this.filteredItem.id);
+			var element = document.querySelector('[id^="' + this.filteredItem.id + '"]');
 			if (element) {
-				// menu button - prioritize dropdown arrow
+				// menu button & overflow button - prioritize dropdown arrow
 				var dropdownArrow = element.querySelector('.arrowbackground');
 				if (dropdownArrow) {
 					element = dropdownArrow;
@@ -237,7 +231,7 @@ var NotebookbarAccessibility = function() {
 	};
 
 	this.setTabDescription = function(tabElem) {
-		var tabDescr = tabElem ? tabElem.textContent + ' ' + _('tab') + ' ' + _('selected') : '';
+		var tabDescr = tabElem ? _('{0} tab selected').replace('{0}', tabElem.textContent) : '';
 		this.accessibilityInputElement.setAttribute('aria-description', tabDescr);
 	};
 
@@ -265,10 +259,17 @@ var NotebookbarAccessibility = function() {
 		this.mayShowAcceleratorInfoBoxes = false;
 		this.filteredItem = null;
 		for (var i = 0; i < this.activeTabPointers.contentList.length; i++) {
-			if (document.getElementById(this.activeTabPointers.contentList[i].id))
-				document.getElementById(this.activeTabPointers.contentList[i].id).accessKey = null;
+			const found = document.querySelector('[id^="' + this.activeTabPointers.contentList[i].id + '"]');
+			if (found)
+				found.accessKey = null;
 			else
 				console.warn('Accessibility - no element with id:' + this.activeTabPointers.contentList[i].id);
+		}
+	};
+
+	this.onInputKeyDown = function(event) {
+		if (event.ctrlKey) {
+			this.resetState();
 		}
 	};
 
@@ -295,7 +296,7 @@ var NotebookbarAccessibility = function() {
 		else if (key === 'ARROWDOWN') {
 			// Try to set focus on the first button of the tab content.
 			var currentSelectedTabPage = this.getCurrentSelectedTabPage();
-			var firstSelectableElement = currentSelectedTabPage.querySelector('.unobutton');
+			var firstSelectableElement = JSDialog.FindFocusableElement(currentSelectedTabPage,'next');
 			firstSelectableElement.focus();
 		}
 		else if (key === 'ARROWRIGHT') {
@@ -357,8 +358,8 @@ var NotebookbarAccessibility = function() {
 		this.tabInfoList = this.definitions.getDefinitions();
 		for (var tabId in this.tabInfoList) {
 			if (Object.prototype.hasOwnProperty.call(this.tabInfoList, tabId)) {
-				var element = document.getElementById(tabId);
-				if (element && !element.classList.contains('hidden')) {
+				var element = document.querySelector('[id^="' + tabId + '"]');
+				if (element && element.offsetParent !== null) {
 					element.accessKey = this.tabInfoList[tabId].combination;
 					this.addInfoBox(element);
 				}
@@ -368,7 +369,7 @@ var NotebookbarAccessibility = function() {
 
 	this.initTabListeners = function() {
 		Object.keys(this.tabInfoList).forEach(function(tabId) {
-			var element = document.getElementById(tabId);
+			var element = document.querySelector('[id^="' + tabId + '"]');
 			if (element) {
 				element.addEventListener('keydown', function(event) {
 					if (event.key === 'Alt') {
@@ -395,6 +396,7 @@ var NotebookbarAccessibility = function() {
 		this.accessibilityInputElement.onfocus = this.onInputFocus.bind(this);
 		this.accessibilityInputElement.onblur = this.onInputBlur.bind(this);
 		this.accessibilityInputElement.onkeyup = this.onInputKeyUp.bind(this);
+		this.accessibilityInputElement.onkeydown = this.onInputKeyDown.bind(this);
 		this.accessibilityInputElement.autocomplete = 'off';
 
 		var container = document.createElement('div');
@@ -407,7 +409,7 @@ var NotebookbarAccessibility = function() {
 
 	this.initialize = function() {
 		setTimeout(function() {
-			if (window.mode.isDesktop()) {
+			if (window.mode.isDesktop() && !this.initialized) {
 				if (document.body.dataset.userinterfacemode === 'notebookbar') {
 					this.tabInfoList = this.definitions.getDefinitions();
 

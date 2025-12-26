@@ -10,9 +10,9 @@ function showSidebar() {
 
 	cy.cGet('#sidebar').should('not.have.class', 'selected');
 	cy.cGet('#sidebar-dock-wrapper').should('not.be.visible');
-	cy.cGet('#sidebar').click({force: true});
+	cy.cGet('#sidebar').click();
 	cy.cGet('#sidebar').should('have.class', 'selected');
-	cy.cGet('#sidebar-dock-wrapper').should('be.visible');
+	cy.cGet('#sidebar-dock-wrapper').should('be.visible').should('not.be.empty');
 
 	cy.log('<< showSidebar - end');
 }
@@ -23,8 +23,8 @@ function hideSidebar() {
 	cy.log('>> hideSidebar - start');
 
 	cy.cGet('#sidebar').should('have.class', 'selected');
-	cy.cGet('#sidebar-dock-wrapper').should('be.visible');
-	cy.cGet('#sidebar').click({force: true});
+	cy.cGet('#sidebar-dock-wrapper').should('be.visible').should('not.be.empty');
+	cy.cGet('#sidebar').click();
 	cy.cGet('#sidebar').should('not.have.class', 'selected');
 	cy.cGet('#sidebar-dock-wrapper').should('not.be.visible');
 
@@ -34,13 +34,19 @@ function hideSidebar() {
 function hideSidebarImpress() {
 	cy.log('>> hideSidebarImpress - start');
 
-	cy.cGet('#modifypage').should('have.class', 'selected');
-	cy.cGet('#sidebar-dock-wrapper').should('be.visible');
-	cy.cGet('#modifypage button').click({force: true});
-	cy.cGet('#modifypage').should('not.have.class', 'selected');
+	cy.cGet('.unoModifyPage').should('have.class', 'selected');
+	cy.cGet('#sidebar-dock-wrapper').should('be.visible').should('not.be.empty');
+	cy.cGet('.unoModifyPage button').click();
+	cy.cGet('.unoModifyPage').should('not.have.class', 'selected');
 	cy.cGet('#sidebar-dock-wrapper').should('not.be.visible');
 
 	cy.log('<< hideSidebarImpress - end');
+}
+
+function sidebarToggle() {
+	cy.log('>> sidebarToggle');
+	// for notebookbar
+	cy.cGet('#optionscontainer [id^="SidebarDeck.PropertyDeck"] button').click();
 }
 
 // Make the status bar visible if it's hidden at the moment.
@@ -64,40 +70,6 @@ function showStatusBarIfHidden() {
 	cy.log('<< showStatusBarIfHidden - end');
 }
 
-// Make the sidebar visible if it's hidden at the moment.
-function showSidebarIfHidden() {
-	cy.log('>> showSidebarIfHidden - start');
-
-	cy.get('#sidebar')
-		.then(function(sidebarItem) {
-			if (!sidebarItem.hasClass('checked')) {
-				showSidebar();
-			}
-		});
-
-	cy.get('#sidebar-dock-wrapper')
-		.should('be.visible');
-
-	cy.log('<< showSidebarIfHidden - end');
-}
-
-// Hide the sidebar if it's visible at the moment.
-function hideSidebarIfVisible() {
-	cy.log('>> hideSidebarIfVisible - start');
-
-	cy.get('#sidebar')
-		.then(function(sidebarItem) {
-			if (sidebarItem.hasClass('checked')) {
-				hideSidebar();
-			}
-		});
-
-	cy.get('#sidebar-dock-wrapper')
-		.should('not.be.visible');
-
-	cy.log('<< hideSidebarIfVisible - end');
-}
-
 // Select a color from colour palette widget used on top toolbar.
 // Parameters:
 // color - a hexadecimal color code without the '#' mark (e.g. 'FF011B')
@@ -105,7 +77,7 @@ function selectColorFromPalette(color) {
 	cy.log('>> selectColorFromPalette - start');
 
 	cy.cGet('.ui-color-picker').should('be.visible');
-	cy.cGet('.ui-color-picker-entry[name="' + color + '"]').click();
+	cy.cGet('.ui-color-picker-entry[value="' + color + '"]').click();
 	cy.cGet('.ui-color-picker').should('not.exist');
 
 	cy.log('<< selectColorFromPalette - end');
@@ -119,7 +91,7 @@ function selectFromListbox(item) {
 
 	cy.cGet('.select2-dropdown').should('be.visible');
 	// We use force because the tooltip sometimes hides the items.
-	cy.cGet('body').contains('.select2-results__option', item).click({force: true});
+	cy.cGet('body').contains('.select2-results__option', item).click();
 	cy.cGet('.select2-dropdown').should('not.exist');
 
 	cy.log('<< selectFromListbox - end');
@@ -135,9 +107,9 @@ function selectFromJSDialogListbox(item, isImage) {
 	// We use force because the tooltip sometimes hides the items.
 	if (isImage) {
 		cy.wait(1000); // We need some time to render custom entries
-		cy.cGet('[id$="-dropdown"].modalpopup img[alt="' + item + '"]').click({force: true});
+		cy.cGet('[id$="-dropdown"].modalpopup img[alt="' + item + '"]').click();
 	} else
-		cy.cGet('[id$="-dropdown"].modalpopup').contains('span', item).click({force: true});
+		cy.cGet('[id$="-dropdown"].modalpopup').contains('span', item).click();
 
 	cy.cGet('[id$="-dropdown"].modalpopup').should('not.exist');
 
@@ -181,13 +153,7 @@ function shouldHaveZoomLevel(zoomLevel) {
 function makeZoomItemsVisible() {
 	cy.log('>> makeZoomItemsVisible - start');
 
-	cy.cGet('#toolbar-down #zoomin')
-		.then(function(zoomInItem) {
-			if (!Cypress.dom.isVisible(zoomInItem)) {
-				cy.cGet('#toolbar-down .ui-scroll-right').click();
-			}
-		});
-
+	// Ensure the #zoomin element is visible
 	cy.cGet('#toolbar-down #zoomin').should('be.visible');
 
 	cy.log('<< makeZoomItemsVisible - end');
@@ -208,9 +174,9 @@ function doZoom(zoomIn) {
 
 	// Force because sometimes the icons are scrolled off the screen to the right
 	if (zoomIn) {
-		cy.cGet('#toolbar-down #zoomin').click({force: true});
+		cy.cGet('#toolbar-down #zoomin').click();
 	} else {
-		cy.cGet('#toolbar-down #zoomout').click({force: true});
+		cy.cGet('#toolbar-down #zoomout').click();
 	}
 
 	// Wait for animation to complete
@@ -239,13 +205,14 @@ function zoomOut() {
 // Parameters:
 // zoomLevel - a number specifing the zoom level  (e.g. '100' means 100%).
 //             See also the status bar's zoom level list for possible values.
-function selectZoomLevel(zoomLevel) {
+function selectZoomLevel(zoomLevel, makeZoomVisible = true) {
 	cy.log('>> selectZoomLevel - start');
 
 	// Force because sometimes the icons are scrolled off the screen to the right
-	makeZoomItemsVisible();
-	cy.cGet('#toolbar-down #zoom .arrowbackground').click({force: true});
-	cy.cGet('#zoom-dropdown').contains('.ui-combobox-entry', zoomLevel).click({force: true});
+	if (makeZoomVisible)
+		makeZoomItemsVisible();
+	cy.cGet('#toolbar-down #zoom .arrowbackground').click();
+	cy.cGet('#zoom-dropdown').contains('.ui-combobox-entry', zoomLevel).click();
 	shouldHaveZoomLevel(zoomLevel);
 
 	cy.log('<< selectZoomLevel - end');
@@ -256,36 +223,46 @@ function resetZoomLevel() {
 	cy.log('>> resetZoomLevel - start');
 
 	// Force because sometimes the icons are scrolled off the screen to the right
-	cy.cGet('#toolbar-down #zoomreset').click({force: true});
+	cy.cGet('#toolbar-down #zoomreset').click();
 	shouldHaveZoomLevel('100');
 
 	cy.log('<< resetZoomLevel - end');
 }
 
-function insertImage(docType) {
+function insertImage() {
 	cy.log('>> insertImage - start');
 
-	selectZoomLevel('50');
-
-	cy.cGet('#toolbar-up .ui-scroll-right').click();
+	selectZoomLevel('50', false);
 
 	const mode = Cypress.env('USER_INTERFACE');
 
-	if (mode === 'notebookbar')
-		cy.cGet('#toolbar-up .ui-scroll-right').click();
-
-	if (docType === 'calc' &&  mode === 'notebookbar') {
+	if (mode === 'notebookbar') {
 		cy.cGet('#Insert-tab-label').click();
-		cy.cGet('#Insert-container .unoInsertGraphic').click({force: true});
-	}
-	else {
-		cy.cGet('#Home-container .unoInsertGraphic').click({force: true});
+		cy.cGet('#Insert-container .unoInsertGraphic').filter(':visible').click();
+	} else {
+		cy.cGet('#toolbar-up .unoInsertGraphic').click();
 	}
 
 	cy.cGet('#insertgraphic[type=file]').attachFile('/desktop/writer/image_to_insert.png');
 	cy.cGet('#document-container svg g').should('exist');
 
 	cy.log('<< insertImage - end');
+}
+
+function insertVideo() {
+	cy.log('>> insertVideo - start');
+
+	selectZoomLevel('50', false);
+
+	cy.cGet('#Insert-tab-label').click();
+	cy.cGet('#Insert-container .inline.insertmultimedia').click();
+
+	cy.cGet('#insertmultimedia[type=file]').attachFile(
+		'/desktop/impress/video_to_insert.mp4'
+	);
+	cy.cGet('#document-container svg foreignObject video').should('exist');
+
+	cy.log('<< insertVideo - end');
 }
 
 function deleteImage() {
@@ -297,20 +274,8 @@ function deleteImage() {
 	cy.log('<< deleteImage - end');
 }
 
-function assertImageSize(expectedWidth, expectedHeight) {
-	cy.log('>> assertImageSize - start');
-
-	cy.cGet('#canvas-container > svg')
-		.then(function(element) {
-			expect(element).to.have.length(1);
-			const actualWidth = parseInt(element[0].style.width.replace('px', ''));
-			const actualHeight = parseInt(element[0].style.height.replace('px', ''));
-
-			expect(actualWidth).to.be.closeTo(expectedWidth, 10);
-			expect(actualHeight).to.be.closeTo(expectedHeight, 10);
-		});
-
-	cy.log('<< assertImageSize - end');
+function closeNavigatorSidebar () {
+	cy.cGet('.close-navigation-button').click();
 }
 
 function insertComment(text = 'some text0', save = true) {
@@ -319,7 +284,7 @@ function insertComment(text = 'some text0', save = true) {
 	var mode = Cypress.env('USER_INTERFACE');
 	if (mode === 'notebookbar') {
 		cy.cGet('#Insert-tab-label').click();
-		cy.cGet('#insert-insert-annotation').click({force: true});
+		cy.cGet('#Insert .unoInsertAnnotation').click();
 	} else {
 		cy.cGet('#menu-insert').click();
 		cy.cGet('#menu-insertcomment').click();
@@ -328,10 +293,6 @@ function insertComment(text = 'some text0', save = true) {
 	// Use .last() because there might be multiple comments
 	cy.cGet('.cool-annotation').last({log: false}).find('#annotation-modify-textarea-new').should('not.have.attr','disabled');
 	cy.cGet('.cool-annotation').last({log: false}).find('#annotation-modify-textarea-new').type(text);
-	// Click outside modify area to trigger update
-	cy.cGet('.cool-annotation').last({log: false}).find('.cool-annotation-table').click();
-	// In case of small window to expand the comments
-	cy.cGet('.cool-annotation').last({log: false}).find('.cool-annotation-img').click();
 	// Check that comment exists
 	cy.cGet('.cool-annotation').last({log: false}).find('.cool-annotation-textarea').should('contain',text);
 
@@ -357,6 +318,26 @@ function insertComment(text = 'some text0', save = true) {
 	cy.log('<< insertComment - end');
 }
 
+
+function toggleComments(resolved = false) {
+	cy.log('>> toggleComments - start');
+
+	var mode = Cypress.env('USER_INTERFACE');
+	if (mode === 'notebookbar') {
+		cy.cGet('#Review-tab-label').click();
+		if (resolved) getNbIcon('ShowResolvedAnnotations', 'Review').click();
+		else cy.cGet('.showannotations').click();
+		// to avoid notebookbar collapse in subsequent calls to toggleComments.
+		cy.cGet('#Home-tab-label').click();
+	} else {
+		cy.cGet('#menu-view').click();
+		if (resolved) cy.cGet('#menu-showresolved').click();
+		else cy.cGet('#menu-showannotations').click();
+	}
+
+	cy.log('>> toggleComments - end');
+}
+
 function switchUIToNotebookbar() {
 	cy.log('>> switchUIToNotebookbar - start');
 
@@ -364,7 +345,7 @@ function switchUIToNotebookbar() {
 		var userInterfaceMode = win['0'].userInterfaceMode;
 		if (userInterfaceMode !== 'notebookbar') {
 			cy.cGet('#menu-view').click();
-			cy.cGet('#menu-toggleuimode').should($el => { expect(Cypress.dom.isDetached($el)).to.eq(false); }).click();
+			cy.cGet('#menu-toggleuimode').click();
 		}
 		Cypress.env('USER_INTERFACE', 'notebookbar');
 	});
@@ -379,7 +360,7 @@ function switchUIToCompact() {
 		var userInterfaceMode = win['0'].userInterfaceMode;
 		if (userInterfaceMode === 'notebookbar') {
 			cy.cGet('#View-tab-label').click();
-			cy.cGet('#toggleuimode').click();
+			getNbIcon('toggleuimode', 'View').click();
 		}
 	});
 
@@ -516,12 +497,76 @@ function setAccessibilityState(enable) {
 	cy.log('<< setAccessibilityState - end');
 }
 
+// best way to simulate scrolling using mouse wheel I found -> no click performed
+function scrollWriterDocumentToTop() {
+	cy.getFrameWindow()
+		.its('L')
+		.then(function(L) {
+			L.Map.THIS.panTo({lat: -58.62652658901402, lng: 68.96288389396415});
+		});
+	assertScrollbarPosition('vertical', 0, 10);
+}
+
+function scrollViewDown() {
+	cy.getFrameWindow()
+		.its('L')
+		.then(function(L) {
+			L.Map.THIS.panBy({x: 0, y: 4000});
+			updateFollowingUsers();
+		});
+}
+
+function updateFollowingUsers() {
+	cy.getFrameWindow()
+		.its('app')
+		.then(function(app) {
+			app.updateFollowingUsers();
+		});
+}
+
+function assertVisiblePage(min, max, allPages) {
+	const expectedArray = [];
+
+	if (min === max) {
+		expectedArray.push('Page ' + min + ' of ' + allPages);
+	} else {
+		expectedArray.push('Page ' + min + ' of ' + allPages);
+		expectedArray.push('Pages ' + min + ' and ' + max + ' of ' + allPages);
+		expectedArray.push('Page ' + max + ' of ' + allPages);
+	}
+
+	cy.cGet('#StatePageNumber').invoke('text').should('be.oneOf', expectedArray);
+}
+
+/// get icon for given uno command from classic toolbar
+function getCompactIcon(unoCommand) {
+	return cy.cGet('#toolbar-up .uno' + unoCommand + ':visible');
+}
+
+/// get icon for given uno command from notebookbar
+function getNbIcon(unoCommand, tabName) {
+	return cy.cGet((tabName ? '#' + tabName + '-container' : '') + '.notebookbar  .uno' + unoCommand + ' > button:visible');
+}
+
+/// get icon arrow for given uno command from classic toolbar to open the dropdown
+function getCompactIconArrow(unoCommand) {
+	return cy.cGet('#toolbar-up .uno' + unoCommand + ' > .arrowbackground:visible');
+}
+
+/// get icon arrow for given uno command from notebookbar to open the dropdown
+function getNbIconArrow(unoCommand, tabName) {
+	return cy.cGet((tabName ? '#' + tabName + '-container' : '') + '.notebookbar  .uno' + unoCommand + ' > .arrowbackground:visible');
+}
+
+/// get gropdown element for menu with given id
+function getDropdown(dropdownId) {
+	return cy.cGet('[id^="' + dropdownId + '"].modalpopup');
+}
+
 module.exports.showSidebar = showSidebar;
 module.exports.hideSidebar = hideSidebar;
 module.exports.hideSidebarImpress = hideSidebarImpress;
 module.exports.showStatusBarIfHidden = showStatusBarIfHidden;
-module.exports.showSidebarIfHidden = showSidebarIfHidden;
-module.exports.hideSidebarIfVisible = hideSidebarIfVisible;
 module.exports.selectColorFromPalette = selectColorFromPalette;
 module.exports.selectFromListbox = selectFromListbox;
 module.exports.selectFromJSDialogListbox = selectFromJSDialogListbox;
@@ -533,14 +578,26 @@ module.exports.shouldHaveZoomLevel = shouldHaveZoomLevel;
 module.exports.selectZoomLevel = selectZoomLevel;
 module.exports.resetZoomLevel = resetZoomLevel;
 module.exports.insertImage = insertImage;
+module.exports.insertVideo = insertVideo;
 module.exports.deleteImage = deleteImage;
 module.exports.insertComment = insertComment;
+module.exports.toggleComments = toggleComments;
 module.exports.actionOnSelector = actionOnSelector;
 module.exports.assertScrollbarPosition = assertScrollbarPosition;
 module.exports.pressKey = pressKey;
-module.exports.assertImageSize = assertImageSize;
 module.exports.openReadOnlyFile = openReadOnlyFile;
 module.exports.switchUIToNotebookbar = switchUIToNotebookbar;
 module.exports.switchUIToCompact = switchUIToCompact;
 module.exports.checkAccessibilityEnabledToBe = checkAccessibilityEnabledToBe;
 module.exports.setAccessibilityState = setAccessibilityState;
+module.exports.scrollWriterDocumentToTop = scrollWriterDocumentToTop;
+module.exports.scrollViewDown = scrollViewDown;
+module.exports.updateFollowingUsers = updateFollowingUsers;
+module.exports.assertVisiblePage = assertVisiblePage;
+module.exports.closeNavigatorSidebar = closeNavigatorSidebar;
+module.exports.sidebarToggle = sidebarToggle;
+module.exports.getCompactIcon = getCompactIcon;
+module.exports.getNbIcon = getNbIcon;
+module.exports.getCompactIconArrow = getCompactIconArrow;
+module.exports.getNbIconArrow = getNbIconArrow;
+module.exports.getDropdown = getDropdown;

@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -18,10 +19,10 @@
 declare var JSDialog: any;
 
 function createScrollButtons(parent: Element, scrollable: Element) {
-	L.DomUtil.addClass(scrollable, 'ui-scroll-wrapper');
+	window.L.DomUtil.addClass(scrollable, 'ui-scroll-wrapper');
 
-	const left = L.DomUtil.create('div', 'ui-scroll-left', parent);
-	const right = L.DomUtil.create('div', 'ui-scroll-right', parent);
+	const left = window.L.DomUtil.create('div', 'ui-scroll-left', parent);
+	const right = window.L.DomUtil.create('div', 'ui-scroll-right', parent);
 
 	JSDialog.AddOnClick(left, () => {
 		const scroll = $(scrollable).scrollLeft() - 300;
@@ -48,26 +49,29 @@ function showArrow(arrow: HTMLElement, show: boolean) {
 function setupResizeHandler(container: Element, scrollable: Element) {
 	const left = container.querySelector('.ui-scroll-left') as HTMLElement;
 	const right = container.querySelector('.ui-scroll-right') as HTMLElement;
+	var isRTL: boolean = document.documentElement.dir === 'rtl';
+	var timer: any; // for shift + mouse wheel up/down
+
 	const handler = function () {
 		const rootContainer = scrollable.querySelector('div');
 		if (!rootContainer) return;
 
 		if (rootContainer.scrollWidth > window.innerWidth) {
 			// we have overflowed content
-			const direction = this._RTL ? -1 : 1;
+			const direction = isRTL ? -1 : 1;
 			if (direction * scrollable.scrollLeft > 0) {
-				if (this._RTL) showArrow(right, true);
+				if (isRTL) showArrow(right, true);
 				else showArrow(left, true);
-			} else if (this._RTL) showArrow(right, false);
+			} else if (isRTL) showArrow(right, false);
 			else showArrow(left, false);
 
 			if (
 				direction * scrollable.scrollLeft <
 				rootContainer.scrollWidth - window.innerWidth - 1
 			) {
-				if (this._RTL) showArrow(left, true);
+				if (isRTL) showArrow(left, true);
 				else showArrow(right, true);
-			} else if (this._RTL) showArrow(left, false);
+			} else if (isRTL) showArrow(left, false);
 			else showArrow(right, false);
 		} else {
 			showArrow(left, false);
@@ -75,14 +79,114 @@ function setupResizeHandler(container: Element, scrollable: Element) {
 		}
 	}.bind(this);
 
+	// handler for toolbar and statusbar
+	// runs if shift + mouse wheel up/down are used
+	const wheelHandler = (e: WheelEvent) => {
+		const rootContainer = scrollable.querySelector('div');
+		if (
+			!rootContainer ||
+			(!e.shiftKey &&
+				// let horizontal scrolling through
+				e.deltaX == 0)
+		)
+			return;
+
+		clearTimeout(timer);
+		// wait until mouse wheel stops scrolling
+		timer = setTimeout(function () {
+			JSDialog.RefreshScrollables();
+		}, 350);
+	};
+
 	window.addEventListener('resize', handler);
 	window.addEventListener('scroll', handler);
+	scrollable.addEventListener('wheel', wheelHandler);
+}
+
+function setupPriorityStatusHandler(scrollable: Element, toolItems: any[]) {
+	const handler = function () {
+		const rootContainer = scrollable.querySelector('div');
+		if (!rootContainer) return;
+
+		const statusBarItems = Array.from(rootContainer.children) as HTMLElement[];
+		// Match DOM items to toolItems by ID and set data-priority
+		statusBarItems.forEach((domItem) => {
+			const toolItem = toolItems.find((item) => {
+				const itemIdBase = item.id.split(':')[0]; // The base ID with a possible suffix for example 'languagestatus:LanguageStatusMenu'
+				return (
+					itemIdBase === domItem.id || item.id + '-container' === domItem.id
+				);
+			});
+
+			if (toolItem && toolItem.dataPriority) {
+				domItem.setAttribute('data-priority', toolItem.dataPriority);
+			} else {
+				domItem.removeAttribute('data-priority');
+			}
+		});
+
+		// Reset visibility of hidden statuses
+		statusBarItems.forEach((item) => {
+			item.classList.remove('status-hidden');
+		});
+
+		const availableWidth = window.innerWidth;
+		let contentWidth = rootContainer.scrollWidth;
+
+		if (contentWidth > availableWidth) {
+			// Group items by data-priority
+			const itemsByPriorityLevel: { [key: string]: HTMLElement[] } = {};
+			statusBarItems.forEach((item) => {
+				if (item.hasAttribute('data-priority')) {
+					const priority = item.getAttribute('data-priority') || '0';
+					if (!itemsByPriorityLevel[priority]) {
+						itemsByPriorityLevel[priority] = [];
+					}
+					itemsByPriorityLevel[priority].push(item);
+				}
+			});
+
+			const priorityLevels = Object.keys(itemsByPriorityLevel)
+				.map(Number)
+				.sort((a, b) => b - a);
+
+			let remainingWidthToFit = contentWidth - availableWidth;
+			// Hide items with the same priority level
+			for (const priority of priorityLevels) {
+				const itemsAtPriority = itemsByPriorityLevel[priority];
+				if (!itemsAtPriority) continue;
+
+				// Calculate total width of the items
+				const combinedWidthAtPriority = itemsAtPriority.reduce(
+					(sum, item) => sum + item.offsetWidth,
+					0,
+				);
+
+				if (remainingWidthToFit > 0) {
+					itemsAtPriority.forEach((item) => {
+						item.classList.add('status-hidden');
+					});
+					remainingWidthToFit -= combinedWidthAtPriority;
+					contentWidth -= combinedWidthAtPriority;
+				} else {
+					break;
+				}
+			}
+		}
+	}.bind(this);
+
+	window.addEventListener('resize', handler);
 }
 
 JSDialog.MakeScrollable = function (parent: Element, scrollable: Element) {
-	L.DomUtil.addClass(scrollable, 'ui-scrollable-content');
+	window.L.DomUtil.addClass(scrollable, 'ui-scrollable-content');
 	createScrollButtons(parent, scrollable);
 	setupResizeHandler(parent, scrollable);
+};
+
+JSDialog.MakeStatusPriority = function (scrollable: Element, toolItems: any[]) {
+	window.L.DomUtil.addClass(scrollable, 'ui-scrollable-content');
+	setupPriorityStatusHandler(scrollable, toolItems);
 };
 
 JSDialog.RefreshScrollables = function () {

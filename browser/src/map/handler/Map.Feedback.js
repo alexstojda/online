@@ -1,16 +1,25 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Map.Feedback.
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+/*
+ * window.L.Map.Feedback.
  */
 
 /* global _ */
 
-L.Map.mergeOptions({
+window.L.Map.mergeOptions({
 	feedback: !window.ThisIsAMobileApp,
 	feedbackTimeout: 30000
 });
 
-L.Map.Feedback = L.Handler.extend({
+window.L.Map.Feedback = window.L.Handler.extend({
 
 	addHooks: function () {
 		this.initialized = false;
@@ -20,11 +29,16 @@ L.Map.Feedback = L.Handler.extend({
 		else
 			this._map.on('docloaded', this.onDocLoaded, this);
 
-		L.DomEvent.on(window, 'message', this.onMessage, this);
+		window.L.DomEvent.on(window, 'message', this.onMessage, this);
 	},
 
 	removeHooks: function () {
-		L.DomEvent.off(window, 'message', this.onMessage, this);
+		window.L.DomEvent.off(window, 'message', this.onMessage, this);
+	},
+
+	removeIframe: function () {
+		if (this._iframeDialog)
+			this._iframeDialog.remove()
 	},
 
 	onUpdateList: function () {
@@ -59,18 +73,18 @@ L.Map.Feedback = L.Handler.extend({
 			}
 
 			if (docCount > 15 && currentDate > laterDate && window.autoShowFeedback)
-				setTimeout(L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
+				setTimeout(window.L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
 		}
 	},
 
 	onFeedback: function () {
 		if (this._map.welcome && this._map.welcome.isVisible && this._map.welcome.isVisible()) {
-			setTimeout(L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
+			setTimeout(window.L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
 			return;
 		}
 
 		if (this._map.welcome && this._map.welcome.isVisible && this._map.welcome.isVisible())
-			setTimeout(L.bind(this.onFeedback, this), 3000);
+			setTimeout(window.L.bind(this.onFeedback, this), 3000);
 		else {
 			this.askForFeedbackDialog();
 		}
@@ -85,34 +99,35 @@ L.Map.Feedback = L.Handler.extend({
 
 	showFeedbackDialog: function () {
 		if (this._iframeDialog && this._iframeDialog.hasLoaded())
-			this._iframeDialog.remove();
+			this.removeIframe();
 
-		var lokitHash = document.querySelector('#lokit-version a') || {};
+		var lokitHash = document.querySelector('#lokit-version a');
 		lokitHash = lokitHash ? lokitHash.innerText : '';
-		var wopiHostId = document.querySelector('#wopi-host-id') || {};
+		var wopiHostId = document.querySelector('#wopi-host-id');
 		wopiHostId = wopiHostId ? wopiHostId.innerText : '';
-		var proxyPrefixEnabled = document.querySelector('#proxy-prefix-id') || {};
-		proxyPrefixEnabled = proxyPrefixEnabled ? proxyPrefixEnabled.innerText : '';
+		var proxyPrefixEnabled = window.socketProxy ? "True" : "False";
 
 		var cssVar = getComputedStyle(document.documentElement).getPropertyValue('--co-primary-element');
 		var params = [{ mobile : window.mode.isMobile() },
 			      { cssvar : cssVar},
 			      { wsdhash : window.app.socket.WSDServer.Hash },
+			      { 'version_number' : window.app.socket.WSDServer.Version },
 			      { 'lokit_hash' : lokitHash },
 			      { 'wopi_host_id' : wopiHostId },
-			      { 'proxy_prefix_enabled' : proxyPrefixEnabled }];
+			      { 'proxy_prefix_enabled' : proxyPrefixEnabled },
+			      { 'doc_type': this._map.getDocType()}];
 
 		var options = {
 			prefix: 'iframe-dialog',
 			id: 'iframe-feedback',
 		};
 
-		this._iframeDialog = L.iframeDialog(window.feedbackUrl, params, null, options);
+		this._iframeDialog = window.L.iframeDialog(window.feedbackUrl, params, null, options);
 	},
 
 	onError: function () {
 		window.prefs.remove('WSDFeedbackEnabled');
-		this._iframeDialog.remove();
+		this.removeIframe();
 	},
 
 	onMessage: function (e) {
@@ -131,28 +146,23 @@ L.Map.Feedback = L.Handler.extend({
 		else if (data == 'feedback-never') {
 			window.prefs.set('WSDFeedbackEnabled', false);
 			window.prefs.remove('WSDFeedbackCount');
-			this._iframeDialog.remove();
+			this.removeIframe();
 		} else if (data == 'feedback-later') {
 			var currentDate = new Date();
-			this._iframeDialog.remove();
+			this.removeIframe();
 			window.prefs.set('WSDFeedbackLaterDate', currentDate.getTime());
 			window.prefs.remove('WSDFeedbackCount');
 		} else if (data == 'feedback-submit') {
 			window.prefs.set('WSDFeedbackEnabled', false);
 			window.prefs.remove('WSDFeedbackCount');
-			var that = this;
-			setTimeout(function() {
-				that._iframeDialog.remove();
-			}, 400);
-
 		} else if (data == 'iframe-feedback-load' && !this._iframeDialog.isVisible()) {
-			this._iframeDialog.remove();
-			setTimeout(L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
+			this.removeIframe();
+			setTimeout(window.L.bind(this.onFeedback, this), this._map.options.feedbackTimeout);
 		} else if (data.endsWith('close')) {
-			this._iframeDialog.remove();
+			this.removeIframe();
 		}
 	}
 });
 if (window.feedbackUrl && window.prefs.canPersist) {
-	L.Map.addInitHook('addHandler', 'feedback', L.Map.Feedback);
+	window.L.Map.addInitHook('addHandler', 'feedback', window.L.Map.Feedback);
 }

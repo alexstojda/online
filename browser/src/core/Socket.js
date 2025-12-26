@@ -12,275 +12,31 @@
  * L.Socket contains methods for the communication with the server
  */
 
-/* global app JSDialog _ $ errorMessages Uint8Array brandProductName */
+/* global app JSDialog _ $ errorMessages Uint8Array brandProductName GraphicSelection TileManager SlideBitmapManager SocketBase */
 
-app.definitions.Socket = L.Class.extend({
-	ProtocolVersionNumber: '0.1',
-	ReconnectCount: 0,
-	WasShownLimitDialog: false,
-	WSDServer: {},
-	IndirectSocketReconnectCount: 0,
+app.definitions.Socket = class Socket extends SocketBase {
 
-	/// Whether Trace Event recording is enabled or not. ("Enabled" here means whether it can be
-	/// turned on (and off again), not whether it is on.)
-	enableTraceEventLogging: false,
+	constructor(map) {
+		super(map);
+	}
 
-	// Will be set from lokitversion message
-	TunnelledDialogImageCacheSize: 0,
-
-	getParameterValue: function (s) {
-		var i = s.indexOf('=');
-		if (i === -1)
-			return undefined;
-		return s.substring(i+1);
-	},
-
-	initialize: function (map) {
-		window.app.console.debug('socket.initialize:');
-		this._map = map;
-		this._msgQueue = [];
-		this._delayedMessages = [];
-		this._handlingDelayedMessages = false;
-	},
-
-	getWebSocketBaseURI: function(map) {
-		return window.makeWsUrlWopiSrc('/cool/', map.options.doc + '?' + $.param(map.options.docParams));
-	},
-
-	connect: function(socket) {
-		var map = this._map;
-		map.options.docParams['permission'] = app.getPermission();
-		if (this.socket) {
-			this.close();
-		}
-		if (socket && (socket.readyState === 1 || socket.readyState === 0)) {
-			this.socket = socket;
-		} else if (window.ThisIsAMobileApp) {
-			// We have already opened the FakeWebSocket over in global.js
-			// But do we then set this.socket at all? Is this case ever reached?
-		} else	{
-			try {
-				this.socket = window.createWebSocket(this.getWebSocketBaseURI(map));
-			} catch (e) {
-				this._map.fire('error', {msg: _('Oops, there is a problem connecting to {productname}: ').replace('{productname}', (typeof brandProductName !== 'undefined' ? brandProductName : 'Collabora Online Development Edition (unbranded)')) + e, cmd: 'socket', kind: 'failed', id: 3});
-				return;
-			}
-		}
-
-		this.socket.onerror = L.bind(this._onSocketError, this);
-		this.socket.onclose = L.bind(this._onSocketClose, this);
-		this.socket.onopen = L.bind(this._onSocketOpen, this);
-		this.socket.onmessage = L.bind(this._slurpMessage, this);
-		this.socket.binaryType = 'arraybuffer';
-		if (map.options.docParams.access_token && parseInt(map.options.docParams.access_token_ttl)) {
-			var tokenExpiryWarning = 900 * 1000; // Warn when 15 minutes remain
-			clearTimeout(this._accessTokenExpireTimeout);
-			this._accessTokenExpireTimeout = setTimeout(L.bind(this._sessionExpiredWarning, this),
-			                                            parseInt(map.options.docParams.access_token_ttl) - Date.now() - tokenExpiryWarning);
-		}
-
-		// process messages for early socket connection
-		this._emptyQueue();
-	},
-
-	_emptyQueue: function () {
-		if (window.queueMsg && window.queueMsg.length > 0) {
-			for (var it = 0; it < window.queueMsg.length; it++) {
-				this._slurpMessage({data: window.queueMsg[it], textMsg: window.queueMsg[it]});
-			}
-			window.queueMsg = [];
-		}
-	},
-
-	_sessionExpiredWarning: function() {
-		clearTimeout(this._accessTokenExpireTimeout);
-		var expirymsg = errorMessages.sessionexpiry;
-		if (parseInt(this._map.options.docParams.access_token_ttl) - Date.now() <= 0) {
-			expirymsg = errorMessages.sessionexpired;
-		}
-		var dateTime = new Date(parseInt(this._map.options.docParams.access_token_ttl));
-		var dateOptions = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-		var timerepr = dateTime.toLocaleDateString(String.locale, dateOptions);
-		this._map.fire('warn', {msg: expirymsg.replace('{time}', timerepr)});
-
-		// If user still doesn't refresh the session, warn again periodically
-		this._accessTokenExpireTimeout = setTimeout(L.bind(this._sessionExpiredWarning, this),
-		                                            120 * 1000);
-	},
-
-	setUnloading: function() {
-		if (this.socket.setUnloading)
-			this.socket.setUnloading();
-	},
-
-	close: function () {
-		this.socket.onerror = function () {};
-		this.socket.onclose = function () {};
-		this.socket.onmessage = function () {};
-		this.socket.close();
-
-		// Reset wopi's app loaded so that reconnecting again informs outerframe about initialization
-		this._map['wopi'].resetAppLoaded();
-		this._map.fire('docloaded', {status: false});
-		clearTimeout(this._accessTokenExpireTimeout);
-	},
-
-	connected: function() {
-		return this.socket && this.socket.readyState === 1;
-	},
-
-	sendMessage: function (msg) {
-		if (this._map._fatal) {
-			// Avoid communicating when we're in fatal state
-			return;
-		}
-
-		if (!app.idleHandler._active) {
-			// Avoid communicating when we're inactive.
-			if (typeof msg !== 'string')
-				return;
-
-			if (!msg.startsWith('useractive') && !msg.startsWith('userinactive')) {
-				window.app.console.log('Ignore outgoing message due to inactivity: "' + msg + '"');
-				return;
-			}
-		}
-
-		if (this._map.uiManager && this._map.uiManager.isUIBlocked())
-			return;
-
-		var socketState = this.socket.readyState;
-		if (socketState === 2 || socketState === 3) {
-			this._map.loadDocument();
-		}
-
-		if (socketState === 1) {
-			this._doSend(msg);
-		}
-		else {
-			// push message while trying to connect socket again.
-			this._msgQueue.push(msg);
-		}
-	},
-
-	sendTraceEvent: function(name, ph, timeRange, args, id, tid) {
-		if (timeRange === undefined)
-			timeRange = 'ts=' + Math.round(performance.now() * 1000);
-		if (!id)
-			id = 1;
-		if (!tid)
-			tid = 1;
-		this.sendMessage('TRACEEVENT name=' + JSON.stringify(name) + ' ph=' + ph +
-				 ' ' + timeRange + ' id=' + id + ' tid=' + tid +
-				 this._stringifyArgs(args));
-	},
-
-	_doSend: function(msg) {
-		// Only attempt to log text frames, not binary ones.
-		if (typeof msg === 'string')
-			this._logSocket('OUTGOING', msg);
-
-		this.socket.send(msg);
-	},
-
-	_getParameterByName: function(url, name) {
+	_getParameterByName(url, name) {
 		name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
 		var regex = new RegExp('[\\?&]' + name + '=([^&#]*)'), results = regex.exec(url);
 		return results === null ? '' : results[1].replace(/\+/g, ' ');
-	},
+	}
 
-	_onSocketOpen: function () {
-		window.app.console.debug('_onSocketOpen:');
-		app.idleHandler._serverRecycling = false;
-		app.idleHandler._documentIdle = false;
-
-		// Always send the protocol version number.
-		// TODO: Move the version number somewhere sensible.
-
-		// Note there are two socket "onopen" handlers, this one which ends up as part of
-		// bundle.js and the other in browser/js/global.js. The global.js one attempts to
-		// set up the connection early while bundle.js is still loading. If bundle.js
-		// starts before global.js has connected, then this _onSocketOpen will do the
-		// connection instead, after taking over the socket in "connect"
-
-		// Typically in a "make run" scenario it is the global.js case that sends the
-		// 'coolclient' and 'load' messages while currently in the "WASM app" case it is
-		// this code that gets invoked.
-
-		// Also send information about our performance timer epoch
-		var now0 = Date.now();
-		var now1 = performance.now();
-		var now2 = Date.now();
-		this._doSend('coolclient ' + this.ProtocolVersionNumber + ' ' + ((now0 + now2) / 2) + ' ' + now1);
-
-		var msg = 'load url=' + encodeURIComponent(this._map.options.doc);
-		if (this._map._docLayer) {
-			this._reconnecting = true;
-			// we are reconnecting after a lost connection
-			msg += ' part=' + this._map.getCurrentPartNumber();
-		}
-		if (this._map.options.timestamp) {
-			msg += ' timestamp=' + this._map.options.timestamp;
-		}
-		if (this._map._docPassword) {
-			msg += ' password=' + this._map._docPassword;
-		}
-		if (String.locale) {
-			msg += ' lang=' + String.locale;
-		}
-		if (window.deviceFormFactor) {
-			msg += ' deviceFormFactor=' + window.deviceFormFactor;
-		}
-
-		msg += ' timezone=' + Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-		if (this._map.options.renderingOptions) {
-			var options = {
-				'rendering': this._map.options.renderingOptions
-			};
-			msg += ' options=' + JSON.stringify(options);
-		}
-		var spellOnline = window.prefs.get('SpellOnline');
-		if (spellOnline) {
-			msg += ' spellOnline=' + spellOnline;
-		}
-
-		const darkTheme = window.prefs.getBoolean('darkTheme');
-		msg += ' darkTheme=' + darkTheme;
-
-		var isCalcTest =
-			window.docURL.includes('data/desktop/calc/') ||
-			window.docURL.includes('data/mobile/calc/') ||
-			window.docURL.includes('data/idle/calc/') ||
-			window.docURL.includes('data/multiuser/calc/');
-
-		if (L.Browser.cypressTest && isCalcTest)
-			window.enableAccessibility = false;
-
-		var accessibilityState = window.prefs.getBoolean('accessibilityState');
-		accessibilityState = accessibilityState || (L.Browser.cypressTest && !isCalcTest);
-		msg += ' accessibilityState=' + accessibilityState;
-
-		this._doSend(msg);
-		for (var i = 0; i < this._msgQueue.length; i++) {
-			this._doSend(this._msgQueue[i]);
-		}
-		this._msgQueue = [];
-
-		app.idleHandler._activate();
-	},
-
-	_utf8ToString: function (data) {
+	_utf8ToString(data) {
 		var strBytes = '';
 		for (var it = 0; it < data.length; it++) {
 			strBytes += String.fromCharCode(data[it]);
 		}
 		return strBytes;
-	},
+	}
 
 	// Returns true if, and only if, we are ready to start loading
 	// the tiles and rendering the document.
-	_isReady: function() {
+	_isReady() {
 		if (window.bundlejsLoaded == false || window.fullyLoadedAndReady == false) {
 			return false;
 		}
@@ -297,42 +53,9 @@ app.definitions.Socket = L.Class.extend({
 		}
 
 		return true;
-	},
+	}
 
-	_logSocket: function(type, msg) {
-		var logMessage = this._map._debug.debugNeverStarted || this._map._debug.logIncomingMessages;
-		if (!logMessage)
-			return;
-
-		if (window.ThisIsTheGtkApp)
-			window.postMobileDebug(type + ' ' + msg);
-
-		var debugOn = this._map._debug.debugOn;
-
-		if (this._map._debug.overlayOn) {
-			this._map._debug.setOverlayMessage('postMessage',type+': '+msg);
-		}
-
-		if (!debugOn && msg.length > 256) // for reasonable performance.
-			msg = msg.substring(0,256) + '<truncated ' + (msg.length - 256) + 'chars>';
-
-		var status = '';
-		if (!window.fullyLoadedAndReady)
-			status += '[!fullyLoadedAndReady]';
-		if (!window.bundlejsLoaded)
-			status += '[!bundlejsLoaded]';
-
-		L.Log.log(msg, type + status);
-
-		if (!window.protocolDebug && !debugOn)
-			return;
-
-		var color = type === 'OUTGOING' ? 'color:red' : 'color:#2e67cf';
-		window.app.console.log(+new Date() + ' %c' + type + status + '%c: ' + msg.concat(' ').replace(' ', '%c '),
-			     'background:#ddf;color:black', color, 'color:');
-	},
-
-	_queueSlurpEventEmission: function(delayMS) {
+	_queueSlurpEventEmission(delayMS) {
 
 		if (this._slurpTimer && this._slurpTimerDelay != delayMS) {
 			// The timer already exists, but now want to change timeout _slurpTimerDelay to delayMS.
@@ -362,17 +85,25 @@ app.definitions.Socket = L.Class.extend({
 				that._slurpTimer = undefined;
 				that._slurpTimerLaunchTime = undefined;
 				that._slurpTimerDelay = undefined;
+				if (that._inLayerTransaction) {
+					that._slurpDuringTransaction = true;
+					return;
+				}
 				that._emitSlurpedEvents();
 			}, delayMS);
 		}
-	},
+	}
 
-	_emitSlurpedEvents: function() {
+	_emitSlurpedEvents() {
+		if (this._map._debug.eventDelayWatchdog)
+			this._map._debug.timeEventDelay();
+
 		var queueLength = this._slurpQueue.length;
 		var completeEventWholeFunction = this.createCompleteTraceEvent('emitSlurped-' + String(queueLength),
 									       {'_slurpQueue.length' : String(queueLength)});
 		if (this._map && this._map._docLayer) {
-			this._map._docLayer.pauseDrawing();
+			TileManager.beginTransaction();
+			this._inLayerTransaction = true;
 
 			// Queue an instant timeout early to try to measure the
 			// re-rendering delay before we get back to the main-loop.
@@ -417,7 +148,21 @@ app.definitions.Socket = L.Class.extend({
 					{
 						// unpleasant - but stops this one problem event
 						// stopping an unknown number of others.
-						window.app.console.error('Exception ' + e + ' emitting event ' + evt.data, e.stack);
+						let msg = 'Exception ' + e + ' emitting event ' + evt.data + '\n' + e.stack;
+						window.app.console.error(msg);
+
+						// When debugging let QA know something is up.
+						if (window.enableDebug || window.L.Browser.cypressTest)
+							this._map.uiManager.showInfoModal(
+								'cool_alert', '', msg, '', _('Close'), function() { /* Do nothing. */ }, false);
+
+						// If we're cypress testing, fail the run. Cypress will fail anyway, but this way we may get
+						// a nice error in the logs rather than guessing that the run failed from our popup blocking input...
+						if (window.L.Browser.cypressTest && window.parent !== window && e !== null) {
+							console.log("Sending event error to Cypress...", e);
+							window.parent.postMessage(e);
+						}
+
 					}
 					finally {
 						if (completeEventOneMessage)
@@ -440,16 +185,27 @@ app.definitions.Socket = L.Class.extend({
 			this._slurpQueue = [];
 
 		if (this._map) {
-			if (this._map._docLayer) {
-				// Resume with redraw if dirty due to previous _onMessage() calls.
-				this._map._docLayer.resumeDrawing(true);
-			}
-			// Let other layers / overlays catch up.
-			this._map.fire('messagesdone');
+			var completeCallback = () => {
+				// Let other layers / overlays catch up.
+				this._map.fire('messagesdone');
 
-			this._renderEventTimerStart = performance.now();
+				this._renderEventTimerStart = performance.now();
+
+				this._inLayerTransaction = false;
+				if (this._slurpDuringTransaction) {
+					this._slurpDuringTransaction = false;
+					this._queueSlurpEventEmission(1);
+				}
+			};
+
+			if (this._inLayerTransaction && this._map._docLayer) {
+				// Resume with redraw if dirty due to previous _onMessage() calls.
+				TileManager.endTransaction(completeCallback);
+			} else {
+				completeCallback();
+			}
 		}
-	},
+	}
 
 	// The problem: if we process one websocket message at a time, the
 	// browser -loves- to trigger a re-render as we hit the main-loop,
@@ -457,7 +213,7 @@ app.definitions.Socket = L.Class.extend({
 	// producer/consumer issues that can fill a multi-second long
 	// buffer of web-socket messages in the client that we can't
 	// process so - slurp and then emit at idle - its faster to delay!
-	_slurpMessage: function(e) {
+	_slurpMessage(e) {
 		this._extractTextImg(e);
 
 		// Some messages - we want to process & filter early.
@@ -465,7 +221,7 @@ app.definitions.Socket = L.Class.extend({
 		if (docLayer && docLayer.filterSlurpedMessage(e))
 			return;
 
-		var predictedTiles = docLayer ? docLayer.predictTilesToSlurp() : 0;
+		var predictedTiles = TileManager.predictTilesToSlurp();
 		// scale delay, to a max of 50ms, according to the number of
 		// tiles predicted to arrive.
 		var delayMS = Math.max(Math.min(predictedTiles, 50), 1);
@@ -474,10 +230,10 @@ app.definitions.Socket = L.Class.extend({
 			this._slurpQueue = [];
 		this._slurpQueue.push(e);
 		this._queueSlurpEventEmission(delayMS);
-	},
+	}
 
 	// make profiling easier
-	_extractCopyObject: function(e) {
+	_extractCopyObject(e) {
 		var index;
 
 		e.imgBytes = new Uint8Array(e.data);
@@ -490,19 +246,19 @@ app.definitions.Socket = L.Class.extend({
 		e.textMsg = String.fromCharCode.apply(null, e.imgBytes.subarray(0, index));
 
 		e.imgIndex = index + 1;
-	},
+	}
 
 	// convert to string of bytes without blowing the stack if data is large.
-	_strFromUint8: function(prefix, data) {
+	_strFromUint8(prefix, data) {
 		var i, chunk = 4096;
 		var strBytes = prefix;
 		for (i = 0; i < data.length; i += chunk)
 			strBytes += String.fromCharCode.apply(null, data.slice(i, i + chunk));
 		strBytes += String.fromCharCode.apply(null, data.slice(i));
 		return strBytes;
-	},
+	}
 
-	_extractImage: function(e) {
+	_extractImage(e) {
 		var img;
 		var data = e.imgBytes.subarray(e.imgIndex);
 		var prefix = '';
@@ -510,15 +266,15 @@ app.definitions.Socket = L.Class.extend({
 		if (data[0] != 0x89)
 			prefix = String.fromCharCode(0x89);
 		img = 'data:image/png;base64,' + window.btoa(this._strFromUint8(prefix,data));
-		if (L.Browser.cypressTest && window.prefs.getBoolean('image_validation_test')) {
+		if (window.L.Browser.cypressTest && window.prefs.getBoolean('image_validation_test')) {
 			if (!window.imgDatas)
 				window.imgDatas = [];
 			window.imgDatas.push(img);
 		}
 		return img;
-	},
+	}
 
-	_extractTextImg: function (e) {
+	_extractTextImg(e) {
 
 		if ((window.ThisIsTheiOSApp || window.ThisIsTheEmscriptenApp) && typeof (e.data) === 'string') {
 			// Another fix for issue #5843 limit splitting on the first newline
@@ -526,7 +282,7 @@ app.definitions.Socket = L.Class.extend({
 			// text on iOS in jsdialogs when using languages like Greek and
 			// Japanese by only setting the image bytes for only the same set
 			// of message types.
-			if (window.ThisIsTheEmscriptenApp ||
+			if (
 					e.data.startsWith('tile:') ||
 					e.data.startsWith('tilecombine:') ||
 					e.data.startsWith('delta:') ||
@@ -558,12 +314,19 @@ app.definitions.Socket = L.Class.extend({
 			return true;
 		};
 
+		// slide rendering is using zstd compressed images (EXPERIMENTAL)
+		var isSlideLayer = e.textMsg.startsWith('slidelayer:');
+		var isSlideRenderComplete = e.textMsg.startsWith('sliderenderingcomplete:');
+		var isZstdSlideshowEnabled = app.isExperimentalMode();
+		if (isZstdSlideshowEnabled && (isSlideLayer || isSlideRenderComplete))
+			return;
+
 		var isTile = e.textMsg.startsWith('tile:');
 		var isDelta = e.textMsg.startsWith('delta:');
 		if (!isTile && !isDelta &&
-		    !e.textMsg.startsWith('renderfont:') &&
+			!e.textMsg.startsWith('renderfont:') &&
 			!e.textMsg.startsWith('slidelayer:') &&
-		    !e.textMsg.startsWith('windowpaint:'))
+			!e.textMsg.startsWith('windowpaint:'))
 			return;
 
 		if (e.textMsg.indexOf(' nopng') !== -1)
@@ -607,9 +370,9 @@ app.definitions.Socket = L.Class.extend({
 		};
 		e.image.completeTraceEvent = this.createAsyncTraceEvent('loadTile');
 		e.image.src = img;
-	},
+	}
 
-	_buildUnauthorizedMessage: function (command) {
+	_buildUnauthorizedMessage(command) {
 		var unauthorizedMsg = errorMessages.unauthorized;
 		if (command.errorCode) {
 			// X509_verify_cert_error_string output
@@ -618,17 +381,22 @@ app.definitions.Socket = L.Class.extend({
 			unauthorizedMsg += ' ' + verifyError;
 		}
 		return unauthorizedMsg;
-	},
+	}
 
-	_onMessage: function (e) {
+	_onMessage(e) {
 		var imgBytes, textMsg;
 
 		textMsg = e.textMsg;
 		imgBytes = e.imgBytes;
 
+		if (window.L.Browser.cypressTest) {
+			window.L.initial._stubMessage(textMsg);
+		}
+
 		this._logSocket('INCOMING', textMsg);
 
 		var command = this.parseServerCmd(textMsg);
+
 		if (textMsg.startsWith('coolserver ')) {
 			// This must be the first message, unless we reconnect.
 			var oldVersion = null;
@@ -683,14 +451,27 @@ app.definitions.Socket = L.Class.extend({
 				}
 			}
 
-			$('#coolwsd-version-label').text(_('COOLWSD version:'));
+			document.getElementById('coolwsd-version-label').textContent = _('COOLWSD version:');
 			var h = this.WSDServer.Hash;
 			if (parseInt(h,16).toString(16) === h.toLowerCase().replace(/^0+/, '')) {
-				h = '<a href="javascript:void(window.open(\'https://github.com/CollaboraOnline/online/commits/' + h + '\'));">' + h + '</a>';
-				$('#coolwsd-version').html(this.WSDServer.Version + ' <span>git hash:&nbsp;' + h + this.WSDServer.Options + '</span>');
+				const anchor = document.createElement('a');
+				anchor.setAttribute('href', 'https://github.com/CollaboraOnline/online/commits/' + h);
+				anchor.setAttribute('target', '_blank');
+				anchor.textContent = h;
+
+				const versionContainer = document.getElementById('coolwsd-version');
+				versionContainer.replaceChildren();
+
+				versionContainer.appendChild(document.createTextNode(this.WSDServer.Version));
+
+				let span = document.createElement('span');
+				span.appendChild(document.createTextNode('git hash:\xA0'));
+				span.appendChild(anchor);
+				span.appendChild(document.createTextNode(this.WSDServer.Options));
+				versionContainer.appendChild(span);
 			}
 			else {
-				$('#coolwsd-version').text(this.WSDServer.Version);
+				document.getElementById('coolwsd-version').textContent = this.WSDServer.Version;
 			}
 
 			if (!window.ThisIsAMobileApp) {
@@ -705,15 +486,31 @@ app.definitions.Socket = L.Class.extend({
 			}
 		}
 		else if (textMsg.startsWith('lokitversion ')) {
-			$('#lokit-version-label').text(_('LOKit version:'));
-			var lokitVersionObj = JSON.parse(textMsg.substring(textMsg.indexOf('{')));
-			h = lokitVersionObj.BuildId.substring(0, 7);
+			document.getElementById('lokit-version-label').textContent = _('LOKit version:');
+
+			const lokitVersionObj = JSON.parse(textMsg.substring(textMsg.indexOf('{')));
+
+			const versionContainer = document.getElementById('lokit-version');
+			versionContainer.replaceChildren();
+			versionContainer.appendChild(document.createTextNode(lokitVersionObj.ProductName + '\xA0' + lokitVersionObj.ProductVersion + lokitVersionObj.ProductExtension));
+
+			h = lokitVersionObj.BuildId.substring(0, 10);
 			if (parseInt(h,16).toString(16) === h.toLowerCase().replace(/^0+/, '')) {
-				h = '<a href="javascript:void(window.open(\'https://hub.libreoffice.org/git-core/' + h + '\'));">' + h + '</a>';
+				const anchor = document.createElement('a');
+				anchor.setAttribute('target', '_blank');
+				anchor.setAttribute('href', 'https://git.libreoffice.org/core/+log/' + lokitVersionObj.BuildId + '/');
+				anchor.textContent = 'git hash: ' + h;
+
+				const span = document.createElement('span');
+				span.appendChild(anchor);
+				versionContainer.appendChild(span);
 			}
-			$('#lokit-version').html(lokitVersionObj.ProductName + ' ' +
-			                         lokitVersionObj.ProductVersion + lokitVersionObj.ProductExtension +
-			                         '<span> git hash:&nbsp;' + h + '<span>');
+			else {
+				const span = document.createElement('span');
+				span.textContent = 'git hash:\xA0' + h;
+				versionContainer.appendChild(span);
+			}
+
 			this.TunnelledDialogImageCacheSize = lokitVersionObj.tunnelled_dialog_image_cache_size;
 		}
 		else if (textMsg.startsWith('enabletraceeventlogging ')) {
@@ -757,6 +554,7 @@ app.definitions.Socket = L.Class.extend({
 			}
 
 			app.setCommentEditingPermission(json.editComment); // May be allowed even in readonly mode.
+			app.setRedlineManagementAllowed(json.manageRedlines); // May be allowed even in readonly mode.
 		}
 		else if (textMsg.startsWith('lockfailed:')) {
 			this._map.onLockFailed(textMsg.substring('lockfailed:'.length).trim());
@@ -933,6 +731,7 @@ app.definitions.Socket = L.Class.extend({
 
 			if (textMsg === 'idle' || textMsg === 'oom') {
 				app.idleHandler._dim();
+				TileManager.discardAllCache();
 			}
 
 			if (postMsgData['Reason']) {
@@ -952,7 +751,7 @@ app.definitions.Socket = L.Class.extend({
 			|| command.errorCmd === 'downloadas'
 			|| command.errorCmd === 'exportas')  {
 
-			if (command.errorCmd === 'saveas') {
+			if (command.errorCmd !== 'storage') {
 				this._map.fire('postMessage', {
 					msgId: 'Action_Save_Resp',
 					args: {
@@ -1137,7 +936,7 @@ app.definitions.Socket = L.Class.extend({
 			{
 				setTimeout(function() {
 					this._map.uiManager.showInfoModal('fontsmissing', _('Missing Fonts'), msg, null, _('Close'));
-				}.bind(this), 20000);
+				}.bind(this), 60000);
 			}
 			else
 			{
@@ -1155,7 +954,7 @@ app.definitions.Socket = L.Class.extend({
 				this._map.fire('infobar',
 					{
 						msg: textMsg,
-						action: L.Util.getProduct(),
+						action: app.util.getProduct(),
 						actionLabel: errorMessages.infoandsupport
 					});
 			}
@@ -1231,6 +1030,27 @@ app.definitions.Socket = L.Class.extend({
 		else if (textMsg.startsWith('reload')) {
 			// Switching modes.
 			window.location.reload(false);
+		} else if (textMsg.startsWith('slidelayer:')) {
+			if (app.isExperimentalMode()) {
+				SlideBitmapManager.handleRenderSlideEvent(e);
+			} else {
+				const content = JSON.parse(textMsg.substring('slidelayer:'.length + 1));
+				this._map.fire('slidelayer', {
+					message: content,
+					image: e.image
+				});
+			}
+			return;
+		} else if (textMsg.startsWith('sliderenderingcomplete:')) {
+			if (app.isExperimentalMode()) {
+				SlideBitmapManager.handleSlideRenderingComplete(e);
+			} else {
+				const json = JSON.parse(textMsg.substring('sliderenderingcomplete:'.length + 1));
+				this._map.fire('sliderenderingcomplete', {
+					success: json.status === 'success'
+				});
+			}
+			return;
 		}
 		else if (!textMsg.startsWith('tile:') && !textMsg.startsWith('delta:') &&
 			     !textMsg.startsWith('renderfont:') && !textMsg.startsWith('slidelayer:') &&
@@ -1259,7 +1079,7 @@ app.definitions.Socket = L.Class.extend({
 		}
 
 		if (textMsg.startsWith('status:')) {
-			this._onStatusMsg(textMsg, command);
+			this._onStatusMsg(textMsg, JSON.parse(textMsg.replace('status:', '').replace('statusupdate:', '')));
 			return;
 		}
 
@@ -1289,7 +1109,7 @@ app.definitions.Socket = L.Class.extend({
 				this._map.fire('statusindicator', info);
 				this._map._fireInitComplete('statusindicatorfinish');
 				// show shutting down popup after saving is finished
-				// if we show the popup just after the shuttingdown messsage, it will be overwitten by save popup
+				// if we show the popup just after the shuttingdown message, it will be overwitten by save popup
 				if (app.idleHandler._serverRecycling) {
 					this._map.showBusy(_('Server is shutting down'), false);
 				}
@@ -1303,8 +1123,15 @@ app.definitions.Socket = L.Class.extend({
 		else if (textMsg.startsWith('hyperlinkclicked:')) {
 			this._onHyperlinkClickedMsg(textMsg);
 		}
+		else if (textMsg.startsWith('browsersetting:')) {
+			window.prefs._initializeBrowserSetting(textMsg);
+		}
+		else if (textMsg.startsWith('viewsetting:')) {
+			const settingJSON = JSON.parse(textMsg.substring('viewsetting:'.length + 1));
+			app.serverConnectionService.onViewSetting(settingJSON);
+		}
 
-		if (textMsg.startsWith('downloadas:')) {
+		if (textMsg.startsWith('downloadas:') || textMsg.startsWith('exportas:')) {
 			var postMessageObj = {
 				success: true,
 				result: 'exportas',
@@ -1320,14 +1147,14 @@ app.definitions.Socket = L.Class.extend({
 		} else {
 			this._map._docLayer._onMessage(textMsg, e.image);
 		}
-	},
+	}
 
-	_exportAsCallback: function(command) {
+	_exportAsCallback(command) {
 		this._map.hideBusy();
 		this._map.uiManager.showInfoModal('exported-success', _('Exported to storage'), _('Successfully exported: ') + decodeURIComponent(command.filename), '', _('OK'));
-	},
+	}
 
-	_askForDocumentPassword: function(passwordType, msg) {
+	_askForDocumentPassword(passwordType, msg) {
 		this._map.uiManager.showInputModal('password-popup', '', msg, '', _('OK'), function(data) {
 			if (data) {
 				this._map._docPassword = data;
@@ -1343,9 +1170,9 @@ app.definitions.Socket = L.Class.extend({
 				this._map.hideBusy();
 			}
 		}.bind(this), true /* password input */);
-	},
+	}
 
-	_showDocumentConflictPopUp: function() {
+	_showDocumentConflictPopUp() {
 		var buttonList = [];
 		var callbackList = [];
 
@@ -1368,7 +1195,7 @@ app.definitions.Socket = L.Class.extend({
 			callbackList.push({ id: 'save-to-new-file', func_: function() {
 				var filename = this._map['wopi'].BaseFileName;
 				if (filename) {
-					filename = L.LOUtil.generateNewFileName(filename, '_new');
+					filename = app.LOUtil.generateNewFileName(filename, '_new');
 					this._map.saveAs(filename);
 				}
 			}.bind(this)});
@@ -1378,9 +1205,9 @@ app.definitions.Socket = L.Class.extend({
 		var message = _('Document has been changed in storage. What would you like to do with your unsaved changes?');
 
 		this._map.uiManager.showModalWithCustomButtons('document-conflict-popup', title, message, false, buttonList, callbackList);
-	},
+	}
 
-	_renameOrSaveAsCallback: function(textMsg, command) {
+	_renameOrSaveAsCallback(textMsg, command) {
 		this._map.hideBusy();
 		if (command !== undefined && command.url !== undefined && command.url !== '') {
 			var url = command.url;
@@ -1403,12 +1230,16 @@ app.definitions.Socket = L.Class.extend({
 			} else if (textMsg.startsWith('saveas:')) {
 				var accessToken = this._getParameterByName(url, 'access_token');
 				var accessTokenTtl = this._getParameterByName(url, 'access_token_ttl');
+				let noAuthHeader = this._getParameterByName(url, 'no_auth_header');
 
 				if (accessToken !== undefined) {
 					if (accessTokenTtl === undefined) {
 						accessTokenTtl = 0;
 					}
 					this._map.options.docParams = { 'access_token': accessToken, 'access_token_ttl': accessTokenTtl };
+					if (noAuthHeader == "1" || noAuthHeader == "true") {
+						this._map.options.docParams.no_auth_header = noAuthHeader;
+					}
 				}
 				else {
 					this._map.options.docParams = {};
@@ -1431,14 +1262,14 @@ app.definitions.Socket = L.Class.extend({
 			}
 		}
 		// var name = command.name; - ignored, we get the new name via the wopi's BaseFileName
-	},
+	}
 
-	_delayMessage: function(textMsg) {
+	_delayMessage(textMsg) {
 		var message = {msg: textMsg};
 		this._delayedMessages.push(message);
-	},
+	}
 
-	_handleDelayedMessages: function(docLayer) {
+	_handleDelayedMessages(docLayer) {
 		this._handlingDelayedMessages = true;
 
 		while (this._delayedMessages.length) {
@@ -1453,9 +1284,9 @@ app.definitions.Socket = L.Class.extend({
 		}
 
 		this._handlingDelayedMessages = false;
-	},
+	}
 
-	_onStatusMsg: function(textMsg, command) {
+	_onStatusMsg(textMsg, command) {
 		var that = this;
 
 		if (!this._isReady()) {
@@ -1469,6 +1300,17 @@ app.definitions.Socket = L.Class.extend({
 		if (!this._map._docLayer) {
 			// initialize and append text input before doc layer
 			this._map.initTextInput(command.type);
+
+			// Reinitialize the menubar and top toolbar if browser settings are enabled.
+			// During the initial `initializeBasicUI` call, we don't know if compact mode is enabled.
+			// Before `doclayerinit`, we recheck the compact mode setting and if conditions are met,
+			// add the top toolbar and menubar controls to the map.
+			if (window.prefs.useBrowserSetting) {
+				if (!window.mode.isMobile() && this._map.uiManager.getCurrentMode() === 'notebookbar')
+					this._map.uiManager.removeClassicUI();
+				else if (!this._map.menubar)
+					this._map.uiManager.initializeMenubarAndTopToolbar();
+			}
 
 			// first status message, we need to create the document layer
 			var tileWidthTwips = this._map.options.tileWidthTwips;
@@ -1487,11 +1329,11 @@ app.definitions.Socket = L.Class.extend({
 				viewId: command.viewid
 			};
 			if (command.type === 'text')
-				docLayer = new L.WriterTileLayer(options);
+				docLayer = new window.L.WriterTileLayer(options);
 			else if (command.type === 'spreadsheet')
-				docLayer = new L.CalcTileLayer(options);
+				docLayer = new window.L.CalcTileLayer(options);
 			else if (command.type === 'presentation' || command.type === 'drawing')
-				docLayer = new L.ImpressTileLayer(options);
+				docLayer = new window.L.ImpressTileLayer(options);
 
 			this._map._docLayer = docLayer;
 			this._map.addLayer(docLayer);
@@ -1500,24 +1342,23 @@ app.definitions.Socket = L.Class.extend({
 		else if (this._reconnecting) {
 			// we are reconnecting ...
 			this._map._docLayer._resetClientVisArea();
-			this._map._docLayer._refreshTilesInBackground();
+			TileManager.refreshTilesInBackground();
 			this._map.fire('statusindicator', { statusType: 'reconnected' });
 
-			var selectedMode = window.prefs.getBoolean('darkTheme');
-			this._map.uiManager.activateDarkModeInCore(selectedMode);
+			var darkTheme = window.prefs.getBoolean('darkTheme');
+			this._map.uiManager.activateDarkModeInCore(darkTheme);
+			this._map.uiManager.applyInvert();
+			this._map.uiManager.setCanvasColorAfterModeChange();
 
-			var uiMode = this._map.uiManager.getCurrentMode();
-			if (uiMode === 'notebookbar') {
-				this._map.uiManager.notebookbar.resetInCore();
-				this._map.uiManager.notebookbar.initializeInCore();
-			}
+			if (!window.mode.isMobile())
+				this._map.uiManager.initializeNotebookbarInCore();
+
 			// close all the popups otherwise document textArea will not get focus
 			this._map.uiManager.closeAll();
 			this._map.setPermission(app.file.permission);
 			window.migrating = false;
 			this._map.uiManager.initializeSidebar();
-			if (typeof window.initializedUI === 'function')
-				window.initializedUI();
+			this._map.uiManager.refreshTheme();
 		}
 
 		this._map.fire('docloaded', {status: true});
@@ -1537,20 +1378,20 @@ app.definitions.Socket = L.Class.extend({
 			// has set the viewid
 			this._handleDelayedMessages(docLayer);
 		}
-	},
+	}
 
-	_onJSDialog: function(textMsg, callback) {
+	_onJSDialog(textMsg, callback) {
 		var msgData = JSON.parse(textMsg.substring('jsdialog:'.length + 1));
 
-		if (msgData.children && !L.Util.isArray(msgData.children)) {
+		if (msgData.children && !app.util.isArray(msgData.children)) {
 			window.app.console.warn('_onJSDialogMsg: The children\'s data should be created of array type');
 			return;
 		}
 
 		JSDialog.MessageRouter.processMessage(msgData, callback);
-	},
+	}
 
-	_onHyperlinkClickedMsg: function (textMsg) {
+	_onHyperlinkClickedMsg(textMsg) {
 		var link = null;
 		var coords = null;
 		var hyperlinkMsgStart = 'hyperlinkclicked: ';
@@ -1564,15 +1405,15 @@ app.definitions.Socket = L.Class.extend({
 			link = textMsg.substring(hyperlinkMsgStart.length);
 
 		this._map.fire('hyperlinkclicked', {url: link, coordinates: coords});
-	},
+	}
 
-	_onSocketError: function () {
-		window.app.console.debug('_onSocketError:');
+	_onSocketError(event) {
+		window.app.console.warn('_onSocketError:', event);
 		this._map.hideBusy();
 		// Let onclose (_onSocketClose) report errors.
-	},
+	}
 
-	_onSocketClose: function (event) {
+	_onSocketClose(event) {
 		window.app.console.debug('_onSocketClose:');
 		if (!this._map._docLoadedOnce && this.ReconnectCount === 0) {
 			var errorMsg, errorType = '';
@@ -1614,12 +1455,10 @@ app.definitions.Socket = L.Class.extend({
 		if (this._map._docLayer) {
 			this._map._docLayer.removeAllViews();
 			this._map._docLayer._resetClientVisArea();
-			if (this._map._docLayer._graphicSelection) {
-				this._map._docLayer._graphicSelection = null;
-				this._map._docLayer._onUpdateGraphicSelection();
-			}
+			if (GraphicSelection.hasActiveSelection())
+				GraphicSelection.rectangle = null;
 			if (this._map._docLayer._docType === 'presentation')
-				app.file.textCursor.visible = false;
+				app.setCursorVisibility(false);
 
 			this._map._docLayer._resetCanonicalIdStatus();
 			this._map._docLayer._resetViewId();
@@ -1656,282 +1495,9 @@ app.definitions.Socket = L.Class.extend({
 
 		if (!this._map['wopi'].DisableInactiveMessages && app.sectionContainer && !app.sectionContainer.testing)
 			this._map.uiManager.showSnackbar(_('The server has been disconnected.'));
-	},
+	}
 
-	parseServerCmd: function (msg) {
-		var tokens = msg.split(/[ \n]+/);
-		var command = {};
-		for (var i = 0; i < tokens.length; i++) {
-			if (tokens[i].substring(0, 9) === 'tileposx=') {
-				command.x = parseInt(tokens[i].substring(9));
-			}
-			else if (tokens[i].substring(0, 9) === 'tileposy=') {
-				command.y = parseInt(tokens[i].substring(9));
-			}
-			else if (tokens[i].substring(0, 2) === 'x=') {
-				command.x = parseInt(tokens[i].substring(2));
-			}
-			else if (tokens[i].substring(0, 2) === 'y=') {
-				command.y = parseInt(tokens[i].substring(2));
-			}
-			else if (tokens[i].substring(0, 10) === 'tilewidth=') {
-				command.tileWidth = parseInt(tokens[i].substring(10));
-			}
-			else if (tokens[i].substring(0, 11) === 'tileheight=') {
-				command.tileHeight = parseInt(tokens[i].substring(11));
-			}
-			else if (tokens[i].substring(0, 6) === 'width=') {
-				command.width = parseInt(tokens[i].substring(6));
-			}
-			else if (tokens[i].substring(0, 7) === 'height=') {
-				command.height = parseInt(tokens[i].substring(7));
-			}
-			else if (tokens[i].substring(0, 5) === 'part=') {
-				command.part = parseInt(tokens[i].substring(5));
-			}
-			else if (tokens[i].substring(0, 6) === 'parts=') {
-				command.parts = parseInt(tokens[i].substring(6));
-			}
-			else if (tokens[i].substring(0, 5) === 'mode=') {
-				command.mode = parseInt(tokens[i].substring(5));
-			}
-			else if (tokens[i].substring(0, 8) === 'current=') {
-				command.selectedPart = parseInt(tokens[i].substring(8));
-			}
-			else if (tokens[i].substring(0, 3) === 'id=') {
-				// remove newline characters
-				command.id = tokens[i].substring(3).replace(/(\r\n|\n|\r)/gm, '');
-			}
-			else if (tokens[i].substring(0, 5) === 'type=') {
-				// remove newline characters
-				command.type = tokens[i].substring(5).replace(/(\r\n|\n|\r)/gm, '');
-			}
-			else if (tokens[i].substring(0, 4) === 'cmd=') {
-				command.errorCmd = tokens[i].substring(4);
-			}
-			else if (tokens[i].substring(0, 5) === 'code=') {
-				command.errorCode = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 5) === 'kind=') {
-				command.errorKind = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 5) === 'jail=') {
-				command.jail = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 4) === 'dir=') {
-				command.dir = tokens[i].substring(4);
-			}
-			else if (tokens[i].substring(0, 11) === 'downloadid=') {
-				command.downloadid = tokens[i].substring(11);
-			}
-			else if (tokens[i].substring(0, 5) === 'name=') {
-				command.name = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 9) === 'filename=') {
-				command.filename = tokens[i].substring(9);
-			}
-			else if (tokens[i].substring(0, 5) === 'port=') {
-				command.port = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 5) === 'font=') {
-				command.font = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 5) === 'char=') {
-				command.char = tokens[i].substring(5);
-			}
-			else if (tokens[i].substring(0, 4) === 'url=') {
-				command.url = tokens[i].substring(4);
-			}
-			else if (tokens[i].substring(0, 7) === 'viewid=') {
-				command.viewid = tokens[i].substring(7);
-			}
-			else if (tokens[i].substring(0, 8) === 'nviewid=') {
-				command.nviewid = tokens[i].substring(8);
-			}
-			else if (tokens[i].substring(0, 7) === 'params=') {
-				command.params = tokens[i].substring(7).split(',');
-			}
-			else if (tokens[i].substring(0, 12) === 'rendercount=') {
-				command.rendercount = parseInt(tokens[i].substring(12));
-			}
-			else if (tokens[i].startsWith('wid=')) {
-				command.wireId = this.getParameterValue(tokens[i]);
-			}
-			else if (tokens[i].substring(0, 6) === 'title=') {
-				command.title = tokens[i].substring(6);
-			}
-			else if (tokens[i].substring(0, 12) === 'dialogwidth=') {
-				command.dialogwidth = tokens[i].substring(12);
-			}
-			else if (tokens[i].substring(0, 13) === 'dialogheight=') {
-				command.dialogheight = tokens[i].substring(13);
-			}
-			else if (tokens[i].substring(0, 10) === 'rectangle=') {
-				command.rectangle = tokens[i].substring(10);
-			}
-			else if (tokens[i].substring(0, 12) === 'hiddenparts=') {
-				var hiddenparts = tokens[i].substring(12).split(',');
-				command.hiddenparts = [];
-				hiddenparts.forEach(function (item) {
-					command.hiddenparts.push(parseInt(item));
-				});
-			}
-			else if (tokens[i].startsWith('selectedparts=')) {
-				var selectedParts = tokens[i].substring(14).split(',');
-				command.selectedParts = [];
-				selectedParts.forEach(function (item) {
-					command.selectedParts.push(parseInt(item));
-				});
-			}
-			else if (tokens[i].startsWith('rtlparts=')) {
-				var rtlParts = tokens[i].substring(9).split(',');
-				command.rtlParts = [];
-				rtlParts.forEach(function (item) {
-					command.rtlParts.push(parseInt(item));
-				});
-			}
-			else if (tokens[i].startsWith('protectedparts=')) {
-				var protectedParts = tokens[i].substring(15).split(',');
-				command.protectedParts = [];
-				protectedParts.forEach(function (item) {
-					command.protectedParts.push(parseInt(item));
-				});
-			}
-			else if (tokens[i].startsWith('hash=')) {
-				command.hash = tokens[i].substring('hash='.length);
-			}
-			else if (tokens[i] === 'nopng') {
-				command.nopng = true;
-			}
-			else if (tokens[i].substring(0, 9) === 'username=') {
-				command.username = tokens[i].substring(9);
-			}
-			else if (tokens[i].startsWith('pagerectangles=')) {
-				command.pageRectangleList = tokens[i].substring(15).split(';');
-				command.pageRectangleList = command.pageRectangleList.map(function(element) {
-					element = element.split(',');
-					return [parseInt(element[0]), parseInt(element[1]), parseInt(element[2]), parseInt(element[3])];
-				});
-			}
-			else if (tokens[i].startsWith('lastcolumn=')) {
-				command.lastcolumn = parseInt(tokens[i].substring(11));
-			}
-			else if (tokens[i].startsWith('lastrow=')) {
-				command.lastrow = parseInt(tokens[i].substring(8));
-			}
-			else if (tokens[i].startsWith('readonly=')) {
-				command.readonly = parseInt(tokens[i].substring(9));
-			}
-		}
-		if (command.tileWidth && command.tileHeight && this._map._docLayer) {
-			var defaultZoom = this._map.options.zoom;
-			var scale = command.tileWidth / this._map._docLayer.options.tileWidthTwips;
-			// scale = 1.2 ^ (defaultZoom - zoom)
-			// zoom = defaultZoom -log(scale) / log(1.2)
-			command.zoom = Math.round(defaultZoom - Math.log(scale) / Math.log(1.2));
-		}
-		return command;
-	},
-
-	setTraceEventLogging: function (enabled) {
-		this.traceEventRecordingToggle = enabled;
-		this.sendMessage('traceeventrecording ' + (this.traceEventRecordingToggle ? 'start' : 'stop'));
-
-		// Just as a test, uncomment this to toggle SAL_WARN and
-		// SAL_INFO selection between two states: 1) the default
-		// as directed by the SAL_LOG environment variable, and
-		// 2) all warnings on plus SAL_INFO for sc.
-		//
-		// (Note that coolwsd sets the SAL_LOG environment variable
-		// to "-WARN-INFO", i.e. the default is that nothing is
-		// logged from core.)
-
-		// app.socket.sendMessage('sallogoverride ' + (app.socket.traceEventRecordingToggle ? '+WARN+INFO.sc' : 'default'));
-	},
-
-	traceEventRecordingToggle: false,
-
-	_stringifyArgs: function (args) {
-		return (args == null ? '' : (' args=' + JSON.stringify(args)));
-	},
-
-	asyncTraceEventCounter: 0,
-
-	// simulate a threads per live async event to help the chrome renderer
-	asyncTracePseudoThread: 1,
-
-	createAsyncTraceEvent: function (name, args) {
-		if (!this.traceEventRecordingToggle)
-			return null;
-
-		var result = {};
-		result.id = this.asyncTraceEventCounter++;
-		result.tid = this.asyncTracePseudoThread++;
-		result.active = true;
-		result.args = args;
-
-		this.sendTraceEvent(name, 'S', undefined, args, result.id, result.tid);
-
-		var that = this;
-		result.finish = function () {
-			that.asyncTracePseudoThread--;
-			if (this.active) {
-				that.sendTraceEvent(name, 'F', undefined, this.args, this.id, this.tid);
-				this.active = false;
-			}
-		};
-		result.abort = function () {
-			that.asyncTracePseudoThread--;
-			this.active = false;
-		};
-		return result;
-	},
-
-	createCompleteTraceEvent: function (name, args) {
-		if (!this.traceEventRecordingToggle)
-			return null;
-
-		var result = {};
-		result.active = true;
-		result.begin = performance.now();
-		result.args = args;
-		var that = this;
-		result.finish = function () {
-			if (this.active) {
-				var now = performance.now();
-				that.sendTraceEvent(name, 'X', 'ts=' + Math.round(this.begin * 1000) +
-						    ' dur=' + Math.round((now - this.begin) * 1000),
-						    args);
-				this.active = false;
-			}
-		};
-		result.abort = function () {
-			this.active = false;
-		};
-		return result;
-	},
-
-	// something we can grok quickly in the trace viewer
-	createCompleteTraceEventFromEvent: function(textMsg) {
-		if (!this.traceEventRecordingToggle)
-			return null;
-
-		var pretty;
-		if (!textMsg)
-			pretty = 'blob';
-		else {
-			var idx = textMsg.indexOf(':');
-			if (idx > 0)
-				pretty = textMsg.substring(0,idx);
-			else if (textMsg.length < 25)
-				pretty = textMsg;
-			else
-				pretty = textMsg.substring(0, 25);
-		}
-		return this.createCompleteTraceEvent(pretty, { message: textMsg });
-	},
-
-	manualReconnect: function(timeout) {
+	manualReconnect(timeout) {
 		if (this._map._docLayer) {
 			this._map._docLayer.removeAllViews();
 		}
@@ -1945,7 +1511,5 @@ app.definitions.Socket = L.Class.extend({
 				window.app.console.warn('Cannot activate map');
 			}
 		}, timeout);
-	},
-
-	threadLocalLoggingLevelToggle: false
-});
+	}
+}

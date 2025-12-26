@@ -9,32 +9,28 @@
 
 #include "Unit.hpp"
 
-#include <iostream>
+#include <common/JsonUtil.hpp>
+#include <common/Log.hpp>
+#include <common/Message.hpp>
+#include <common/SigUtil.hpp>
+#include <common/StringVector.hpp>
+#include <common/Util.hpp>
+#include <test/testlog.hpp>
+
+#include <Poco/Util/Application.h>
+#include <Poco/Util/LayeredConfiguration.h>
+
 #include <cassert>
 #include <condition_variable>
-#include <dlfcn.h>
-#include <fstream>
+#include <csignal>
+#include <iostream>
 #include <mutex>
-#include <sstream>
 #include <sysexits.h>
 #include <thread>
 
-#include "JsonUtil.hpp"
-#include <Poco/Util/LayeredConfiguration.h>
-#include <Poco/Util/Application.h>
-
-#include "Log.hpp"
-#include "Util.hpp"
-#include <test/testlog.hpp>
-
-#include <common/SigUtil.hpp>
-#include <common/StringVector.hpp>
-#include <common/Message.hpp>
-#include <unistd.h>
-
-UnitKit *GlobalKit = nullptr;
-UnitWSD *GlobalWSD = nullptr;
-UnitTool *GlobalTool = nullptr;
+std::atomic<UnitKit *>GlobalKit = nullptr;
+std::atomic<UnitWSD *>GlobalWSD = nullptr;
+std::atomic<UnitTool *>GlobalTool = nullptr;
 UnitBase** UnitBase::GlobalArray = nullptr;
 int UnitBase::GlobalIndex = -1;
 char* UnitBase::UnitLibPath = nullptr;
@@ -47,89 +43,12 @@ namespace
 std::thread TimeoutThread;
 std::mutex TimeoutThreadMutex;
 std::condition_variable TimeoutConditionVariable;
+bool KitWorkFinished = false;
 
 } // namespace
 
 /// Controls whether experimental features/behavior is enabled or not.
 bool EnableExperimental = false;
-
-UnitBase** UnitBase::linkAndCreateUnit([[maybe_unused]] UnitType type,
-                                       [[maybe_unused]] const std::string& unitLibPath)
-{
-    if (Util::isMobileApp())
-        return nullptr;
-    DlHandle = dlopen(unitLibPath.c_str(), RTLD_GLOBAL|RTLD_NOW);
-    if (!DlHandle)
-    {
-        LOG_ERR("Failed to load unit-test lib " << dlerror());
-        return nullptr;
-    }
-
-    // avoid std:string de-allocation during failure / exit.
-    UnitLibPath = strdup(unitLibPath.c_str());
-    TST_LOG_NAME("UnitBase", "Opened unit-test lib " << UnitLibPath);
-
-    const char *symbol = nullptr;
-    switch (type)
-    {
-        case UnitType::Wsd:
-        {
-            // Try the multi-test version first.
-            CreateUnitHooksFunctionMulti* createHooksMulti =
-                reinterpret_cast<CreateUnitHooksFunctionMulti*>(
-                    dlsym(DlHandle, "unit_create_wsd_multi"));
-            if (createHooksMulti)
-            {
-                UnitBase** hooks = createHooksMulti();
-                if (hooks)
-                {
-                    std::ostringstream oss;
-                    oss << "Loaded UnitTest [" << unitLibPath << "] with: ";
-                    for (int i = 0; hooks[i] != nullptr; ++i)
-                    {
-                        if (i)
-                            oss << ", ";
-                        oss << hooks[i]->getTestname();
-                    }
-
-                    LOG_INF(oss.str());
-                    return hooks;
-                }
-            }
-
-            // Fallback.
-            symbol = "unit_create_wsd";
-            break;
-        }
-        case UnitType::Kit:
-            symbol = "unit_create_kit";
-            break;
-        case UnitType::Tool:
-            symbol = "unit_create_tool";
-            break;
-    }
-
-    // Internal consistency sanity check.
-    selfTest();
-
-    CreateUnitHooksFunction* createHooks =
-        reinterpret_cast<CreateUnitHooksFunction*>(dlsym(DlHandle, symbol));
-
-    if (!createHooks)
-    {
-        LOG_ERR("No " << symbol << " symbol in " << unitLibPath);
-        return nullptr;
-    }
-    TST_LOG_NAME("UnitBase", "Hooked symbol " << symbol << " from unit-test lib " << UnitLibPath);
-
-    UnitBase* hooks = createHooks();
-    if (hooks)
-        return new UnitBase* [2] { hooks, nullptr };
-
-    LOG_ERR("No wsd unit-tests found in " << unitLibPath);
-
-    return nullptr;
-}
 
 void UnitBase::initTestSuiteOptions()
 {
@@ -206,7 +125,7 @@ void UnitBase::selfTest()
 
 bool UnitBase::init([[maybe_unused]] UnitType type, [[maybe_unused]] const std::string& unitLibPath)
 {
-    if (!Util::isMobileApp())
+    if constexpr (!Util::isMobileApp())
         LOG_ASSERT(!get(type));
     else
     {
@@ -263,8 +182,8 @@ bool UnitBase::init([[maybe_unused]] UnitType type, [[maybe_unused]] const std::
 
                         std::unique_lock<std::mutex> lock2(TimeoutThreadMutex);
                         if (TimeoutConditionVariable.wait_for(lock2,
-                                                              instance->_timeoutMilliSeconds) ==
-                            std::cv_status::no_timeout)
+                                                              instance->_timeoutMilliSeconds,
+                                                              [] { return KitWorkFinished; }))
                         {
                             LOG_DBG(instance->getTestname() << ": Unit test finished in time");
                         }
@@ -390,18 +309,19 @@ int UnitBase::uninit()
     GlobalTool = nullptr;
 
     // Close the DLL last, after deleting the test instances.
-    if (DlHandle)
-        dlclose(DlHandle);
-    DlHandle = nullptr;
+    closeUnit();
 
     return GlobalResult == TestResult::Ok ? EX_OK : EX_SOFTWARE;
 #else // ENABLE_DEBUG
-    return EX_OK; // Always success in release.
+    return 0; // Always success in release.
 #endif // !ENABLE_DEBUG
 }
 
 std::shared_ptr<SocketPoll> UnitBase::socketPoll()
 {
+    // We could be called from either a UnitWSD::DocBrokerDestroy (prisoner_poll)
+    // or from UnitWSD::invokeTest() (coolwsd main).
+    std::lock_guard<std::mutex> guard(_lockSocketPoll);
     if (!_socketPoll)
         _socketPoll = std::make_shared<SocketPoll>(getTestname());
     return _socketPoll;
@@ -410,35 +330,32 @@ std::shared_ptr<SocketPoll> UnitBase::socketPoll()
 void UnitKit::postFork()
 {
     // Don't drag wakeup pipes into the new process.
-    if (_socketPoll)
-        _socketPoll->closeAllSockets();
+    std::shared_ptr<SocketPoll> socketPoll = getSocketPoll();
+    if (socketPoll)
+        socketPoll->closeAllSockets();
 }
 
 void UnitBase::initialize()
 {
     assert(DlHandle != nullptr && "Invalid handle to set");
-    LOG_TST("==================== Starting [" << getTestname() << "] ====================");
+    TST_LOG("==================== Starting [" << getTestname() << "] ====================");
     socketPoll()->startThread();
-}
-
-bool UnitBase::isUnitTesting()
-{
-    return DlHandle;
 }
 
 void UnitBase::setTimeout(std::chrono::milliseconds timeoutMilliSeconds)
 {
     assert(!TimeoutThread.joinable() && "setTimeout must be called before starting a test");
     _timeoutMilliSeconds = timeoutMilliSeconds;
-    LOG_TST(getTestname() << ": setTimeout: " << _timeoutMilliSeconds);
+    TST_LOG(getTestname() << ": setTimeout: " << _timeoutMilliSeconds);
 }
 
 UnitBase::~UnitBase()
 {
-    LOG_TST(getTestname() << ": ~UnitBase: " << (failed() ? "FAILED" : "SUCCESS"));
+    TST_LOG(getTestname() << ": ~UnitBase: " << (failed() ? "FAILED" : "SUCCESS"));
 
-    if (_socketPoll)
-        _socketPoll->joinThread();
+    std::shared_ptr<SocketPoll> socketPoll = getSocketPoll();
+    if (socketPoll)
+        socketPoll->joinThread();
 }
 
 bool UnitBase::filterLOKitMessage(const std::shared_ptr<Message>& message)
@@ -479,17 +396,31 @@ bool UnitBase::filterSendWebSocketMessage(const char* data, const std::size_t le
             }
             catch (const std::exception& exception)
             {
-                LOG_TST("unocommandresult parsing failure: " << exception.what());
+                TST_LOG("unocommandresult parsing failure: " << exception.what());
             }
         }
         else
         {
-            LOG_TST("Expected json unocommandresult. Ignoring: " << message);
+            TST_LOG("Expected json unocommandresult. Ignoring: " << message);
         }
     }
-    else if (message.starts_with("status:"))
+    else if (message.starts_with("loaded:"))
     {
-        if (onDocumentLoaded(message))
+        if (message.find("isfirst=true") != std::string::npos)
+        {
+            // The Document loaded.
+            if (onDocumentLoaded(message))
+                return false;
+        }
+
+        // A view loaded.
+        if (onViewLoaded(message))
+            return false;
+    }
+    else if (message.starts_with("unloaded:"))
+    {
+        // A view unloaded.
+        if (onViewUnloaded(message))
             return false;
     }
     else if (message == "statechanged: .uno:ModifiedStatus=true")
@@ -526,7 +457,7 @@ void UnitBase::exitTest(TestResult result, const std::string& reason)
     {
         if (result != _result)
         {
-            LOG_TST("exitTest got " << name(result) << " but is already finished with "
+            TST_LOG("exitTest got " << name(result) << " but is already finished with "
                                     << name(_result));
         }
 
@@ -535,18 +466,16 @@ void UnitBase::exitTest(TestResult result, const std::string& reason)
 
     if (result == TestResult::Ok)
     {
-        LOG_TST("SUCCESS: exitTest: " << name(result) << (reason.empty() ? "" : ": " + reason));
+        TST_LOG("SUCCESS: exitTest: " << name(result) << (reason.empty() ? "" : ": " + reason));
     }
     else
     {
-        LOG_TST("ERROR: FAILURE: exitTest: " << name(result)
+        TST_LOG("ERROR: FAILURE: exitTest: " << name(result)
                                              << (reason.empty() ? "" : ": " + reason));
 
         if (GlobalResult == TestResult::Ok)
             GlobalResult = result;
-
-        LOG_TST("Dumping state");
-        ::kill(getpid(), SIGUSR1);
+        SigUtil::triggerDumpState(__func__);
     }
 
     _result = result;
@@ -566,11 +495,16 @@ void UnitBase::exitTest(TestResult result, const std::string& reason)
     }
 }
 
+std::string UnitBase::getReason() const
+{
+    std::lock_guard<std::mutex> guard(_lock);
+    return _reason;
+}
+
 std::string UnitKit::getResultMessage() const
 {
     assert(isFinished());
-    return std::string("unitresult: ") +
-        toStringShort(_result) + " " + _reason;
+    return std::string("unitresult: ") + std::string(nameShort(_result)) + " " + getReason();
 }
 
 void UnitWSD::processUnitResult(const StringVector &tokens)
@@ -590,7 +524,7 @@ void UnitBase::timeout()
     // Don't timeout if we had already finished.
     if (isUnitTesting() && !isFinished())
     {
-        LOG_TST("ERROR: Timed out waiting for unit test to complete within "
+        TST_LOG("ERROR: Timed out waiting for unit test to complete within "
                 << _timeoutMilliSeconds);
         exitTest(TestResult::TimedOut);
     }
@@ -604,22 +538,24 @@ void UnitBase::returnValue(int& retValue)
 
 void UnitBase::endTest([[maybe_unused]] const std::string& reason)
 {
-    LOG_TST("Ending test by stopping SocketPoll [" << getTestname() << "]: " << reason);
-    if (_socketPoll)
-        _socketPoll->joinThread();
+    TST_LOG("Ending test by stopping SocketPoll [" << getTestname() << "]: " << reason);
+    std::shared_ptr<SocketPoll> socketPoll = getSocketPoll();
+    if (socketPoll)
+        socketPoll->joinThread();
 
     // tell the timeout thread that the work has finished
+    KitWorkFinished = true;
     TimeoutConditionVariable.notify_all();
     if (TimeoutThread.joinable())
         TimeoutThread.join();
 
-    LOG_TST("==================== Finished [" << getTestname() << "] ====================");
+    TST_LOG("==================== Finished [" << getTestname() << "] ====================");
 }
 
 UnitWSD::UnitWSD(const std::string& name)
     : UnitBase(name, UnitType::Wsd)
-    , _hasKitHooks(false)
     , _wsd(nullptr)
+    , _hasKitHooks(false)
 {
 }
 
@@ -682,10 +618,11 @@ void UnitWSD::DocBrokerDestroy(const std::string& key)
             {
                 rememberInstance(_type, GlobalArray[GlobalIndex]);
 
-                LOG_TST("Starting test #" << GlobalIndex + 1 << ": "
+                TST_LOG("Starting test #" << GlobalIndex + 1 << ": "
                                           << GlobalArray[GlobalIndex]->getTestname());
-                if (GlobalWSD)
-                    GlobalWSD->configure(Poco::Util::Application::instance().config());
+                UnitWSD *globalWSD = GlobalWSD;
+                if (globalWSD)
+                    globalWSD->configure(Poco::Util::Application::instance().config());
                 GlobalArray[GlobalIndex]->initialize();
             }
 
@@ -697,8 +634,14 @@ void UnitWSD::DocBrokerDestroy(const std::string& key)
 
 UnitWSD& UnitWSD::get()
 {
-    assert(GlobalWSD);
-    return *GlobalWSD;
+    UnitWSD *globalWSD = GlobalWSD;
+    assert(globalWSD);
+    return *globalWSD;
+}
+
+UnitWSD* UnitWSD::getMaybeNull()
+{
+    return GlobalWSD;
 }
 
 void UnitWSD::onExitTest(TestResult result, const std::string&)
@@ -707,10 +650,10 @@ void UnitWSD::onExitTest(TestResult result, const std::string&)
     {
         if (result != TestResult::Ok && !GlobalTestOptions.getKeepgoing())
         {
-            LOG_TST("Failing fast per options, even though there are more tests");
-            if (!Util::isMobileApp())
+            TST_LOG("Failing fast per options, even though there are more tests");
+            if constexpr (!Util::isMobileApp())
             {
-                LOG_TST("Setting TerminationFlag as the Test Suite failed");
+                TST_LOG("Setting TerminationFlag as the Test Suite failed");
                 SigUtil::setTerminationFlag(); // and wake-up world.
             }
             else
@@ -718,7 +661,7 @@ void UnitWSD::onExitTest(TestResult result, const std::string&)
             return;
         }
 
-        LOG_TST("Have more tests. Waiting for the DocBroker to destroy before starting them");
+        TST_LOG("Have more tests. Waiting for the DocBroker to destroy before starting them");
         return;
     }
 
@@ -727,9 +670,9 @@ void UnitWSD::onExitTest(TestResult result, const std::string&)
                                  << " was the last test. Finishing "
                                  << (GlobalResult == TestResult::Ok ? "SUCCESS" : "FAILED"));
 
-    if (!Util::isMobileApp())
+    if constexpr (!Util::isMobileApp())
     {
-        LOG_TST("Setting TerminationFlag as there are no more tests");
+        TST_LOG("Setting TerminationFlag as there are no more tests");
         SigUtil::setTerminationFlag(); // and wake-up world.
     }
     else
@@ -748,8 +691,9 @@ UnitKit& UnitKit::get()
     if (Util::isKitInProcess() && !GlobalKit)
         GlobalKit = new UnitKit("UnitKit");
 
-    assert(GlobalKit);
-    return *GlobalKit;
+    UnitKit *globalKit = GlobalKit;
+    assert(globalKit);
+    return *globalKit;
 }
 
 void UnitKit::onExitTest(TestResult, const std::string&)
@@ -762,9 +706,9 @@ void UnitKit::onExitTest(TestResult, const std::string&)
     //                              << " was the last test. Finishing "
     //                              << (GlobalResult == TestResult::Ok ? "SUCCESS" : "FAILED"));
 
-    if (!Util::isMobileApp())
+    if constexpr (!Util::isMobileApp())
     {
-        // LOG_TST("Setting TerminationFlag as there are no more tests");
+        // TST_LOG("Setting TerminationFlag as there are no more tests");
         SigUtil::setTerminationFlag(); // and wake-up world.
     }
     else

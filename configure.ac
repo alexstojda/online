@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.63])
 
-AC_INIT([coolwsd], [24.04.5.3], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
+AC_INIT([coolwsd], [25.04.9.0], [https://github.com/CollaboraOnline/online/issues], [coolwsd], [https://collaboraonline.github.io/])
 LT_INIT([shared, disable-static, dlopen])
 
 AM_INIT_AUTOMAKE([1.10 foreign subdir-objects tar-pax -Wno-portability])
@@ -48,7 +48,7 @@ AC_DEFINE_UNQUOTED([COOLWSD_VERSION],[["$COOLWSD_VERSION"]],[Collabora Online We
 
 # try to add a git hash for a version if we're developing
 COOLWSD_VERSION_HASH="$COOLWSD_VERSION"
-git_hash=`cd ${srcdir} && ( cat dist_git_hash 2> /dev/null || git log -1 --format=%h 2> /dev/null )`
+git_hash=`cd ${srcdir} && ( cat dist_git_hash 2> /dev/null || git log -1 --format=%h --abbrev=10 2> /dev/null )`
 if test "z$git_hash" != "z"; then
    COOLWSD_VERSION_HASH=$git_hash
 fi
@@ -108,8 +108,8 @@ AC_LINK_IFELSE([AC_LANG_SOURCE([
       return v;
     }
     ])],
-               [AC_MSG_RESULT([No])],
-               [AC_MSG_RESULT([Yes])
+               [AC_MSG_RESULT([no])],
+               [AC_MSG_RESULT([yes])
                 LIBS="$LIBS -latomic"])
 
 # Declare options
@@ -153,9 +153,7 @@ AC_ARG_WITH([wasm-additional-files],
                               build of Collabora Office. The files will be available in the WASM in-memory file system as pathnames
                               stripping the initial prefix <path> where they are on the build system. For instance, if you give
                               --with-wasm-additional-files=$HOME/our-sample-docs, and there is a file $HOME/our-sample-docs/temp/test.docx,
-                              that will be available in the online.wasm as /temp/test.docx.
-                              NOTE: Temporarily for now, this option is mandatory and the additional files should contain a document
-                              in the root called "sample.docx"]))
+                              that will be available in the online.wasm as /temp/test.docx.]))
 
 AC_ARG_WITH([iosapp-appicon],
               AS_HELP_STRING([--with-iosapp-appicon=<path>],
@@ -213,8 +211,9 @@ AC_ARG_WITH(android-abi,
                             by colons).  The supported ABIs are: armeabi-v7a, arm64-v8a, x86 and x86_64.
                             Please note that you need to specify the parameters for --with-lo-builddir,
                             --with-poco-includes and --with-poco-libs in the order of armeabi-v7a:arm64-v8a:x86:x86_64.
-                            For example, when you use --with-android-abi=x86_64,
-                            you have to specify --with-lo-builddir=:::/path/to/x86-64/builddir]),
+                            For example, when you use --with-android-abi="x86_64 x86",
+                            you have to specify --with-lo-builddir=::/path/to/x86/builddir:/path/to/x86-64/builddir.
+                            If you are building for only a single ABI you may omit the colons.]),
 ,)
 
 AC_ARG_WITH([app-name],
@@ -256,6 +255,11 @@ AC_ARG_WITH([lo-path],
             AS_HELP_STRING([--with-lo-path=<path>],
                            [Path to a working installation directory or instdir of LibreOffice]))
 
+AC_ARG_WITH([lo-sourcedir],
+            AS_HELP_STRING([--with-lo-sourcedir=<path>],
+                           [Mandatory, and relevant, only for a Wasm build.
+                            Path to a LibreOffice core source tree.]))
+
 AC_ARG_WITH([lo-builddir],
             AS_HELP_STRING([--with-lo-builddir=<path>],
                            [Mandatory, and relevant, in a tree where building the iOS or Android app.
@@ -264,9 +268,15 @@ AC_ARG_WITH([lo-builddir],
                             file and change the references to "../ios-device" to refer to the corresponding
                             LibreOffice core source directory (which typically would be the same as the build
                             directory you specify with this option).
-                            In case of Android, you can provide 2 builddirs
-                            separated by a colon ':' - the first is for
-                            armeabi-v7a, the second is for arm64-v8a]))
+
+                            For Android, if building for multiple ABIs, you should specify multiple trees in the
+                            format --with-lo-builddir=/path/to/armeabi-v7a/builddir:/path/to/arm64-v8a/builddir:/path/to/x86/builddir:/path/to/x86_64/builddir.
+                            You may omit any ABIs you are not building for, except for armeabi-v7a which must
+                            always be provided.
+
+                            If you are building Android for a single ABI only, you may optionally specify only
+                            the core for your ABI without any colons. In this case, providing an armeabi-v7a core
+                            is not a requirement]))
 
 AC_ARG_WITH([logfile],
             AS_HELP_STRING([--with-logfile=<path>],
@@ -279,26 +289,22 @@ AC_ARG_WITH([trace-event-file],
 AC_ARG_WITH([poco-includes],
             AS_HELP_STRING([--with-poco-includes=<path>],
                            [Path to the "include" directory with the Poco
-                            headers.  If you are building for Android 64bit,
-                            you need two, separated by a colon ':'.]))
+                            headers. For Android, this has the same format as --with-lo-builddir]))
 
 AC_ARG_WITH([zstd-libs],
             AS_HELP_STRING([--with-zstd-libs=<path>],
                            [Path to the directory containing libzstd.a
-                            libraries.  If you are building for Android 64bit,
-                            you need two, separated by a colon ':'.]))
+                            libraries. For Android, this has the same format as --with-lo-builddir]))
 
 AC_ARG_WITH([zstd-includes],
             AS_HELP_STRING([--with-zstd-includes=<path>],
                            [Path to the "include" directory with the zstd
-                            headers.  If you are building for Android 64bit,
-                            you need two, separated by a colon ':'.]))
+                            headers. For Android, this has the same format as --with-lo-builddir]))
 
 AC_ARG_WITH([poco-libs],
             AS_HELP_STRING([--with-poco-libs=<path>],
                            [Path to the "lib" directory with the Poco
-                            libraries.  If you are building for Android 64bit,
-                            you need two, separated by a colon ':'.]))
+                            libraries.  For Android, this has the same format as --with-lo-builddir]))
 
 AC_ARG_WITH([libpng-includes],
             AS_HELP_STRING([--with-libpng-includes=<path>],
@@ -361,9 +367,10 @@ AC_ARG_WITH([compiler-plugins],
                 [Experimental! Unlikely to work for anyone except Noel! Enable compiler plugins that will perform additional checks during
                  building.]))
 
-AC_ARG_ENABLE([setcap],
-            AS_HELP_STRING([--disable-setcap],
-                          [Do not set capabilities on files. For packaging builds]))
+AC_ARG_ENABLE(coplugin,
+    AS_HELP_STRING([--enable-coplugin],
+        [Enables building of a clang plugin that performs COOL-specific checks.])
+)
 
 AC_ARG_ENABLE([werror],
             AS_HELP_STRING([--disable-werror],
@@ -396,6 +403,24 @@ AC_ARG_ENABLE([feature-restriction],
               AS_HELP_STRING([--enable-feature-restriction],
                              [Enable control over which uno-commands/feature to disable completely.]))
 
+AC_ARG_ENABLE([wasm-embindtest],
+              AS_HELP_STRING([--enable-wasm-embindtest],
+                             [Run the LibreOffice embindtest as part of running the app. Requires
+                              LibreOffice to be built with --enable-dbgutil. Relevant only for a
+                              Wasm build.]))
+
+AC_ARG_WITH([wasm-zetajs],
+            AS_HELP_STRING([--with-wasm-zetajs=<path>],
+                           [Include zetajs scripting support in the app. (Together with
+                            --enable-wasm-embindtest, also run the zetajs smoketest as part of
+                            running the app.) Relevant only for a Wasm build. Path to a zetajs
+                            source tree.]))
+
+AC_ARG_ENABLE([wasm-zetajs-example],
+              AS_HELP_STRING([--enable-wasm-zetajs-example],
+                             [Inclue a zetajs scripting example in the app. Requires
+                              --with-wasm-zetajs. Relevant only for a Wasm build.]))
+
 AC_ARG_ENABLE([experimental],
               AS_HELP_STRING([--enable-experimental],
                              [Enable experimental features and behavior]))
@@ -413,6 +438,8 @@ COOLWSD_LOG_TO_FILE="false"
 COOLWSD_LOGFILE="/var/log/coolwsd.log"
 COOLWSD_TRACEEVENTFILE="/var/log/coolwsd.trace.json"
 COOLWSD_ANONYMIZE_USER_DATA=false
+COOLWSD_LOG_UICMD_TO_FILE="false"
+COOLWSD_LOGFILE_UICMD="/var/log/coolwsd-ui-cmd.log"
 BROWSER_LOGGING="false"
 debug_msg="secure mode: product build"
 anonym_msg=""
@@ -422,6 +449,7 @@ bundle_msg="using uglified bundled JS and CSS"
 LOK_LOG_ASSERTIONS=0
 log_asserts_msg="disabled"
 SSL_VERIFY="true"
+SERVER_SIGNATURE="false"
 
 # a reasonable default
 NUM_PRESPAWN_CHILDREN=4
@@ -430,6 +458,7 @@ AC_MSG_CHECKING([whether to enable debug build])
 if test "$enable_debug" = "yes"; then
    AC_MSG_RESULT([yes])
    AC_DEFINE([ENABLE_DEBUG],1,[Whether to compile in some extra debugging support code and disable some security pieces])
+   AC_DEFINE([CONFIG_STATIC_TYPE],,[Static config values are disabled in debug builds to allow for overriding in tests])
    ENABLE_DEBUG=true
    ENABLE_DEBUG_PROTOCOL=true
    COOLWSD_LOGLEVEL="trace"
@@ -437,9 +466,12 @@ if test "$enable_debug" = "yes"; then
    COOLWSD_LOGFILE="/tmp/coolwsd.log"
    COOLWSD_TRACEEVENTFILE="/tmp/coolwsd.trace.json"
    COOLWSD_ANONYMIZE_USER_DATA=false
+   COOLWSD_LOG_UICMD_TO_FILE="true"
+   COOLWSD_LOGFILE_UICMD="/tmp/coolwsd-ui-cmd.log"
    BROWSER_LOGGING="true"
    debug_msg="low security debugging mode"
    SSL_VERIFY="false"
+   SERVER_SIGNATURE="true"
 
    # helps attaching to the right process
    NUM_PRESPAWN_CHILDREN=1
@@ -464,13 +496,20 @@ if test "$enable_debug" = "yes"; then
 else
     AC_MSG_RESULT([no (Release build)])
     AC_DEFINE([ENABLE_DEBUG],0,[Whether to compile in some extra debugging support code and disable some security pieces])
+    AC_DEFINE([CONFIG_STATIC_TYPE],static,[Static config values are enabled in release builds for performance])
 fi
 AC_SUBST(ENABLE_DEBUG)
 AC_SUBST(ENABLE_BUNDLE)
 AC_SUBST(COOLWSD_LOGLEVEL)
+AC_DEFINE_UNQUOTED([COOLWSD_LOGLEVEL],["$COOLWSD_LOGLEVEL"],[Default coolwsd loglevel.])
 AC_SUBST(COOLWSD_LOG_TO_FILE)
+AC_SUBST(COOLWSD_LOG_UICMD_TO_FILE)
 AC_SUBST(BROWSER_LOGGING)
 AC_SUBST(NUM_PRESPAWN_CHILDREN)
+AC_DEFINE_UNQUOTED([NUM_PRESPAWN_CHILDREN],["$NUM_PRESPAWN_CHILDREN"],[Default number of pre-spawn children.])
+
+DEBUG_ABSSRCDIR=`(cd "$srcdir" && pwd -P)`
+AC_DEFINE_UNQUOTED([DEBUG_ABSSRCDIR], ["$DEBUG_ABSSRCDIR"], [Absolute path to the top-level source directory])
 
 if test "$enable_debug_protocol" = no; then
    ENABLE_DEBUG_PROTOCOL=false
@@ -489,6 +528,9 @@ if test -n "$with_logfile" ; then
    COOLWSD_LOGFILE="$with_logfile"
 fi
 AC_SUBST(COOLWSD_LOGFILE)
+AC_DEFINE_UNQUOTED([COOLWSD_LOGFILE],["$COOLWSD_LOGFILE"],[Default location of coolwsd log file])
+AC_SUBST(COOLWSD_LOGFILE_UICMD)
+AC_DEFINE_UNQUOTED([COOLWSD_LOGFILE_UICMD],["$COOLWSD_LOGFILE_UICMD"],[Default location of coolwsd UI command log file])
 
 if test -n "$with_trace_event_file" ; then
    COOLWSD_TRACEEVENTFILE="$with_trace_event_file"
@@ -514,10 +556,14 @@ if test -z "$anonym_msg";  then
   anonym_msg="anonymization of user-data is disabled"
 fi
 
+# Disable (0) or Enable (2) exotic file formats
+ENABLE_EXOTIC_FILE_FORMATS="0"
+
 if test "$enable_experimental" = "yes" ; then
   ENABLE_EXPERIMENTAL=true
   experimental_msg="enabled by default"
   SSL_VERIFY="false"
+  ENABLE_EXOTIC_FILE_FORMATS="2"
 fi
 AC_SUBST(ENABLE_EXPERIMENTAL)
 
@@ -525,6 +571,16 @@ AC_MSG_CHECKING([if ssl verification is enabled by default])
 AC_MSG_RESULT([$SSL_VERIFY])
 AC_DEFINE_UNQUOTED([SSL_VERIFY],["$SSL_VERIFY"],[Default SSL Verification mode])
 AC_SUBST(SSL_VERIFY)
+
+AC_MSG_CHECKING([if exotic file formats are enabled by default])
+if test "$ENABLE_EXOTIC_FILE_FORMATS" = "0"; then
+  AC_MSG_RESULT([no])
+else
+  AC_MSG_RESULT([yes])
+fi
+AC_SUBST(ENABLE_EXOTIC_FILE_FORMATS)
+
+AC_SUBST(SERVER_SIGNATURE)
 
 dnl check for a file at a path with an env-var with a given suffix
 AC_DEFUN([CHK_FILE_VAR], dnl env-var, suffix, file-to-match, msg
@@ -542,6 +598,7 @@ AC_DEFUN([CHK_FILE_VAR], dnl env-var, suffix, file-to-match, msg
 # But not when just configuring for building the JS on Linux, for copying over
 # to the Mac.
 # Android: We need these to setup the CMakeLists.txt properly.
+LOSOURCEDIR=
 LOBUILDDIR=
 ANDROID_ABI="armeabi-v7a"
 ANDROID_ABI_SPLIT="'armeabi-v7a'"
@@ -582,6 +639,14 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
       AC_MSG_RESULT([$ANDROID_ABI])
    fi
 
+   if test "$host_os" = emscripten; then
+      AC_MSG_CHECKING([for LibreOffice source tree to build against])
+      if test -z "$with_lo_sourcedir"; then
+         AC_MSG_ERROR([You MUST use the --with-lo-sourcedir option when configuring a Wasm build.])
+      fi
+      LOSOURCEDIR=$(readlink -f "$with_lo_sourcedir")
+   fi
+
    AC_MSG_CHECKING([for LibreOffice build tree to build against])
    if test -z "$with_lo_builddir"; then
       AC_MSG_ERROR([You MUST use the --with-lo-builddir option when configuring the mobile app build tree.])
@@ -595,7 +660,23 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
          LOBUILDDIR_X86=`echo $with_lo_builddir | cut -d: -f3`
          LOBUILDDIR_X86_64=`echo $with_lo_builddir | cut -d: -f4`
       fi
+
+      if test -z "$LOBUILDDIR_ARM64_V8A" ; then
+         LOBUILDDIR_ARM64_V8A="$LOBUILDDIR"
+      fi
+      if test -z "$LOBUILDDIR_X86" ; then
+         LOBUILDDIR_X86="$LOBUILDDIR"
+      fi
+      if test -z "$LOBUILDDIR_X86_64" ; then
+         LOBUILDDIR_X86_64="$LOBUILDDIR"
+      fi
+
+      LOBUILDDIR_ARM64_V8A=`readlink -f "$LOBUILDDIR_ARM64_V8A"`
+      LOBUILDDIR_X86=`readlink -f "$LOBUILDDIR_X86"`
+      LOBUILDDIR_X86_64=`readlink -f "$LOBUILDDIR_X86_64"`
    fi
+
+   LOBUILDDIR=`readlink -f "$LOBUILDDIR"`
 
    # Get the git hash of the core build
    CORE_VERSION_HASH=`cd $LOBUILDDIR && grep buildid instdir/program/setuprc | sed -e 's/buildid=//' -e 's/............................$//'`
@@ -644,6 +725,16 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
          POCOINCLUDE_X86=`echo $with_poco_includes | cut -d: -f3`
          POCOINCLUDE_X86_64=`echo $with_poco_includes | cut -d: -f4`
       fi
+
+      if test -z "$POCOINCLUDE_ARM64_V8A" ; then
+         POCOINCLUDE_ARM64_V8A="$POCOINCLUDE"
+      fi
+      if test -z "$POCOINCLUDE_X86" ; then
+         POCOINCLUDE_X86="$POCOINCLUDE"
+      fi
+      if test -z "$POCOINCLUDE_X86_64" ; then
+         POCOINCLUDE_X86_64="$POCOINCLUDE"
+      fi
    fi
 
    # Sanity checks
@@ -664,6 +755,16 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
          POCOLIB_ARM64_V8A=`echo $with_poco_libs | cut -d: -f2`
          POCOLIB_X86=`echo $with_poco_libs | cut -d: -f3`
          POCOLIB_X86_64=`echo $with_poco_libs | cut -d: -f4`
+      fi
+
+      if test -z "$POCOLIB_ARM64_V8A" ; then
+         POCOLIB_ARM64_V8A="$POCOLIB"
+      fi
+      if test -z "$POCOLIB_X86" ; then
+         POCOLIB_X86="$POCOLIB"
+      fi
+      if test -z "$POCOLIB_X86_64" ; then
+         POCOLIB_X86_64="$POCOLIB"
       fi
    fi
 
@@ -690,6 +791,16 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
          ZSTDINCLUDE_X86=`echo $with_zstd_includes | cut -d: -f3`
          ZSTDINCLUDE_X86_64=`echo $with_zstd_includes | cut -d: -f4`
       fi
+
+      if test -z "$ZSTDINCLUDE_ARM64_V8A" ; then
+         ZSTDINCLUDE_ARM64_V8A="$ZSTDINCLUDE"
+      fi
+      if test -z "$ZSTDINCLUDE_X86" ; then
+         ZSTDINCLUDE_X86="$ZSTDINCLUDE"
+      fi
+      if test -z "$ZSTDINCLUDE_X86_64" ; then
+         ZSTDINCLUDE_X86_64="$ZSTDINCLUDE"
+      fi
    fi
 
    # Sanity checks
@@ -706,6 +817,16 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
          ZSTDLIB_X86=`echo $with_zstd_libs | cut -d: -f3`
          ZSTDLIB_X86_64=`echo $with_zstd_libs | cut -d: -f4`
       fi
+
+      if test -z "$ZSTDLIB_ARM64_V8A" ; then
+         ZSTDLIB_ARM64_V8A="$ZSTDLIB"
+      fi
+      if test -z "$ZSTDLIB_X86" ; then
+         ZSTDLIB_X86="$ZSTDLIB"
+      fi
+      if test -z "$ZSTDLIB_X86_64" ; then
+         ZSTDLIB_X86_64="$ZSTDLIB"
+      fi
    fi
 
    CHK_FILE_VAR(ZSTDLIB,libzstd.a,Zstd lib)
@@ -714,6 +835,7 @@ if test \( "$enable_iosapp" = "yes" -a `uname -s` = "Darwin" \) -o \( "$enable_a
    CHK_FILE_VAR(ZSTDLIB,libzstd.a,Zstd lib,_X86_64)
 fi
 
+AC_SUBST(LOSOURCEDIR)
 AC_SUBST(LOBUILDDIR)
 AC_SUBST(ANDROID_ABI)
 AC_SUBST(ANDROID_ABI_SPLIT)
@@ -819,6 +941,7 @@ fi
 AC_SUBST(INFO_URL)
 
 ENABLE_IOSAPP=
+IOSAPP_BUNDLE_SHORT_VERSION="$COOLWSD_VERSION_MAJOR$COOLWSD_VERSION_MINOR.$COOLWSD_VERSION_MICRO.$COOLWSD_VERSION_NANO"
 IOSAPP_BUNDLE_VERSION=
 
 if test "$enable_iosapp" = "yes"; then
@@ -834,6 +957,7 @@ fi
 
 AC_SUBST(ENABLE_IOSAPP)
 AM_CONDITIONAL([ENABLE_IOSAPP], [test "$ENABLE_IOSAPP" = "true"])
+AC_SUBST(IOSAPP_BUNDLE_SHORT_VERSION)
 AC_SUBST(IOSAPP_BUNDLE_VERSION)
 
 AC_MSG_CHECKING([for custom icon theme])
@@ -859,15 +983,10 @@ dnl capability. Compare to ENABLE_WASM.
 AM_CONDITIONAL([ENABLE_WASM_FALLBACK], [test -n "$with_wasm_fallback"])
 WASM_BUILDDIR="$with_wasm_fallback"
 AC_SUBST(WASM_BUILDDIR)
-
-dnl Temporary hack: We hardcode /sample.docx in a few places, so make sure that file is there
-AS_IF(["$host_os" = "emscripten"],
-      [AC_MSG_CHECKING([that temporarily there is a sample document with a fixed name])
-      AS_IF([test -z "$with_wasm_additional_files"],
-            [AC_MSG_ERROR([You must use the --with-wasm-additional-files option for now])])
-      AS_IF([test ! -f "$with_wasm_additional_files/sample.docx"],
-            [AC_MSG_ERROR([There must be a file called sample.docx in $with_wasm_additional_files for now])])
-      AC_MSG_RESULT([yes])])
+AS_IF([test -n "$with_wasm_fallback"],
+      [WASM_SUPPORT_ENABLE=true],
+      [WASM_SUPPORT_ENABLE=false])
+AC_SUBST(WASM_SUPPORT_ENABLE)
 
 AM_CONDITIONAL([ENABLE_WASM_ADDITIONAL_FILES], [test -n "$with_wasm_additional_files"])
 WASM_ADDITIONAL_FILES="$with_wasm_additional_files"
@@ -917,17 +1036,32 @@ fi
 
 AC_DEFINE_UNQUOTED([INFOBAR_URL],["$INFOBAR_URL"],[Infobar URL.])
 
-WELCOME_CONFIG_FRAGMENT=/dev/null
+WELCOME_CONFIG_FRAGMENT=
+HOME_MODE_CONFIGURATION=
 ENABLE_WELCOME_MESSAGE=0
 WELCOME_URL=
+CONFIG_INTERFACE_FRAGMENT=
 if test -n "$with_welcome_url"; then
     WELCOME_URL=$with_welcome_url
     ENABLE_WELCOME_MESSAGE=1
+    HOME_MODE_CONFIGURATION="<home_mode>
+        <enable desc=\"Home users can enable this setting, which in turn disables welcome screen and user feedback popups, but also limits concurrent open connections to 20 and concurrent open documents to 10. The default means that number of concurrent open connections and concurrent open documents are unlimited, but welcome screen and user feedback cannot be switched off.\" type=\"bool\" default=\"false\">false</enable>
+    </home_mode>"
 else
-    WELCOME_CONFIG_FRAGMENT=$srcdir/coolwsd-welcome.xml
+    WELCOME_CONFIG_FRAGMENT="<welcome>
+      <enable type=\"bool\" desc=\"Controls whether the welcome screen should be shown to the users on new install and updates. When enabled, your custom welcome screen must be created at /usr/share/coolwsd/browser/dist/welcome/welcome.html.\" default=\"false\">false</enable>
+    </welcome>"
+    CONFIG_INTERFACE_FRAGMENT="<brandProductName desc=\"Change the displayed name the application will have for the user.\" type=\"string\"></brandProductName>
+    <brandProductURL desc=\"Change the product URL, empty makes disable the link\" type=\"string\">https://www.collaboraonline.com</brandProductURL>
+    <logoURL desc=\"Change the URL of the logo used by Collabora Online, use none to hide it.\" type=\"string\"></logoURL>"
 fi
 
-AC_SUBST_FILE([WELCOME_CONFIG_FRAGMENT])
+AC_SUBST([WELCOME_CONFIG_FRAGMENT])
+AM_SUBST_NOTMAKE(WELCOME_CONFIG_FRAGMENT)
+AC_SUBST([HOME_MODE_CONFIGURATION])
+AM_SUBST_NOTMAKE(HOME_MODE_CONFIGURATION)
+AC_SUBST([CONFIG_INTERFACE_FRAGMENT])
+AM_SUBST_NOTMAKE(CONFIG_INTERFACE_FRAGMENT)
 AC_DEFINE_UNQUOTED([ENABLE_WELCOME_MESSAGE],$ENABLE_WELCOME_MESSAGE,[Should the Release notes message be shown on upgrade])
 AM_CONDITIONAL([ENABLE_WELCOME_MESSAGE], [test "$ENABLE_WELCOME_MESSAGE" = "1"])
 AC_DEFINE_UNQUOTED([WELCOME_URL],["$WELCOME_URL"],[The welcome url of the build.])
@@ -935,18 +1069,9 @@ AC_DEFINE_UNQUOTED([WELCOME_URL],["$WELCOME_URL"],[The welcome url of the build.
 # Test for build environment
 
 AS_IF([test "$ENABLE_GTKAPP" != true],
-[CXXFLAGS="$CXXFLAGS -Wall -Wextra -Wshadow -Wundef"])
+      [CXXFLAGS="$CXXFLAGS -Wall -Wextra -Woverloaded-virtual -Wshadow -Wundef"])
 
 CFLAGS="$CFLAGS -Wall -Wextra"
-
-AC_MSG_CHECKING([whether to turn warnings to errors])
-if test -z "$enable_werror" -o "$enable_werror" = "yes"; then
-    AC_MSG_RESULT([yes])
-    CXXFLAGS="$CXXFLAGS -Werror"
-    CFLAGS="$CFLAGS -Werror"
-else
-    AC_MSG_RESULT([no])
-fi
 
 AC_MSG_CHECKING([whether to use extra compiler hardening flags])
 if test "$enable_hardening_flags" = no -o "$host_os" = "emscripten" -o "x$with_sanitizer" != "x"; then
@@ -1018,12 +1143,20 @@ fi
 # Code Coverage.
 AC_MSG_CHECKING([whether code-coverage is enabled])
 if test "x$with_coverage" != "x"; then
-    AC_MSG_RESULT([yes ($with_coverage)])
-    CODE_COVERAGE=1
-    CXXFLAGS="$CXXFLAGS --coverage"
-    CFLAGS="$CFLAGS --coverage"
-    LDFLAGS="$LDFLAGS -Wl,--dynamic-list-data --coverage"
-    coverage_msg="Code-Coverage is enabled"
+
+    AC_DEFUN([AC_PROG_LCOV], [AC_CHECK_PROG(LCOV,lcov,yes)])
+    AC_PROG_LCOV
+    if test x"${LCOV}" == x"yes" ; then
+        AC_MSG_RESULT([yes ($with_coverage)])
+        CODE_COVERAGE=1
+        CXXFLAGS="$CXXFLAGS --coverage"
+        CFLAGS="$CFLAGS --coverage"
+        LDFLAGS="$LDFLAGS -Wl,--dynamic-list-data --coverage"
+        coverage_msg="Code-Coverage is enabled"
+    else
+        AC_MSG_ERROR([Please install lcov (v1.16 preferred) to enable code-coverage])
+    fi
+
 else
     AC_MSG_RESULT([no])
     CODE_COVERAGE=0
@@ -1122,14 +1255,13 @@ AC_COMPILE_IFELSE([AC_LANG_SOURCE([
     #endif
 ])],
                     [AC_MSG_RESULT([yes])
-                    AC_DEFINE([HAVE_CLANG],true,[whether the C++ compiler is clang])],
+                    AC_DEFINE([HAVE_CLANG],1,[whether the C++ compiler is clang]) HAVE_CLANG=true],
                     [AC_MSG_RESULT([no])
-                    AC_DEFINE([HAVE_CLANG],false,[whether the C++ compiler is clang])])
-AM_CONDITIONAL([HAVE_CLANG], [test "$HAVE_CLANG" = "true"])
+                    AC_DEFINE([HAVE_CLANG],0,[whether the C++ compiler is clang])])
+AM_CONDITIONAL([HAVE_CLANG], [$HAVE_CLANG])
 AC_SUBST(HAVE_CLANG)
 
-AS_IF([test "$ENABLE_GTKAPP" != true],
-[CXXFLAGS="$CXXFLAGS $CXXFLAGS_CXXSTD"])
+CXXFLAGS="$CXXFLAGS $CXXFLAGS_CXXSTD"
 
 AS_IF([test -n "$LOKIT_PATH"],
       [CPPFLAGS="$CPPFLAGS -I${LOKIT_PATH}"])
@@ -1155,6 +1287,7 @@ AC_MSG_CHECKING([whether to run tests against a LibreOffice])
 version_file="$with_lo_path/program/versionrc"
 if test -f $version_file; then
     JAILS_PATH="\${abs_top_builddir}/jails"
+    CACHE_PATH="\${abs_top_builddir}/cache"
     SYSTEMPLATE_PATH="\${abs_top_builddir}/systemplate"
     have_lo_path=true
     lo_msg="test against $LO_PATH"
@@ -1167,6 +1300,7 @@ fi
 AC_SUBST(LO_PATH)
 AC_DEFINE_UNQUOTED([LO_PATH],["$LO_PATH"],[Path to LibreOffice installation])
 AC_SUBST(JAILS_PATH)
+AC_SUBST(CACHE_PATH)
 AC_SUBST(SYSTEMPLATE_PATH)
 AM_CONDITIONAL(HAVE_LO_PATH,[test "$have_lo_path" = "true"])
 
@@ -1218,13 +1352,30 @@ dnl    tile compression
        PKG_CHECK_MODULES([CPPUNIT], [cppunit])
        ])
 
-AS_IF([test `uname -s` = Linux -a "$ENABLE_ANDROIDAPP" != "true" -a "$host_os" != "emscripten"],
-      [AC_SEARCH_LIBS([cap_get_proc],
-                      [cap],
-                      [],
-                      [AC_MSG_ERROR([libcap not available?])])])
+# Check if the platform supports Capabilities
+AC_CHECK_HEADERS([sys/capability.h],
+    [ have_capability_h=yes ],
+    [ have_capability_h=no ])
 
+AS_IF([test "x$have_capability_h" = xyes], [
+    dnl If the header is found, proceed to look for the libcap library:
+    AC_SEARCH_LIBS([cap_get_proc], [cap],
+    [
+        dnl If found, define a macro we can test in our code
+        AC_DEFINE([HAVE_LIBCAP], [1], [Define to 1 if libcap (cap_get_proc) is available])
+    ],
+    [
+        AC_MSG_ERROR([libcap not available?])
+    ])
+], [
+    AC_MSG_WARN([sys/capability.h not found; skipping capabilities.])
+])
+
+dnl NB. this is a gtk3 frontend.
+webkit_try_older=
 AS_IF([test "$ENABLE_GTKAPP" = true],
+      [PKG_CHECK_MODULES([WEBKIT],[webkit2gtk-4.1],,[webkit_try_older=true])])
+AS_IF([test "$webkit_try_older" = true],
       [PKG_CHECK_MODULES([WEBKIT],[webkit2gtk-4.0])])
 
 AM_CONDITIONAL([ENABLE_DEBUG], [test "$ENABLE_DEBUG" = "true"])
@@ -1232,14 +1383,14 @@ AM_CONDITIONAL([ENABLE_DEBUG], [test "$ENABLE_DEBUG" = "true"])
 mobile_app=
 ENABLE_MOBILEAPP=
 MOBILEAPP=0
-AC_MSG_CHECKING([Is this a mobile app])
+AC_MSG_CHECKING([if this is a mobile app])
 if test "$enable_gtkapp" = "yes" -o "$enable_iosapp" = "yes" -o "$enable_androidapp" = "yes" -o "$host_os" = "emscripten" ; then
-     AC_MSG_RESULT([Yes])
+     AC_MSG_RESULT([yes])
      mobile_app=true;
      MOBILEAPP=1
      ENABLE_MOBILEAPP=true
 else
-     AC_MSG_RESULT([No])
+     AC_MSG_RESULT([no])
 fi
 AC_DEFINE_UNQUOTED([MOBILEAPP],[$MOBILEAPP],[Define to 1 if this is a mobileapp (eg. Android) build.])
 AC_SUBST(ENABLE_MOBILEAPP)
@@ -1319,7 +1470,7 @@ fi
 AM_CONDITIONAL([ENABLE_SSL], [$ENABLE_SSL])
 AC_SUBST(ENABLE_SSL)
 
-AS_IF([test "$ENABLE_ANDROIDAPP" != "true" -a "$host_os" != "emscripten"],
+AS_IF([test "$mobile_app" != "true" -a "$host_os" != "emscripten"],
       [AC_CHECK_HEADERS([security/pam_appl.h],
                         [],
                         [AC_MSG_ERROR([header security/pam_appl.h not found, install PAM development package])])
@@ -1366,18 +1517,17 @@ AS_IF([test "$ENABLE_IOSAPP" != "true" -a "$ENABLE_ANDROIDAPP" != "true" -a "$ho
        fi
 
        PKG_CHECK_MODULES([OPENSSL], [openssl])
-       AC_MSG_CHECKING([Whether OpenSSL has PKCS5_PBKDF2_HMAC()])
+       AC_MSG_CHECKING([whether OpenSSL is recent enough])
        AC_COMPILE_IFELSE([AC_LANG_SOURCE([
        #include <openssl/opensslv.h>
-       #if OPENSSL_VERSION_NUMBER < 0x10001000L
-       #error PKCS5_PBKDF2_HMAC() is in OpenSSL 1.0.1 or newer
+
+       /* OpenSSL 3.0.0 is the current mainline. */
+       #if OPENSSL_VERSION_NUMBER < 0x30000000
+       #error OpenSSL 3.0.0 or newer is required, override at your own risk
        #endif
        ])],
-                         [AC_MSG_RESULT([yes])
-                          AC_DEFINE([HAVE_PKCS5_PBKDF2_HMAC],1,[whether OpenSSL has PKCS5_PBKDF2_HMAC()])],
-                         [AC_MSG_RESULT([no])
-                          AC_MSG_WARN([OpenSSL is too old. Secure password storage for Admin Console is not supported.])
-                          AC_DEFINE([HAVE_PKCS5_PBKDF2_HMAC],0,[Whether OpenSSL has PKCS5_PBKDF2_HMAC()])])
+                         AC_MSG_RESULT([yes]),
+                         [AC_MSG_ERROR([OpenSSL is too old. Please use a more recent version.])])
 
        AC_MSG_CHECKING([POCO version])
        AC_COMPILE_IFELSE([AC_LANG_SOURCE([
@@ -1389,8 +1539,31 @@ AS_IF([test "$ENABLE_IOSAPP" != "true" -a "$ENABLE_ANDROIDAPP" != "true" -a "$ho
                          [AC_MSG_RESULT([OK])],
                          [AC_MSG_ERROR([The POCO version is too old])])
 
+       AC_MSG_CHECKING([POCO bugs])
+       AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+       #include <Poco/Version.h>
+       #if POCO_VERSION >= 0x010D0000 && POCO_VERSION < 0x010D0100
+       #error known buggy poco 1.13.0
+       #endif
+       ])],
+                         [AC_MSG_RESULT([OK])],
+                         [AC_MSG_RESULT([buggy])
+                          poco_known_buggy="yes"])
+
+       # Poco headers from distro packages may need -DPOCO_UNBUNDLED
+       # (the actual problem was in 1.13 Poco/XML/ParserEngine.h)
+       AC_CHECK_HEADERS([Poco/SAX/SAXParser.h])
+       if test "x$ac_cv_header_Poco_SAX_SAXParser_h" != xyes; then
+            unset ac_cv_header_Poco_SAX_SAXParser_h
+            CXXFLAGS="$CXXFLAGS -DPOCO_UNBUNDLED"
+            CPPFLAGS="$CPPFLAGS -DPOCO_UNBUNDLED"
+            AC_CHECK_HEADERS([Poco/SAX/SAXParser.h],
+                [AC_MSG_RESULT([... with POCO_UNBUNDLED])],
+                [AC_MSG_ERROR([header Poco/SAX/SAXParser.h not found, perhaps you want to use --with-poco-includes])])
+       fi
+
        # If poco is built with --unbundled, it uses the system pcre library
-       AC_MSG_CHECKING([If we need to link with -lpcre])
+       AC_MSG_CHECKING([if we need to link with -lpcre])
        AC_LINK_IFELSE([AC_LANG_SOURCE([
        #include <Poco/RegularExpression.h>
        int main(int argc, char **argv)
@@ -1401,8 +1574,8 @@ AS_IF([test "$ENABLE_IOSAPP" != "true" -a "$ENABLE_ANDROIDAPP" != "true" -a "$ho
            return e.match(argv[[1]], m);
        }
        ])],
-                      [AC_MSG_RESULT([No])],
-                      [AC_MSG_RESULT([Yes])
+                      [AC_MSG_RESULT([no])],
+                      [AC_MSG_RESULT([yes])
                        LIBS="$LIBS -lpcre"])
 
        ])
@@ -1434,7 +1607,7 @@ AS_IF([test `uname -s` = "Linux" -o `uname -s` = "FreeBSD" -o `uname -s` = "Darw
        fi
 
        if test "$enable_cypress" = "yes"; then
-           AC_PATH_PROGS(CHROME, chromium chromium-browser chrome google-chrome, no)
+           AC_PATH_PROGS(CHROME, chromium chromium-browser chrome google-chrome brave, no)
            if test "$CHROME" = "no"; then
                AC_MSG_ERROR([chrome or chromium is required to run the JS tests, but not installed])
            fi
@@ -1451,8 +1624,21 @@ AS_IF([test `uname -s` = "FreeBSD"],
 AS_IF([test -n "$with_compiler_plugins"],
       [CPPFLAGS="$CPPFLAGS -Xclang -load -Xclang ${with_compiler_plugins}/compilerplugins/obj/plugin.so -Xclang -add-plugin -Xclang loplugin -Xclang -plugin-arg-loplugin -Xclang --cool-base-path=\${abs_top_srcdir}"])
 
-COOLWSD_CONFIGDIR=${sysconfdir}/${PACKAGE}
+# Clang plugin.
+AC_MSG_CHECKING([whether to build a clang plugin])
+if test "$enable_coplugin" = "yes"; then
+    AC_MSG_RESULT([yes])
+    CPPFLAGS="$CPPFLAGS -Xclang -load -Xclang \${abs_top_srcdir}/clang/plugin.so -Xclang -add-plugin -Xclang coplugin"
+else
+    AC_MSG_RESULT([no])
+fi
+
+if test "x${prefix}" = "xNONE"; then
+    prefix=/usr/local
+fi
+eval COOLWSD_CONFIGDIR="${sysconfdir}/${PACKAGE}"
 AC_SUBST(COOLWSD_CONFIGDIR)
+AC_DEFINE_UNQUOTED([COOLWSD_CONFIGDIR],["$COOLWSD_CONFIGDIR"],[Directory that contains configuration of coolwsd.])
 
 COOLWSD_DATADIR=${datadir}/${PACKAGE}
 AC_SUBST(COOLWSD_DATADIR)
@@ -1463,21 +1649,10 @@ if test -n "$with_user_id"; then
 fi
 AC_DEFINE_UNQUOTED([COOL_USER_ID],["$COOL_USER_ID"],[The user-name which is allowed to run coolwsd and its tools])
 
-AM_CONDITIONAL([ENABLE_SETCAP], [test "$enable_setcap" != "no" -a `uname -s` = "Linux" -a "$enable_fuzzers" != "yes" -a "$host_os" != "emscripten"])
-
-ENABLE_SETCAP=
-if test "$enable_setcap" != "no" -a `uname -s` = "Linux" -a "$enable_fuzzers" != "yes" -a "$host_os" != "emscripten"; then
-    ENABLE_SETCAP=true
-    setcap_msg="setcap enabled"
-else
-    setcap_msg="setcap disabled"
-fi
-
-AC_SUBST(ENABLE_SETCAP)
-
 AC_CONFIG_LINKS([discovery.xml:discovery.xml])
 AC_CONFIG_LINKS([browser/package.json:browser/package.json])
 AC_CONFIG_LINKS([browser/.eslintrc:browser/.eslintrc])
+AC_CONFIG_LINKS([cypress_test/.eslintrc:cypress_test/.eslintrc])
 AC_CONFIG_LINKS([browser/.prettierrc:browser/.prettierrc])
 AC_CONFIG_LINKS([cypress_test/package.json:cypress_test/package.json])
 AC_CONFIG_COMMANDS_PRE([
@@ -1512,6 +1687,7 @@ fi
 AC_SUBST(APP_BRANDING_DIR)
 AC_SUBST(APP_IC_LAUNCHER)
 AC_SUBST(APP_HAS_BRANDING)
+AM_CONDITIONAL([APP_HAS_BRANDING], [test "$APP_HAS_BRANDING" = "true"])
 
 APP_GOOGLE_PLAY="false"
 if test "$enable_android_google_play" = "yes"; then
@@ -1550,6 +1726,7 @@ AS_IF([test "$ENABLE_IOSAPP" = "true"],
 AC_SUBST(IOSAPP_FONTS)
 
 AC_CHECK_FUNCS(ppoll)
+AC_CHECK_FUNCS([memrchr])
 
 ENABLE_CYPRESS=false
 if test "$enable_cypress" = "yes"; then
@@ -1590,6 +1767,17 @@ if test -n "$with_dictionaries" -a "$with_dictionaries" != "no"; then
 else
     ALLOWED_LANGUAGES="de_DE en_GB en_US es_ES fr_FR it nl pt_BR pt_PT ru"
 fi
+AC_MSG_RESULT([$ALLOWED_LANGUAGES])
+AC_SUBST(ALLOWED_LANGUAGES)
+
+AC_MSG_CHECKING([whether to turn warnings to errors])
+if test -z "$enable_werror" -o "$enable_werror" = "yes"; then
+    AC_MSG_RESULT([yes])
+    CXXFLAGS="$CXXFLAGS -Werror"
+    CFLAGS="$CFLAGS -Werror"
+else
+    AC_MSG_RESULT([no])
+fi
 
 AS_IF([test "$enable_feature_lock" = "yes"],
       [AC_DEFINE([ENABLE_FEATURE_LOCK],1,[Whether to compile and enable feature locking])],
@@ -1619,7 +1807,7 @@ AC_SUBST(UNLOCK_TITLE)
 
 UNLOCK_LINK=
 if test "$enable_feature_lock" = "yes"; then
-    UNLOCK_LINK="https://www.collaboraoffice.com/subscriptions/"
+    UNLOCK_LINK="https://www.collaboraonline.com/subscriptions/"
 fi
 AC_DEFINE_UNQUOTED([UNLOCK_LINK],["$UNLOCK_LINK"],[Default value of feature_lock.unlock_link])
 AC_SUBST(UNLOCK_LINK)
@@ -1718,8 +1906,62 @@ fi
 AC_SUBST(FEATURE_RESTRICTION_CONFIGURATION)
 AM_SUBST_NOTMAKE(FEATURE_RESTRICTION_CONFIGURATION)
 
-AC_MSG_RESULT([$ALLOWED_LANGUAGES])
-AC_SUBST(ALLOWED_LANGUAGES)
+ENABLE_WASM_EMBINDTEST=
+if test "$host_os" = emscripten; then
+    AC_MSG_CHECKING([whether to run the LibreOffice embindtest])
+    if test "$enable_wasm_embindtest" = yes; then
+        AC_MSG_RESULT([yes])
+        AC_MSG_CHECKING([whether the LibreOffice installation includes embindtest])
+        if test ! -f "$LOBUILDDIR"/instdir/program/soffice.js.linkdeps; then
+            AC_MSG_ERROR([cannot find $LOBUILDDIR/instdir/program/soffice.js.linkdeps])
+        elif ! LC_ALL=POSIX grep -E -q -e '(^|[[[:space:]]])-lembindtestlo($|[[[:space:]]])' \
+                "$LOBUILDDIR"/instdir/program/soffice.js.linkdeps
+        then
+            AC_MSG_ERROR(
+                [cannot find -lembindtestlo in $LOBUILDDIR/instdir/program/soffice.js.linkdeps])
+        else
+            AC_MSG_RESULT([yes])
+        fi
+        ENABLE_WASM_EMBINDTEST=true
+    else
+        AC_MSG_RESULT([no])
+    fi
+fi
+AC_SUBST([ENABLE_WASM_EMBINDTEST])
+AM_CONDITIONAL([ENABLE_WASM_EMBINDTEST], [test "$ENABLE_WASM_EMBINDTEST" = true])
+
+ENABLE_WASM_ZETAJS=
+WITH_WASM_ZETAJS=
+if test "$host_os" = emscripten; then
+    AC_MSG_CHECKING([whether to include zetajs scripting support])
+    if test -n "$with_wasm_zetajs"; then
+        AC_MSG_RESULT([yes])
+        ENABLE_WASM_ZETAJS=true
+        WITH_WASM_ZETAJS=$with_wasm_zetajs
+    else
+        AC_MSG_RESULT([no])
+    fi
+fi
+AC_SUBST([ENABLE_WASM_ZETAJS])
+AC_SUBST([WITH_WASM_ZETAJS])
+AM_CONDITIONAL([ENABLE_WASM_ZETAJS], [test "$ENABLE_WASM_ZETAJS" = true])
+
+ENABLE_WASM_ZETAJS_EXAMPLE=
+if test "$host_os" = emscripten; then
+    AC_MSG_CHECKING([whether to include a zetajs scripting example])
+    if test "$enable_wasm_zetajs_example" = yes; then
+        if test "$ENABLE_WASM_ZETAJS" != true; then
+            AC_MSG_ERROR([requires --with-wasm-zetajs])
+        else
+            AC_MSG_RESULT([yes])
+        fi
+        ENABLE_WASM_ZETAJS_EXAMPLE=true
+    else
+        AC_MSG_RESULT([no])
+    fi
+fi
+AC_SUBST([ENABLE_WASM_ZETAJS_EXAMPLE])
+AM_CONDITIONAL([ENABLE_WASM_ZETAJS_EXAMPLE], [test "$ENABLE_WASM_ZETAJS_EXAMPLE" = true])
 
 AC_CONFIG_FILES([Makefile
                  cypress_test/Makefile
@@ -1727,7 +1969,10 @@ AC_CONFIG_FILES([Makefile
                  wasm/Makefile
                  test/Makefile
                  browser/Makefile
+                 browser/images/Makefile
+                 browser/l10n/Makefile
                  browser/npm-shrinkwrap.json
+                 coolkitconfig.xcu
                  coolwsd.spec
                  coolwsd.xml
                  debian/coolwsd.postinst])
@@ -1739,9 +1984,8 @@ if test "$enable_iosapp" = "yes"; then
 fi
 
 if test "$enable_androidapp" = "yes"; then
-    AC_CONFIG_FILES([$srcdir/android/build.gradle:android/build.gradle.in
-                 $srcdir/android/app/build.gradle:android/app/build.gradle.in
-                 $srcdir/android/lib/build.gradle:android/lib/build.gradle.in
+    AC_CONFIG_FILES([
+                 $srcdir/android/variables.gradle:android/variables.gradle.in
                  $srcdir/android/app/appSettings.gradle:android/app/appSettings.gradle.in
                  $srcdir/android/lib/libSettings.gradle:android/lib/libSettings.gradle.in
                  $srcdir/android/lib/src/main/cpp/CMakeLists.txt:android/lib/src/main/cpp/CMakeLists.txt.in])
@@ -1821,7 +2065,9 @@ AS_IF([test "$ENABLE_IOSAPP" = "true"],
        fi
       ],
       [
-       echo "
+      ])
+
+echo "
 Configuration:
     LOKit path                ${lokit_msg}
     LO path                   $LO_PATH
@@ -1832,7 +2078,6 @@ Configuration:
     Test assertion logging    $log_asserts_msg
     Uglification and bundling $bundle_msg
     Anonymization             $anonym_msg
-    Set capabilities          $setcap_msg
     Browsersync               $browsersync_msg
     cypress                   $cypress_msg
     C++ compiler flags        $CXXFLAGS
@@ -1844,6 +2089,11 @@ echo "    \$ make run # to start coolwsd
     \$ make sync-writer|calc|impress # to start browsersync with specified app
 "
 fi
-      ])
+if test -n "$poco_known_buggy"; then
+    AC_MSG_WARN([Your version of POCO has known bugs: see dev-notes/dependency-issues.md])
+fi
+
+# Remove emconfigure artifacts that Autoconf fails to remove by itself:
+rm -f a.wasm
 
 dnl vim:set shiftwidth=4 softtabstop=4 expandtab:

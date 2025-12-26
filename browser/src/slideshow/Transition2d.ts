@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -14,158 +17,199 @@ class TransitionParameters {
 	public context: RenderContext = null;
 	public current: WebGLTexture | ImageBitmap = null;
 	public next: WebGLTexture | ImageBitmap = null;
-	public slideInfo: SlideInfo = null;
+	public transitionFilterInfo: TransitionFilterInfo = null;
 	public callback: VoidFunction = null;
 }
 
-class Transition2d {
-	public canvas: HTMLCanvasElement;
-	public gl: WebGL2RenderingContext;
-	public program: WebGLProgram;
-	public animationTime: number = 1500;
-	private vao!: WebGLVertexArrayObject | null;
-	private time: number;
-	private startTime: number | null;
-	private transitionParameters: TransitionParameters;
-	protected slideInfo: SlideInfo = null;
-	private context: any;
+abstract class TransitionBase extends SlideChangeGl {
+	protected transitionFilterInfo: TransitionFilterInfo = null;
 
-	constructor(transitionParameters: TransitionParameters) {
-		this.transitionParameters = transitionParameters;
-		this.context = transitionParameters.context;
-		this.gl = transitionParameters.context.getGl();
-		this.slideInfo = transitionParameters.slideInfo;
-		this.animationTime =
-			this.slideInfo?.transitionDuration > 0
-				? this.slideInfo.transitionDuration
-				: 2000;
-
-		const vertexShaderSource = this.getVertexShader();
-		const fragmentShaderSource = this.getFragmentShader();
-
-		const vertexShader = this.context.createVertexShader(vertexShaderSource);
-		const fragmentShader =
-			this.context.createFragmentShader(fragmentShaderSource);
-
-		this.program = this.context.createProgram(vertexShader, fragmentShader);
-
-		this.time = 0;
-		this.startTime = null;
-
+	protected constructor(transitionParameters: TransitionParameters) {
+		super(transitionParameters);
+		this.transitionFilterInfo = transitionParameters.transitionFilterInfo;
+		this.createProgram();
 		this.prepareTransition();
 	}
 
-	public getVertexShader(): string {
-		return `#version 300 es
-				in vec4 a_position;
-				in vec2 a_texCoord;
-				out vec2 v_texCoord;
-
-				void main() {
-					gl_Position = a_position;
-					v_texCoord = a_texCoord;
-				}
-				`;
-	}
-
-	public getFragmentShader(): string {
-		return `#version 300 es
-				precision mediump float;
-
-				uniform sampler2D leavingSlideTexture;
-				uniform sampler2D enteringSlideTexture;
-				uniform float time;
-
-				in vec2 v_texCoord;
-				out vec4 outColor;
-
-				void main() {
-					vec4 color0 = texture(leavingSlideTexture, v_texCoord);
-					vec4 color1 = texture(enteringSlideTexture, v_texCoord);
-					outColor = mix(color0, color1, time);
-				}
-				`;
-	}
-
-	public prepareTransition(): void {
-		this.initBuffers();
-		this.gl.useProgram(this.program);
-	}
-
 	public startTransition(): void {
-		this.startTime = performance.now();
-		requestAnimationFrame(this.render.bind(this));
+		this.time = null;
+		this.isLastFrame = false;
+		this.requestAnimationFrameId = requestAnimationFrame(
+			this.animate.bind(this),
+		);
 	}
 
 	public start(): void {
 		this.startTransition();
 	}
 
-	public initBuffers(): void {
-		const positions = new Float32Array([
-			-1.0, -1.0, 0, 0, 1, 1.0, -1.0, 0, 1, 1, -1.0, 1.0, 0, 0, 0, 1.0, 1.0, 0,
-			1, 0,
-		]);
-
-		const buffer = this.gl.createBuffer();
-		this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
-		this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
-
-		this.vao = this.gl.createVertexArray();
-		this.gl.bindVertexArray(this.vao);
-
-		const positionLocation = this.gl.getAttribLocation(
-			this.program,
-			'a_position',
-		);
-		const texCoordLocation = this.gl.getAttribLocation(
-			this.program,
-			'a_texCoord',
-		);
-
-		this.gl.enableVertexAttribArray(positionLocation);
-		this.gl.vertexAttribPointer(
-			positionLocation,
-			3,
-			this.gl.FLOAT,
-			false,
-			5 * 4,
-			0,
-		);
-
-		this.gl.enableVertexAttribArray(texCoordLocation);
-		this.gl.vertexAttribPointer(
-			texCoordLocation,
-			2,
-			this.gl.FLOAT,
-			false,
-			5 * 4,
-			3 * 4,
-		);
+	public endTransition(): void {
+		this.releaseResources();
+		app.console.debug('Transition completed');
 	}
 
-	public render() {
-		if (!this.startTime) this.startTime = performance.now();
-		this.time =
-			(performance.now() - this.startTime) /
-			(this.animationTime > 0 ? this.animationTime : 1500);
+	private releaseResources(): void {
+		if (this.context.isDisposed()) return;
 
-		if (this.time > 1) this.time = 1;
+		// Clean up vertex array
+		this.gl.bindVertexArray(null);
+		if (this.vao) {
+			this.gl.deleteVertexArray(this.vao);
+			this.vao = null;
+		}
+
+		// Unbind
+		this.gl.activeTexture(this.gl.TEXTURE0);
+		this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+
+		// Detach and delete shaders from the program
+		const attachedShaders = this.gl.getAttachedShaders(this.program);
+		if (attachedShaders) {
+			attachedShaders.forEach((shader) => {
+				this.gl.detachShader(this.program, shader);
+				this.gl.deleteShader(shader);
+			});
+		}
+
+		// Delete the program
+		this.gl.deleteProgram(this.program);
+		this.program = null;
+	}
+
+	// eslint-disable-next-line @typescript-eslint/no-empty-function
+	public renderUniformValue(): void {}
+}
+
+class Transition2d extends TransitionBase {
+	private static readonly DefaultFromColor = new Float32Array([0, 0, 0, 0]);
+	private static readonly DefaultToColor = new Float32Array([0, 0, 0, 0]);
+	private _uniformCache = new Map<string, WebGLUniformLocation | null>();
+
+	constructor(transitionParameters: TransitionParameters) {
+		super(transitionParameters);
+	}
+
+	protected getFragmentShader(): string {
+		const isSlideTransition: boolean = !!this.leavingSlide;
+		return `#version 300 es
+				precision mediump float;
+
+				${isSlideTransition ? 'uniform sampler2D leavingSlideTexture;' : ''}
+				uniform sampler2D enteringSlideTexture;
+				uniform float time;
+				${!isSlideTransition ? 'uniform float alpha;' : ''}
+
+				in vec2 v_texCoord;
+				out vec4 outColor;
+
+				void main() {
+					vec4 color0 = ${
+						isSlideTransition
+							? 'texture(leavingSlideTexture, v_texCoord)'
+							: 'vec4(0, 0, 0, 0)'
+					};
+					vec4 color1 = texture(enteringSlideTexture, v_texCoord);
+					${!isSlideTransition ? 'color1 *= alpha;' : ''}
+					outColor = mix(color0, color1, time);
+				}
+				`;
+	}
+
+	private setPositionBuffer(bounds: BoundsType) {
+		if (!bounds) return;
+
+		const v = [];
+		// convert [0,1] => [-1,1]
+		for (let i = 0; i < bounds.length; ++i) {
+			const x = 2 * bounds[i].x - 1;
+			v.push(x);
+			// flip y coordinates
+			const y = -(2 * bounds[i].y - 1);
+			v.push(y);
+		}
+
+		const positions = new Float32Array([
+			...[v[0], v[1], 0, 0, 1],
+			...[v[2], v[3], 0, 1, 1],
+			...[v[4], v[5], 0, 0, 0],
+			...[v[6], v[7], 0, 1, 0],
+		]);
+
 		const gl = this.gl;
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+	}
 
-		gl.viewport(0, 0, this.context.canvas.width, this.context.canvas.height);
-		gl.clearColor(0.0, 0.0, 0.0, 1.0);
-		gl.clear(gl.COLOR_BUFFER_BIT);
+	private getUniformLocation(name: string): WebGLUniformLocation | null {
+		if (!this.program) return null;
+
+		if (this._uniformCache.has(name)) {
+			return this._uniformCache.get(name);
+		}
+
+		const loc = this.gl.getUniformLocation(this.program, name);
+		this._uniformCache.set(name, loc);
+		return loc;
+	}
+
+	public render(nT: number, properties?: AnimatedElementRenderProperties) {
+		if (this.context.isDisposed()) return;
+
+		const isSlideTransition: boolean = !!this.leavingSlide;
+
+		app.console.debug(`Transition2d.render: nT: ${nT}`);
+
+		const gl = this.gl;
+		if (isSlideTransition) {
+			gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
+			gl.clearColor(0.0, 0.0, 0.0, 1.0);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+		}
+
+		if (!this.program) {
+			app.console.error('Transition2d.render: this.program is missing');
+			return;
+		}
 
 		gl.useProgram(this.program);
-		gl.uniform1f(gl.getUniformLocation(this.program, 'time'), this.time);
+		gl.bindVertexArray(this.vao);
+		gl.uniform1f(gl.getUniformLocation(this.program, 'time'), nT);
 
-		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.transitionParameters.current);
-		gl.uniform1i(gl.getUniformLocation(this.program, 'leavingSlideTexture'), 0);
+		if (isSlideTransition) {
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, this.leavingSlide);
+			gl.uniform1i(
+				gl.getUniformLocation(this.program, 'leavingSlideTexture'),
+				0,
+			);
+		} else {
+			const {
+				bounds,
+				alpha,
+				fromFillColor,
+				toFillColor,
+				fromLineColor,
+				toLineColor,
+			} = LayerRendererGl.computeColor(properties);
+
+			app.console.debug(`Transition2d.render: alpha: ${alpha}`);
+
+			this.setPositionBuffer(bounds);
+			this.gl.uniform1f(this.getUniformLocation('alpha'), alpha);
+			this.gl.uniform4fv(
+				this.getUniformLocation('fromFillColor'),
+				fromFillColor,
+			);
+			this.gl.uniform4fv(this.getUniformLocation('toFillColor'), toFillColor);
+			this.gl.uniform4fv(
+				this.getUniformLocation('fromLineColor'),
+				fromLineColor,
+			);
+			this.gl.uniform4fv(this.getUniformLocation('toLineColor'), toLineColor);
+		}
 
 		gl.activeTexture(gl.TEXTURE1);
-		gl.bindTexture(gl.TEXTURE_2D, this.transitionParameters.next);
+		gl.bindTexture(gl.TEXTURE_2D, this.enteringSlide);
 		gl.uniform1i(
 			gl.getUniformLocation(this.program, 'enteringSlideTexture'),
 			1,
@@ -176,16 +220,12 @@ class Transition2d {
 		gl.bindVertexArray(this.vao);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-		if (this.time < 1) {
-			requestAnimationFrame(this.render.bind(this));
-		} else {
-			this.transitionParameters.callback();
-			console.log('Transition completed');
+		if (isSlideTransition) {
+			app.map.fire('newslideshowframe', {
+				frame: gl.canvas,
+			});
 		}
 	}
-
-	// eslint-disable-next-line @typescript-eslint/no-empty-function
-	public renderUniformValue(): void {}
 }
 
 SlideShow.Transition2d = Transition2d;

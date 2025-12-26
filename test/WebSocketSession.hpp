@@ -47,7 +47,7 @@ public:
     };
 
 private:
-    typedef std::vector<std::vector<char>> BufferQueue;
+    using BufferQueue = std::vector<std::vector<char>>;
 
     std::vector<char> pop(BufferQueue &queue)
     {
@@ -83,7 +83,7 @@ private:
 public:
     /// Destroy WebSocketSession.
     /// Note: must never be called with the owning poll thread still active.
-    ~WebSocketSession() { shutdown(); }
+    ~WebSocketSession() override { shutdown(); }
 
     /// Create a new HTTP WebSocketSession to the given host.
     /// The port defaults to the protocol's default port.
@@ -205,6 +205,10 @@ public:
             if (elapsed >= timeout)
                 break;
 
+            // Only continue if still connected
+            if( !isConnected() )
+                break;
+
             const std::chrono::milliseconds remaining = timeout - elapsed;
             _inCv.wait_for(lock, remaining / 20,
                            [this]()
@@ -233,7 +237,8 @@ public:
                                         std::chrono::milliseconds timeout,
                                         const std::string& context = std::string())
     {
-        LOG_DBG(context << "Waiting for any [" << Util::join(prefixes) << "] for " << timeout);
+        LOG_DBG(context << "Waiting for any [" << Util::join(prefixes, ", ") << "] for "
+                        << timeout);
 
         return poll(
             [&](const std::vector<char>& message)
@@ -257,6 +262,18 @@ public:
         {
             std::unique_lock<std::mutex> lock(_outMutex);
             _outQueue.emplace_back(msg.data(), msg.data() + msg.size());
+        }
+
+        const auto pollPtr = _socketPoll.lock();
+        if (pollPtr)
+            pollPtr->wakeup();
+    }
+
+    template <std::size_t N> void sendMessage(const char (&msg)[N])
+    {
+        {
+            std::unique_lock<std::mutex> lock(_outMutex);
+            _outQueue.emplace_back(msg, msg + N - 1); // Minus the null-terminator.
         }
 
         const auto pollPtr = _socketPoll.lock();
@@ -319,10 +336,10 @@ public:
     /// if we timed out without disconnecting.
     bool waitForDisconnection(const std::chrono::milliseconds timeout)
     {
-        std::unique_lock<std::mutex> lock(_outMutex);
-
         if (_disconnected)
             return true;
+
+        std::unique_lock<std::mutex> lock(_outMutex);
 
         _disconnectCv.wait_for(lock, timeout, [this]() { return _disconnected.load(); });
         return _disconnected;
@@ -361,13 +378,14 @@ private:
 
     void performWrites(std::size_t capacity) override
     {
-        LOG_TRC("WebSocketSession: performing writes, up to " << capacity << " bytes.");
-
         std::unique_lock<std::mutex> lock(_outMutex);
 
         std::size_t wrote = 0;
         try
         {
+            if (!_outQueue.empty())
+                LOG_TRC("WebSocketSession: performing writes, up to " << capacity << " bytes");
+
             // Drain the queue, for efficient communication.
             while (capacity > wrote && !_outQueue.empty())
             {
@@ -378,7 +396,8 @@ private:
                 sendTextMessage(item.data(), size);
 
                 wrote += size;
-                LOG_TRC("WebSocketSession: wrote " << size << ", total " << wrote << " bytes.");
+                LOG_TRC("WebSocketSession: performing writes, wrote " << size << " bytes, " << wrote
+                                                                      << " total");
             }
 
             if (_shutdown && _outQueue.empty())
@@ -388,10 +407,14 @@ private:
         }
         catch (const std::exception& ex)
         {
-            LOG_ERR("WebSocketSession: Failed to send message: " << ex.what());
+            LOG_ERR("WebSocketSession: Failed to send message after writing "
+                    << wrote << " bytes: " << ex.what());
+            return;
         }
 
-        LOG_TRC("WebSocketSession: performed write, wrote " << wrote << " bytes.");
+        if (wrote)
+            LOG_TRC("WebSocketSession: performed write, wrote "
+                    << wrote << " bytes total (capacity: " << capacity << ')');
     }
 
     // Make these inaccessible since they must only be called from the poll thread.
@@ -407,10 +430,7 @@ private:
 
     void onDisconnect() override
     {
-        {
-            std::unique_lock<std::mutex> lock(_outMutex);
-            _disconnected = true;
-        }
+        _disconnected = true;
 
         _disconnectCv.notify_all();
     }
@@ -420,15 +440,15 @@ private:
     const std::string _port;
     const Protocol _protocol;
     Request _request;
-    BufferQueue _inQueue; //< The incoming message queue.
-    std::condition_variable _inCv; //< The incoming queue cond_var.
-    std::mutex _inMutex; //< The incoming queue lock.
-    BufferQueue _outQueue; //< The outgoing message queue.
-    std::mutex _outMutex; //< The outgoing queue lock.
-    std::condition_variable _disconnectCv; //< Traps disconnections.
-    std::mutex _disconnectMutex; //< The disconnection event lock.
-    std::atomic_bool _disconnected; //< True iff we are disconnected.
-    std::atomic_bool _shutdown; //< Whether we should shutdown after sending all the data.
+    BufferQueue _inQueue; ///< The incoming message queue.
+    std::condition_variable _inCv; ///< The incoming queue cond_var.
+    std::mutex _inMutex; ///< The incoming queue lock.
+    BufferQueue _outQueue; ///< The outgoing message queue.
+    std::mutex _outMutex; ///< The outgoing queue lock.
+    std::condition_variable _disconnectCv; ///< Traps disconnections.
+    std::mutex _disconnectMutex; ///< The disconnection event lock.
+    std::atomic_bool _disconnected; ///< True iff we are disconnected.
+    std::atomic_bool _shutdown; ///< Whether we should shutdown after sending all the data.
     std::weak_ptr<SocketPoll> _socketPoll;
 };
 

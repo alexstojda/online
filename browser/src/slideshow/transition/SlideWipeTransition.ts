@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -11,7 +13,7 @@
 declare var SlideShow: any;
 
 function SlideWipeTransition(transitionParameters: TransitionParameters) {
-	if (transitionParameters.slideInfo.transitionDirection) {
+	if (transitionParameters.transitionFilterInfo.isDirectionForward) {
 		return new SlideShow.CoverTransition(transitionParameters);
 	} else {
 		return new SlideShow.UncoverTransition(transitionParameters);

@@ -11,11 +11,8 @@
 
 #pragma once
 
-#include <sys/time.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <iostream>
@@ -27,12 +24,16 @@
 #include <android/log.h>
 #endif
 
+#if defined __EMSCRIPTEN__
+#include <emscripten/console.h>
+#endif
+
 #include "Util.hpp"
 #include "StateEnum.hpp"
 
 namespace Log
 {
-    enum Level
+    enum Level : std::uint8_t
     {
         FTL = 1, // Fatal
         CTL,     // Critical
@@ -58,32 +59,48 @@ namespace Log
                Admin,
                Javascript);
 
+    // Types of phases for unit test
+    STATE_ENUM(Phase,
+               Setup,
+               Load,
+               Edit);
+
     /// Initialize the logging system.
     void initialize(const std::string& name,
                     const std::string& logLevel,
-                    const bool withColor,
-                    const bool logToFile,
-                    const std::map<std::string, std::string>& config);
+                    bool withColor,
+                    bool logToFile,
+                    const std::map<std::string, std::string>& config,
+                    bool logToFileUICmd,
+                    const std::map<std::string, std::string>& configUICmd);
 
     /// Shutdown and release the logging system.
     void shutdown();
+
+    /// Flush buffered console logs, if used.
+    void flush();
+
+    /// Prepare for forking.
+    void preFork();
 
     /// Cleanup state after forking
     void postFork();
 
     void setThreadLocalLogLevel(const std::string& logLevel);
 
-    /// Generates log entry prefix. Example follows (without the pipes).
+    /// Generates log entry prefix. Example follows (without the vertical bars).
     /// |wsd-07272-07298 2020-04-25 17:29:28.928697 -0400 [ websrv_poll ] TRC  |
     /// This is fully signal-safe. Buffer must be at least 128 bytes.
-    char* prefix(const timeval& tv, char* buffer, const char* level);
+    char* prefix(const std::chrono::time_point<std::chrono::system_clock>& tp,
+                 char* buffer,
+                 const char* level);
+
     template <int Size> inline char* prefix(char buffer[Size], const char* level)
     {
         static_assert(Size >= 128, "Buffer size must be at least 128 bytes.");
 
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        return prefix(tv, buffer, level);
+        const auto tp = std::chrono::system_clock::now();
+        return prefix(tp, buffer, level);
     }
 
     /// is a certain level of logging enabled ?
@@ -96,6 +113,11 @@ namespace Log
 
     /// Main entry function for all logging
     void log(Level l, const std::string &text);
+    bool isLogUIEnabled();
+    void logUI(Level l, const std::string &text);
+    bool isLogUIMerged();
+    bool isLogUITimeEnd();
+    void setUILogMergeInfo(bool mergeCmd, bool logTimeEndOfMergedCmd);
 
     /// Setting the logging level
     void setLevel(const std::string &l);
@@ -106,7 +128,7 @@ namespace Log
     /// Getting the logging level
     Level getLevel();
 
-    std::string getLogLevelName(const std::string &channel);
+    const std::string& getLogLevelName(const std::string& channel);
     void setLogLevelByName(const std::string &channel,
                            const std::string &level);
 
@@ -164,6 +186,12 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
 #define LOG_FILE_NAME(f) (&f[skipPathPrefix(f)])
 #endif
 
+// Macro expansion doesn't happen when # or ## operators are used,
+// so we need an indirection to expand macros before using the result.
+#define CONCATINATE_IMPL(X, Y) X##Y
+#define CONCATINATE(X, Y) CONCATINATE_IMPL(X, Y)
+#define UNIQUE_VAR(X) CONCATINATE(X, __LINE__)
+#define STRINGIFY(X) #X
 #define STRING(X) STRINGIFY(X)
 
 #ifdef __ANDROID__
@@ -171,6 +199,16 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
 #define LOG_LOG(LVL, STR) \
     ((void)__android_log_print(ANDROID_LOG_DEBUG, \
                                "coolwsd", "%s %s", #LVL, STR.c_str()))
+#elif defined __EMSCRIPTEN__
+
+// emscripten/console.h does not have emscripten_console_info (corresponding to JS console.info) nor
+// emsripten_console_debug (corresponding to JS console.debug), so use emscripten_console_log
+// (corresponding to JS console.log) instead:
+#define LOG_LOG(LVL, STR) ( \
+    Log::LVL <= Log::ERR ? emscripten_console_error((STR).c_str()) : \
+    Log::LVL <= Log::WRN ? emscripten_console_warn((STR).c_str()) : \
+                           emscripten_console_log((STR).c_str()))
+
 #else
 
 #define LOG_LOG(LVL, STR)  Log::log(Log::LVL, STR)
@@ -179,14 +217,6 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
 #define LOG_END_NOFILE(LOG) (void)0
 
 #define LOG_END(LOG) LOG << "| " << LOG_FILE_NAME(__FILE__) << ":" STRING(__LINE__)
-
-/// Used to end multi-statement logging via Log::StreamLogger.
-#define LOG_END_FLUSH(LOG) \
-    do                     \
-    {                      \
-        LOG_END(LOG);      \
-        LOG.flush();       \
-    } while (false)
 
 #define LOG_MESSAGE_(LVL, A, X, PREFIX, SUFFIX)  \
     do                                          \
@@ -197,26 +227,33 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
         }                                       \
     } while (false)
 
-
-#define LOG_BODY_(LVL, X, PREFIX, END)        \
-    char b_[1024];                              \
-    std::ostringstream oss_(                    \
-        Log::prefix<sizeof(b_) - 1>(b_, #LVL),  \
-        std::ostringstream::ate);               \
-    PREFIX(oss_);                               \
-    oss_ << std::boolalpha << X;                \
-    END(oss_);                                  \
+#define LOG_BODY_(LVL, X, PREFIX, END)                                                             \
+    char UNIQUE_VAR(buffer)[1024];                                                                 \
+    std::ostringstream oss_(Log::prefix<sizeof(UNIQUE_VAR(buffer)) - 1>(UNIQUE_VAR(buffer), #LVL), \
+                            std::ostringstream::ate);                                              \
+    PREFIX(oss_);                                                                                  \
+    oss_ << std::boolalpha << X;                                                                   \
+    END(oss_);                                                                                     \
     LOG_LOG(LVL, oss_.str())
 
-#define LOG_ANY(X)                              \
-    char b_[1024];                              \
-    std::ostringstream oss_(                    \
-        Log::prefix<sizeof(b_) - 1>(b_, "INF"), \
-        std::ostringstream::ate);               \
-    logPrefix(oss_);                            \
-    oss_ << std::boolalpha << X;                \
-    LOG_END(oss_);                              \
-    Log::log(Log::Level::INF, oss_.str());
+/// Unconditionally log. LVL can be anything converted to string.
+#define LOG_UNCONDITIONAL(LVL, X)                                                                  \
+    do                                                                                             \
+    {                                                                                              \
+        char UNIQUE_VAR(buffer)[1024];                                                             \
+        std::ostringstream oss_(                                                                   \
+            Log::prefix<sizeof(UNIQUE_VAR(buffer)) - 1>(UNIQUE_VAR(buffer), #LVL),                 \
+            std::ostringstream::ate);                                                              \
+        logPrefix(oss_);                                                                           \
+        oss_ << std::boolalpha << X;                                                               \
+        LOG_END(oss_);                                                                             \
+        Log::log(Log::Level::FTL, oss_.str());                                                     \
+    } while (false)
+
+/// Unconditionally log at ANY level.
+#define LOG_ANY(X) LOG_UNCONDITIONAL(ANY, X)
+/// Unconditionally log at TST level. Used for tests only.
+#define LOG_TST(X) LOG_UNCONDITIONAL(TST, X)
 
 #if defined __GNUC__ || defined __clang__
 #  define LOG_CONDITIONAL(type, area)  \
@@ -240,18 +277,37 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
 #define LOGA_INF_NOFILE(A,X) LOG_MESSAGE_(INF, A, X, logPrefix, LOG_END_NOFILE)
 // WRN and ERR should not be filtered by area
 
-/// Log an ERR entry with the given errno appended.
-#define LOG_SYS_ERRNO(ERRNO, X)                                                                    \
+/// Internal: Log an entry with the given ERRNO appended using the given LOGGER.
+#define LOG_ERRNO_(LOGGER, ERRNO, X)                                                               \
     do                                                                                             \
     {                                                                                              \
         const auto onrre = ERRNO; /* Save errno immediately while avoiding name clashes*/          \
-        LOG_ERR(X << " (" << Util::symbolicErrno(onrre) << ": " << std::strerror(onrre) << ')');   \
+        LOGGER(X << " (" << Util::symbolicErrno(onrre) << ": " << std::strerror(onrre) << ')');    \
     } while (false)
+
+/// Log an ERR entry with the given errno appended.
+#define LOG_ERR_ERRNO(ERRNO, X) LOG_ERRNO_(LOG_ERR, ERRNO, X)
+/// Log an WRN entry with the given errno appended.
+#define LOG_WRN_ERRNO(ERRNO, X) LOG_ERRNO_(LOG_WRN, ERRNO, X)
+/// Log an INF entry with the given errno appended.
+#define LOG_INF_ERRNO(ERRNO, X) LOG_ERRNO_(LOG_INF, ERRNO, X)
+/// Log an DBG entry with the given errno appended.
+#define LOG_DBG_ERRNO(ERRNO, X) LOG_ERRNO_(LOG_DBG, ERRNO, X)
+/// Log an TRC entry with the given errno appended.
+#define LOG_TRC_ERRNO(ERRNO, X) LOG_ERRNO_(LOG_TRC, ERRNO, X)
 
 /// Log an ERR entry with errno appended.
 /// NOTE: Must be called immediately after an API that sets errno.
-/// Use LOG_SYS_ERRNO to pass errno explicitly.
-#define LOG_SYS(X) LOG_SYS_ERRNO(errno, X)
+/// Use LOG_ERR_ERRNO to pass errno explicitly.
+#define LOG_SYS(X) LOG_ERR_ERRNO(errno, X)
+/// Log an WRN entry with the given errno appended.
+#define LOG_WRN_SYS(X) LOG_WRN_ERRNO(errno, X)
+/// Log an INF entry with the given errno appended.
+#define LOG_INF_SYS(X) LOG_INF_ERRNO(errno, X)
+/// Log an DBG entry with the given errno appended.
+#define LOG_DBG_SYS(X) LOG_DBG_ERRNO(errno, X)
+/// Log an TRC entry with the given errno appended.
+#define LOG_TRC_SYS(X) LOG_TRC_ERRNO(errno, X)
 
 #define LOG_FTL(X)                                                                                 \
     do                                                                                             \
@@ -302,15 +358,16 @@ static constexpr std::size_t skipPathPrefix(const char (&s)[N], std::size_t n = 
 #define LOG_ASSERT_INTERNAL(condition, message, LOG)                                               \
     do                                                                                             \
     {                                                                                              \
-        if (!(condition))                                                                          \
+        auto&& UNIQUE_VAR(cond) = !!(condition);                                                   \
+        if (!UNIQUE_VAR(cond))                                                                     \
         {                                                                                          \
-            std::ostringstream oss##__LINE__;                                                      \
-            oss##__LINE__ << message;                                                              \
-            const auto msg##__LINE__ = oss##__LINE__.str();                                        \
+            std::ostringstream UNIQUE_VAR(oss);                                                    \
+            UNIQUE_VAR(oss) << message;                                                            \
+            const auto UNIQUE_VAR(msg) = UNIQUE_VAR(oss).str();                                    \
             LOG("ERROR: Assertion failure: "                                                       \
-                << (msg##__LINE__.empty() ? "" : msg##__LINE__ + ". ")                             \
-                << "Condition: " << (#condition));                                                 \
-            assert(!#condition); /* NOLINT(misc-static-assert) */                                  \
+                << (UNIQUE_VAR(msg).empty() ? "" : UNIQUE_VAR(msg) + ". ")                         \
+                << "Condition: " << STRING(condition));                                            \
+            assert(!STRING(condition)); /* NOLINT(misc-static-assert) */                           \
         }                                                                                          \
     } while (false)
 

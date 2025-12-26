@@ -24,9 +24,12 @@
 #include <ProofKey.hpp>
 #include <Unit.hpp>
 #include <Util.hpp>
+#include <common/Anonymizer.hpp>
 #include <common/FileUtil.hpp>
 #include <common/JsonUtil.hpp>
 #include <common/TraceEvent.hpp>
+#include <common/Uri.hpp>
+#include <wopi/StorageConnectionManager.hpp>
 
 #include <Poco/Exception.h>
 #include <Poco/Net/AcceptCertificateHandler.h>
@@ -44,7 +47,6 @@
 
 #include <cassert>
 #include <chrono>
-#include <iconv.h>
 #include <memory>
 #include <string>
 
@@ -63,88 +65,70 @@ bool isTemplate(const std::string& filename)
 namespace
 {
 
-static void addStorageDebugCookie(Poco::Net::HTTPRequest& request)
+/// A helper class to invoke the callback of an async
+/// request when it exits its scope.
+/// By default it invokes the callback with a failure state.
+template <typename TCallback, typename TArg> class ScopedInvokeAsyncRequestCallback
 {
-    (void)request;
-#if ENABLE_DEBUG
-    if (std::getenv("COOL_STORAGE_COOKIE"))
+public:
+    ScopedInvokeAsyncRequestCallback(TCallback callback, TArg arg)
+        : _callback(std::move(callback))
+        , _arg(std::move(arg))
     {
-        Poco::Net::NameValueCollection nvcCookies;
-        StringVector cookieTokens =
-            StringVector::tokenize(std::string(std::getenv("COOL_STORAGE_COOKIE")), ':');
-        if (cookieTokens.size() == 2)
-        {
-            nvcCookies.add(cookieTokens[0], cookieTokens[1]);
-            request.setCookies(nvcCookies);
-            LOG_TRC("Added storage debug cookie [" << cookieTokens[0] << '=' << cookieTokens[1]
-                                                   << "].");
-        }
     }
-#endif
+
+    ~ScopedInvokeAsyncRequestCallback()
+    {
+        if (_callback)
+            _callback(_arg);
+    }
+
+    /// Set a new callback argument.
+    void setArg(TArg arg) { _arg = std::move(arg); }
+
+private:
+    TCallback _callback;
+    TArg _arg;
+};
+
+void anonymizeAvatarURL(Poco::JSON::Object::Ptr& userExtraInfo)
+{
+    auto avatarURL = userExtraInfo->getValue<std::string>("avatar");
+    if (!avatarURL.empty())
+    {
+        const std::string avatar_path = "/avatar/";
+        std::size_t startPos = avatarURL.find(avatar_path) + avatar_path.length();
+        std::size_t endPos = avatarURL.find("/", startPos);
+
+        if (startPos != std::string::npos && endPos != std::string::npos)
+        {
+            std::string avatarUserName = avatarURL.substr(startPos, endPos - startPos);
+            avatarURL.replace(startPos, endPos - startPos, COOLWSD::anonymizeUsername(avatarUserName));
+        }
+        userExtraInfo->set("avatar", avatarURL);
+    }
 }
 
-// access_token must be decoded
-void addWopiProof(Poco::Net::HTTPRequest& request, const Poco::URI& uri,
-                  const std::string& access_token)
+void anonymizeUserPrivateInfo(Poco::JSON::Object::Ptr& userPrivateInfo)
 {
-    assert(!uri.isRelative());
-    for (const auto& header : GetProofHeaders(access_token, uri.toString()))
-        request.set(header.first, header.second);
-}
-
-std::map<std::string, std::string> GetQueryParams(const Poco::URI& uri)
-{
-    std::map<std::string, std::string> result;
-    for (const auto& param : uri.getQueryParameters())
-        result.emplace(param);
-    return result;
+    auto keys = userPrivateInfo->getNames();
+    for (const auto& key : keys)
+    {
+        auto value = userPrivateInfo->getValue<std::string>(key);
+        if(!value.empty())
+            userPrivateInfo->set(key, COOLWSD::anonymizeUsername(value));
+    }
 }
 
 } // anonymous namespace
-
-void WopiStorage::initHttpRequest(Poco::Net::HTTPRequest& request, const Poco::URI& uri,
-                                  const Authorization& auth) const
-{
-    request.set("User-Agent", http::getAgentString());
-
-    auth.authorizeRequest(request);
-
-    addStorageDebugCookie(request);
-
-    // TODO: Avoid repeated parsing.
-    std::map<std::string, std::string> params = GetQueryParams(uri);
-    const auto it = params.find("access_token");
-    if (it != params.end())
-        addWopiProof(request, uri, it->second);
-
-    // Helps wrt. debugging cluster cases from the logs
-    request.set("X-COOL-WOPI-ServerId", Util::getProcessIdentifier());
-}
-
-http::Request WopiStorage::initHttpRequest(const Poco::URI& uri, const Authorization& auth) const
-{
-    http::Request httpRequest(uri.getPathAndQuery());
-
-    //FIXME: Hack Hack Hack! Use own version.
-    Poco::Net::HTTPRequest request;
-    initHttpRequest(request, uri, auth);
-
-    // Copy the headers, including the cookies.
-    for (const auto& pair : request)
-    {
-        httpRequest.header().set(pair.first, pair.second);
-    }
-
-    return httpRequest;
-}
 
 void WopiStorage::handleWOPIFileInfo(const WOPIFileInfo& wopiFileInfo, LockContext& lockCtx)
 {
     setFileInfo(wopiFileInfo);
 
     if (COOLWSD::AnonymizeUserData)
-        Util::mapAnonymized(Util::getFilenameFromURL(wopiFileInfo.getFilename()),
-                            Util::getFilenameFromURL(getUri().toString()));
+        Anonymizer::mapAnonymized(Uri::getFilenameFromURL(wopiFileInfo.getFilename()),
+                                  Uri::getFilenameFromURL(getUri().toString()));
 
     if (wopiFileInfo.getSupportsLocks())
         lockCtx.initSupportsLocks();
@@ -185,9 +169,9 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
         JsonUtil::findJSONValue(object, "ObfuscatedUserId", _obfuscatedUserId);
         if (!_obfuscatedUserId.empty())
         {
-            Util::mapAnonymized(getOwnerId(), _obfuscatedUserId);
-            Util::mapAnonymized(_userId, _obfuscatedUserId);
-            Util::mapAnonymized(_username, _obfuscatedUserId);
+            Anonymizer::mapAnonymized(getOwnerId(), _obfuscatedUserId);
+            Anonymizer::mapAnonymized(_userId, _obfuscatedUserId);
+            Anonymizer::mapAnonymized(_username, _obfuscatedUserId);
         }
 
         // Set anonymized version of the above fields before logging.
@@ -202,6 +186,16 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
             object->set("UserId", COOLWSD::anonymizeUsername(_userId));
             object->set("UserFriendlyName", COOLWSD::anonymizeUsername(_username));
         }
+
+        if (auto userExtraInfo = object->getObject("UserExtraInfo"))
+        {
+            anonymizeAvatarURL(userExtraInfo);
+        }
+
+        if (auto userPrivateInfo = object->getObject("UserPrivateInfo"))
+        {
+            anonymizeUserPrivateInfo(userPrivateInfo);
+        }
     }
     object->stringify(wopiResponse);
 
@@ -209,6 +203,10 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
 
     JsonUtil::findJSONValue(object, "UserExtraInfo", _userExtraInfo);
     JsonUtil::findJSONValue(object, "UserPrivateInfo", _userPrivateInfo);
+    JsonUtil::findJSONValue(object, "ServerPrivateInfo", _serverPrivateInfo);
+    if (auto settingsJSON = object->getObject("UserSettings"))
+        JsonUtil::findJSONValue(settingsJSON, "uri", _userSettingsUri);
+
     JsonUtil::findJSONValue(object, "WatermarkText", _watermarkText);
     JsonUtil::findJSONValue(object, "UserCanWrite", _userCanWrite);
     JsonUtil::findJSONValue(object, "PostMessageOrigin", _postMessageOrigin);
@@ -224,8 +222,10 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
     JsonUtil::findJSONValue(object, "DownloadAsPostMessage", _downloadAsPostMessage);
     JsonUtil::findJSONValue(object, "UserCanNotWriteRelative", _userCanNotWriteRelative);
     JsonUtil::findJSONValue(object, "EnableInsertRemoteImage", _enableInsertRemoteImage);
+    JsonUtil::findJSONValue(object, "EnableInsertRemoteFile", _enableInsertRemoteFile);
     JsonUtil::findJSONValue(object, "DisableInsertLocalImage", _disableInsertLocalImage);
     JsonUtil::findJSONValue(object, "EnableRemoteLinkPicker", _enableRemoteLinkPicker);
+    JsonUtil::findJSONValue(object, "EnableRemoteAIContent", _enableRemoteAIContent);
     JsonUtil::findJSONValue(object, "EnableShare", _enableShare);
     JsonUtil::findJSONValue(object, "HideUserList", _hideUserList);
     JsonUtil::findJSONValue(object, "SupportsLocks", _supportsLocks);
@@ -233,6 +233,9 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
     JsonUtil::findJSONValue(object, "UserCanRename", _userCanRename);
     JsonUtil::findJSONValue(object, "BreadcrumbDocName", _breadcrumbDocName);
     JsonUtil::findJSONValue(object, "FileUrl", _fileUrl);
+    JsonUtil::findJSONValue(object, "UserCanOnlyComment", _userCanOnlyComment);
+    JsonUtil::findJSONValue(object, "UserCanOnlyManageRedlines", _userCanOnlyManageRedlines);
+    JsonUtil::findJSONValue(object, "PresentationLeader", _presentationLeader);
 
     // check if user is admin on the integrator side
     bool isAdminUser = false;
@@ -251,7 +254,7 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
 
     // Update the scheme to https if ssl or ssl termination is on
     if (_postMessageOrigin.starts_with("http://") &&
-        (COOLWSD::isSSLEnabled() || COOLWSD::isSSLTermination()))
+        (ConfigUtil::isSslEnabled() || ConfigUtil::isSSLTermination()))
     {
         _postMessageOrigin.replace(0, 4, "https");
         LOG_DBG("Updating PostMessageOrigin scheme to HTTPS. Updated origin is now ["
@@ -262,7 +265,7 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
     bool isUserLocked = false;
     JsonUtil::findJSONValue(object, "IsUserLocked", isUserLocked);
 
-    if (config::getBool("feature_lock.locked_hosts[@allow]", false))
+    if (ConfigUtil::getBool("feature_lock.locked_hosts[@allow]", false))
     {
         bool isReadOnly = false;
         isUserLocked = false;
@@ -279,9 +282,10 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
         {
             LOG_INF("Could not find matching locked_host: " << host
                                                             << ",applying fallback settings");
-            isReadOnly = config::getBool("feature_lock.locked_hosts.fallback[@read_only]", false);
-            isUserLocked =
-                config::getBool("feature_lock.locked_hosts.fallback[@disabled_commands]", false);
+            isReadOnly =
+                ConfigUtil::getBool("feature_lock.locked_hosts.fallback[@read_only]", false);
+            isUserLocked = ConfigUtil::getBool(
+                "feature_lock.locked_hosts.fallback[@disabled_commands]", false);
         }
 
         if (isReadOnly)
@@ -313,8 +317,8 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
         _hideChangeTrackingControls =
             (booleanFlag ? WOPIFileInfo::TriState::True : WOPIFileInfo::TriState::False);
 
-    static const std::string overrideWatermarks =
-        COOLWSD::getConfigValue<std::string>("watermark.text", "");
+    CONFIG_STATIC const std::string overrideWatermarks =
+        ConfigUtil::getConfigValue<std::string>("watermark.text", "");
     if (!overrideWatermarks.empty())
         _watermarkText = overrideWatermarks;
     if (isTemplate(getFilename()))
@@ -322,12 +326,12 @@ WopiStorage::WOPIFileInfo::WOPIFileInfo(const FileInfo& fileInfo, Poco::JSON::Ob
 }
 
 StorageBase::LockUpdateResult WopiStorage::updateLockState(const Authorization& auth,
-                                                           LockContext& lockCtx, bool lock,
+                                                           LockContext& lockCtx,
+                                                           StorageBase::LockState lock,
                                                            const Attributes& attribs)
 {
-    lockCtx._lockFailureReason.clear();
-    if (!lockCtx._supportsLocks)
-        return LockUpdateResult::UNSUPPORTED;
+    if (!lockCtx.supportsLocks())
+        return LockUpdateResult(LockUpdateResult::Status::UNSUPPORTED, lock);
 
     Poco::URI uriObject(getUri());
     auth.authorizeURI(uriObject);
@@ -336,89 +340,191 @@ StorageBase::LockUpdateResult WopiStorage::updateLockState(const Authorization& 
     uriObjectAnonym.setPath(COOLWSD::anonymizeUrl(uriObjectAnonym.getPath()));
     const std::string uriAnonym = uriObjectAnonym.toString();
 
-    const std::string wopiLog(lock ? "WOPI::Lock" : "WOPI::Unlock");
+    const auto wopiLog = (lock == StorageBase::LockState::LOCK ? "WOPI::Lock" : "WOPI::Unlock");
     LOG_DBG(wopiLog << " requesting: " << uriAnonym);
 
+    std::string failureReason("Internal error");
     try
     {
-        std::unique_ptr<Poco::Net::HTTPClientSession> psession(getHTTPClientSession(uriObject));
+        std::shared_ptr<http::Session> httpSession =
+            StorageConnectionManager::getHttpSession(uriObject);
 
-        Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_POST,
-                                       uriObject.getPathAndQuery(),
-                                       Poco::Net::HTTPMessage::HTTP_1_1);
-        initHttpRequest(request, uriObject, auth);
+        http::Request httpRequest = StorageConnectionManager::createHttpRequest(uriObject, auth);
+        httpRequest.setVerb(http::Request::VERB_POST);
 
-        request.set("X-WOPI-Override", lock ? "LOCK" : "UNLOCK");
-        request.set("X-WOPI-Lock", lockCtx._lockToken);
+        httpRequest.set("X-WOPI-Override",
+                        lock == StorageBase::LockState::LOCK ? "LOCK" : "UNLOCK");
+        httpRequest.set("X-WOPI-Lock", lockCtx.lockToken());
         if (!attribs.getExtendedData().empty())
         {
-            request.set("X-COOL-WOPI-ExtendedData", attribs.getExtendedData());
+            httpRequest.set("X-COOL-WOPI-ExtendedData", attribs.getExtendedData());
             if (isLegacyServer())
-                request.set("X-LOOL-WOPI-ExtendedData", attribs.getExtendedData());
+                httpRequest.set("X-LOOL-WOPI-ExtendedData", attribs.getExtendedData());
         }
 
         // IIS requires content-length for POST requests: see https://forums.iis.net/t/1119456.aspx
-        request.setContentLength(0);
+        httpRequest.setContentLength(0);
 
-        psession->sendRequest(request);
-        Poco::Net::HTTPResponse response;
-        std::istream& rs = psession->receiveResponse(response);
+        const std::shared_ptr<const http::Response> httpResponse =
+            httpSession->syncRequest(httpRequest);
+        const std::string& responseString = httpResponse->getBody();
 
-        std::ostringstream oss;
-        Poco::StreamCopier::copyStream(rs, oss);
-        std::string responseString = oss.str();
+        LOG_INF(wopiLog << " status: " << httpResponse->statusLine().statusCode()
+                        << ", response: " << responseString);
 
-        LOG_INF(wopiLog << " response: " << responseString << " status " << response.getStatus());
-
-        if (response.getStatus() == Poco::Net::HTTPResponse::HTTP_OK)
+        if (httpResponse->statusLine().statusCode() == http::StatusCode::OK)
         {
-            lockCtx._isLocked = lock;
-            lockCtx.bumpTimer();
-            return LockUpdateResult::OK;
+            lockCtx.setState(lock);
+            return LockUpdateResult(LockUpdateResult::Status::OK, lock);
         }
-        else
-        {
-            std::string sMoreInfo = response.get("X-WOPI-LockFailureReason", "");
-            if (!sMoreInfo.empty())
-            {
-                lockCtx._lockFailureReason = sMoreInfo;
-                sMoreInfo = ", failure reason: \"" + sMoreInfo + "\"";
-            }
 
-            if (response.getStatus() == Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED ||
-                response.getStatus() == Poco::Net::HTTPResponse::HTTP_FORBIDDEN ||
-                response.getStatus() == Poco::Net::HTTPResponse::HTTP_NOT_FOUND)
-            {
-                LOG_ERR("Un-successful " << wopiLog << " with expired token, HTTP status "
-                                         << response.getStatus() << sMoreInfo
-                                         << " and response: " << responseString);
+        failureReason = httpResponse->get("X-WOPI-LockFailureReason", "");
 
-                return LockUpdateResult::UNAUTHORIZED;
-            }
+        const bool unauthorized =
+            (httpResponse->statusLine().statusCode() == http::StatusCode::Unauthorized ||
+             httpResponse->statusLine().statusCode() == http::StatusCode::Forbidden ||
+             httpResponse->statusLine().statusCode() == http::StatusCode::NotFound);
 
-            LOG_ERR("Un-successful " << wopiLog << " with HTTP status " << response.getStatus()
-                                     << sMoreInfo << " and response: " << responseString);
-            return LockUpdateResult::FAILED;
-        }
+        LOG_ERR("Un-successful " << wopiLog << " with " << (unauthorized ? "expired token, " : "")
+                                 << "HTTP status " << httpResponse->statusLine().statusCode()
+                                 << ", failure reason: [" << failureReason << "] and response: ["
+                                 << responseString << ']');
     }
-    catch (const Poco::Exception& pexc)
-    {
-        LOG_ERR("Cannot " << wopiLog << " uri [" << uriAnonym << "]. Error: " << pexc.displayText()
-                          << (pexc.nested() ? " (" + pexc.nested()->displayText() + ')' : ""));
-    }
-    catch (const BadRequestException& exc)
+    catch (const std::exception& exc)
     {
         LOG_ERR("Cannot " << wopiLog << " uri [" << uriAnonym << "]. Error: " << exc.what());
+        failureReason = std::string("Internal error: ") + exc.what();
     }
 
-    lockCtx._lockFailureReason = "Request failed";
-    return LockUpdateResult::FAILED;
+    return LockUpdateResult(LockUpdateResult::Status::FAILED, lock, std::move(failureReason));
+}
+
+void WopiStorage::updateLockStateAsync(const Authorization& auth, LockContext& lockCtx,
+                                       LockState lock, const Attributes& attribs,
+                                       const std::shared_ptr<SocketPoll>& socketPoll,
+                                       const AsyncLockStateCallback& asyncLockStateCallback)
+{
+    auto profileZone = std::make_shared<ProfileZone>(
+        std::string("WopiStorage::uploadLockStateAsync"),
+        std::map<std::string, std::string>({ { "url", getUri().toString() } }));
+
+    // Always invoke the callback with the result of the async locking.
+    ScopedInvokeAsyncRequestCallback<AsyncLockStateCallback, AsyncLockUpdate> scopedInvokeCallback(
+        asyncLockStateCallback, AsyncLockUpdate(AsyncLockUpdate::State::Error,
+                                                LockUpdateResult(LockUpdateResult::Status::FAILED,
+                                                                 lock, "Internal error")));
+
+    if (!lockCtx.supportsLocks())
+    {
+        scopedInvokeCallback.setArg(
+            AsyncLockUpdate(AsyncLockUpdate::State::Complete,
+                            LockUpdateResult(LockUpdateResult::Status::UNSUPPORTED, lock)));
+        return;
+    }
+
+    if (_lockHttpSession)
+    {
+        LOG_WRN("Locking is already in progress.");
+        return;
+    }
+
+    const auto startTime = std::chrono::steady_clock::now();
+
+    Poco::URI uriObject(getUri());
+    auth.authorizeURI(uriObject);
+
+    Poco::URI uriObjectAnonym(getUri());
+    uriObjectAnonym.setPath(COOLWSD::anonymizeUrl(uriObjectAnonym.getPath()));
+    const std::string uriAnonym = uriObjectAnonym.toString();
+
+    const auto wopiLog = (lock == StorageBase::LockState::LOCK ? "WOPI::Lock" : "WOPI::Unlock");
+    LOG_DBG(wopiLog << " requesting: " << uriAnonym);
+
+    _lockHttpSession = StorageConnectionManager::getHttpSession(uriObject);
+
+    http::Request httpRequest = StorageConnectionManager::createHttpRequest(uriObject, auth);
+    httpRequest.setVerb(http::Request::VERB_POST);
+
+    httpRequest.set("X-WOPI-Override", lock == StorageBase::LockState::LOCK ? "LOCK" : "UNLOCK");
+    httpRequest.set("X-WOPI-Lock", lockCtx.lockToken());
+    if (!attribs.getExtendedData().empty())
+    {
+        httpRequest.set("X-COOL-WOPI-ExtendedData", attribs.getExtendedData());
+        if (isLegacyServer())
+            httpRequest.set("X-LOOL-WOPI-ExtendedData", attribs.getExtendedData());
+    }
+
+    // IIS requires content-length for POST requests: see https://forums.iis.net/t/1119456.aspx
+    httpRequest.setContentLength(0);
+
+    http::Session::FinishedCallback finishedCallback =
+        [this, startTime, lock, wopiLog, asyncLockStateCallback,
+         profileZone =
+             std::move(profileZone)](const std::shared_ptr<http::Session>& httpSession)
+    {
+        profileZone->end();
+
+        // Retire.
+        _lockHttpSession.reset();
+
+        assert(httpSession && "Expected a valid http::Session");
+        const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+
+        _wopiSaveDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startTime);
+        LOG_TRC(wopiLog << " finished async request in " << _wopiSaveDuration);
+
+        // Handle the response.
+        const std::string& responseString = httpResponse->getBody();
+
+        LOG_INF(wopiLog << " status: " << httpResponse->statusLine().statusCode()
+                        << ", response: " << responseString);
+
+        if (httpResponse->statusLine().statusCode() == http::StatusCode::OK)
+        {
+            return asyncLockStateCallback(
+                AsyncLockUpdate(AsyncLockUpdate::State::Complete,
+                                LockUpdateResult(LockUpdateResult::Status::OK, lock)));
+        }
+
+        std::string failureReason = httpResponse->get("X-WOPI-LockFailureReason", "");
+
+        const bool unauthorized =
+            (httpResponse->statusLine().statusCode() == http::StatusCode::Unauthorized ||
+             httpResponse->statusLine().statusCode() == http::StatusCode::Forbidden ||
+             httpResponse->statusLine().statusCode() == http::StatusCode::NotFound);
+
+        const StorageBase::LockUpdateResult::Status status =
+            unauthorized ? LockUpdateResult::Status::UNAUTHORIZED
+                         : LockUpdateResult::Status::FAILED;
+
+        LOG_ERR("Un-successful " << wopiLog << " with " << (unauthorized ? "expired token, " : "")
+                                 << "HTTP status " << httpResponse->statusLine().statusCode()
+                                 << ", failure reason: [" << failureReason << "] and response: ["
+                                 << responseString << ']');
+
+        return asyncLockStateCallback(
+            AsyncLockUpdate(AsyncLockUpdate::State::Error,
+                            LockUpdateResult(status, lock, std::move(failureReason))));
+    };
+
+    _lockHttpSession->setFinishedHandler(std::move(finishedCallback));
+
+    LOG_DBG("Async " << wopiLog << " request: " << httpRequest.header());
+
+    // Notify client via callback that the request is in progress...
+    scopedInvokeCallback.setArg(AsyncLockUpdate(
+        AsyncLockUpdate::State::Running, LockUpdateResult(LockUpdateResult::Status::OK, lock)));
+
+    // Make the request.
+    _lockHttpSession->asyncRequest(httpRequest, socketPoll);
 }
 
 /// uri format: http://server/<...>/wopi*/files/<id>/content
 std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
                                                     LockContext& /*lockCtx*/,
-                                                    const std::string& templateUri)
+                                                    const std::string& templateUri,
+                                                    AdditionalFilePaths& /*additionalFileLocalPaths*/)
 {
     ProfileZone profileZone("WopiStorage::downloadStorageFileToLocal", { { "url", _fileUrl } });
 
@@ -431,11 +537,11 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
         {
             LOG_INF("WOPI::GetFile template source: " << templateUriAnonym);
             return downloadDocument(Poco::URI(templateUri), templateUriAnonym, auth,
-                                    RedirectionLimit);
+                                    HTTP_REDIRECTION_LIMIT);
         }
         catch (const std::exception& ex)
         {
-            LOG_ERR("Could not download template from [" + templateUriAnonym + "]. Error: "
+            LOG_ERR("Could not download template from [" << templateUriAnonym << "]. Error: "
                     << ex.what());
             throw; // Bubble-up the exception.
         }
@@ -448,7 +554,8 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
         try
         {
             LOG_INF("WOPI::GetFile using FileUrl: " << fileUrlAnonym);
-            return downloadDocument(Poco::URI(_fileUrl), fileUrlAnonym, auth, RedirectionLimit);
+            return downloadDocument(Poco::URI(_fileUrl), fileUrlAnonym, auth,
+                                    HTTP_REDIRECTION_LIMIT);
         }
         catch (const StorageSpaceLowException&)
         {
@@ -456,7 +563,7 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
         }
         catch (const std::exception& ex)
         {
-            LOG_ERR("Could not download document from WOPI FileUrl [" + fileUrlAnonym +
+            LOG_ERR("Could not download document from WOPI FileUrl [" << fileUrlAnonym <<
                         "]. Will use default URL. Error: "
                     << ex.what());
         }
@@ -476,11 +583,11 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
     try
     {
         LOG_INF("WOPI::GetFile using default URI: " << uriAnonym);
-        return downloadDocument(uriObject, uriAnonym, auth, RedirectionLimit);
+        return downloadDocument(uriObject, uriAnonym, auth, HTTP_REDIRECTION_LIMIT);
     }
     catch (const std::exception& ex)
     {
-        LOG_ERR("Cannot download document from WOPI storage uri [" + uriAnonym + "]. Error: "
+        LOG_ERR("Cannot download document from WOPI storage uri [" << uriAnonym << "]. Error: "
                 << ex.what());
         throw; // Bubble-up the exception.
     }
@@ -490,14 +597,20 @@ std::string WopiStorage::downloadDocument(const Poco::URI& uriObject, const std:
                                           const Authorization& auth, unsigned redirectLimit)
 {
     const auto startTime = std::chrono::steady_clock::now();
-    std::shared_ptr<http::Session> httpSession = getHttpSession(uriObject);
+    std::shared_ptr<http::Session> httpSession =
+        StorageConnectionManager::getHttpSession(uriObject);
 
-    http::Request httpRequest = initHttpRequest(uriObject, auth);
+    const http::Request httpRequest = StorageConnectionManager::createHttpRequest(uriObject, auth);
 
     setRootFilePath(Poco::Path(getLocalRootPath(), getFileInfo().getFilename()).toString());
     setRootFilePathAnonym(COOLWSD::anonymizeUrl(getRootFilePath()));
 
-    if (!FileUtil::checkDiskSpace(getRootFilePath()))
+    // Make sure the path is valid.
+    const Poco::Path downloadPath = Poco::Path(getRootFilePath()).parent();
+    Poco::File(downloadPath).createDirectories();
+
+    // Check for available space.
+    if (!FileUtil::checkDiskSpace(downloadPath.toString()))
     {
         throw StorageSpaceLowException("Low disk space for " + getRootFilePathAnonym());
     }
@@ -548,7 +661,7 @@ std::string WopiStorage::downloadDocument(const Poco::URI& uriObject, const std:
     }
     else
     {
-        const std::string responseString = httpResponse->getBody();
+        const std::string& responseString = httpResponse->getBody();
         LOG_ERR("WOPI::GetFile [" << uriAnonym << "] failed with Status Code: "
                                   << httpResponse->statusLine().statusCode());
         throw StorageConnectionException("WOPI::GetFile [" + uriAnonym +
@@ -596,69 +709,39 @@ std::string WopiStorage::downloadDocument(const Poco::URI& uriObject, const std:
         return Poco::Path(getJailPath(), getFileInfo().getFilename()).toString();
 }
 
-/// A helper class to invoke the AsyncUploadCallback
-/// when it exits its scope.
-/// By default it invokes the callback with a failure state.
-class ScopedInvokeAsyncUploadCallback
-{
-public:
-    ScopedInvokeAsyncUploadCallback(StorageBase::AsyncUploadCallback asyncUploadCallback)
-        : _asyncUploadCallback(std::move(asyncUploadCallback))
-        , _arg(StorageBase::AsyncUpload(
-              StorageBase::AsyncUpload::State::Error,
-              StorageBase::UploadResult(StorageBase::UploadResult::Result::FAILED)))
-    {
-    }
-
-    ~ScopedInvokeAsyncUploadCallback()
-    {
-        if (_asyncUploadCallback)
-            _asyncUploadCallback(_arg);
-    }
-
-    /// Set a new callback argument.
-    void setArg(StorageBase::AsyncUpload arg) { _arg = std::move(arg); }
-
-private:
-    StorageBase::AsyncUploadCallback _asyncUploadCallback;
-    StorageBase::AsyncUpload _arg;
-};
-
-void WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, LockContext& lockCtx,
-                                                const std::string& saveAsPath,
-                                                const std::string& saveAsFilename,
-                                                const bool isRename, const Attributes& attribs,
-                                                SocketPoll& socketPoll,
-                                                const AsyncUploadCallback& asyncUploadCallback)
+std::size_t WopiStorage::uploadLocalFileToStorageAsync(
+    const Authorization& auth, LockContext& lockCtx, const std::string& saveAsPath,
+    const std::string& saveAsFilename, const bool isRename, const Attributes& attribs,
+    const std::shared_ptr<SocketPoll>& socketPoll, const AsyncUploadCallback& asyncUploadCallback)
 {
     auto profileZone =
-        std::make_shared<ProfileZone>(std::string("WopiStorage::uploadLocalFileToStorage"),
+        std::make_shared<ProfileZone>(std::string("WopiStorage::uploadLocalFileToStorageAsync"),
                                       std::map<std::string, std::string>({ { "url", _fileUrl } }));
 
     // TODO: Check if this URI has write permission (canWrite = true)
-
-    // Always invoke the callback with the result of the async upload.
-    ScopedInvokeAsyncUploadCallback scopedInvokeCallback(asyncUploadCallback);
 
     //TODO: replace with state machine.
     if (_uploadHttpSession)
     {
         LOG_WRN("Upload is already in progress.");
-        return;
+        asyncUploadCallback(
+            AsyncUpload(AsyncUpload::State::Error,
+                UploadResult(UploadResult::Result::FAILED, "Already in progress.")));
+        return 0;
     }
 
     const bool isSaveAs = !saveAsPath.empty() && !saveAsFilename.empty();
     const std::string filePath(isSaveAs ? saveAsPath : getRootFilePathUploading());
-    const std::string filePathAnonym = COOLWSD::anonymizeUrl(filePath);
+    std::string filePathAnonym = COOLWSD::anonymizeUrl(filePath);
 
     const FileUtil::Stat fileStat(filePath);
     if (!fileStat.good())
     {
         LOG_ERR("Cannot access file [" << filePathAnonym << "] to upload to wopi storage.");
-        scopedInvokeCallback.setArg(
+        asyncUploadCallback(
             AsyncUpload(AsyncUpload::State::Error,
-                        UploadResult(UploadResult::Result::FAILED, "File not found.")));
-        return;
+                UploadResult(UploadResult::Result::FAILED, "File not found.")));
+        return 0;
     }
 
     const std::size_t size = (fileStat.good() ? fileStat.size() : 0);
@@ -668,7 +751,7 @@ void WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, LockC
                                            : uriObject.getPath() + "/contents");
     auth.authorizeURI(uriObject);
 
-    const std::string uriAnonym = COOLWSD::anonymizeUrl(uriObject.toString());
+    std::string uriAnonym = COOLWSD::anonymizeUrl(uriObject.toString());
 
     const std::string wopiLog(isSaveAs ? "WOPI::PutRelativeFile"
                                        : (isRename ? "WOPI::RenameFile" : "WOPI::PutFile"));
@@ -679,49 +762,48 @@ void WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, LockC
     try
     {
         assert(!_uploadHttpSession && "Unexpected to have an upload http::session");
-        _uploadHttpSession = getHttpSession(uriObject);
+        _uploadHttpSession = StorageConnectionManager::getHttpSession(uriObject);
 
-        http::Request httpRequest = initHttpRequest(uriObject, auth);
+        http::Request httpRequest = StorageConnectionManager::createHttpRequest(uriObject, auth);
         httpRequest.setVerb(http::Request::VERB_POST);
 
-        http::Header& httpHeader = httpRequest.header();
-
         // must include this header except for SaveAs
-        if (!isSaveAs && lockCtx._supportsLocks)
-            httpHeader.set("X-WOPI-Lock", lockCtx._lockToken);
+        if (!isSaveAs && lockCtx.supportsLocks())
+            httpRequest.set("X-WOPI-Lock", lockCtx.lockToken());
 
         if (!isSaveAs && !isRename)
         {
             // normal save
-            httpHeader.set("X-WOPI-Override", "PUT");
-            httpHeader.set("X-COOL-WOPI-IsModifiedByUser",
-                           attribs.isUserModified() ? "true" : "false");
-            httpHeader.set("X-COOL-WOPI-IsAutosave", attribs.isAutosave() ? "true" : "false");
-            httpHeader.set("X-COOL-WOPI-IsExitSave", attribs.isExitSave() ? "true" : "false");
+            httpRequest.set("X-WOPI-Override", "PUT");
+            httpRequest.set("X-COOL-WOPI-IsModifiedByUser",
+                            attribs.isUserModified() ? "true" : "false");
+            httpRequest.set("X-COOL-WOPI-IsAutosave", attribs.isAutosave() ? "true" : "false");
+            httpRequest.set("X-COOL-WOPI-IsExitSave", attribs.isExitSave() ? "true" : "false");
             if (isLegacyServer())
             {
-                httpHeader.set("X-LOOL-WOPI-IsModifiedByUser",
-                               attribs.isUserModified() ? "true" : "false");
-                httpHeader.set("X-LOOL-WOPI-IsAutosave", attribs.isAutosave() ? "true" : "false");
-                httpHeader.set("X-LOOL-WOPI-IsExitSave", attribs.isExitSave() ? "true" : "false");
+                httpRequest.set("X-LOOL-WOPI-IsModifiedByUser",
+                                attribs.isUserModified() ? "true" : "false");
+                httpRequest.set("X-LOOL-WOPI-IsAutosave", attribs.isAutosave() ? "true" : "false");
+                httpRequest.set("X-LOOL-WOPI-IsExitSave", attribs.isExitSave() ? "true" : "false");
             }
 
-            if (attribs.isExitSave())
-                httpHeader.set("Connection",
-                               "close"); // Don't maintain the socket if we are exiting.
+            if (attribs.isExitSave()) {
+                // Don't maintain the socket if we are exiting.
+                httpRequest.setConnectionToken(http::Header::ConnectionToken::Close);
+            }
             if (!attribs.getExtendedData().empty())
             {
-                httpHeader.set("X-COOL-WOPI-ExtendedData", attribs.getExtendedData());
+                httpRequest.set("X-COOL-WOPI-ExtendedData", attribs.getExtendedData());
                 if (isLegacyServer())
-                    httpHeader.set("X-LOOL-WOPI-ExtendedData", attribs.getExtendedData());
+                    httpRequest.set("X-LOOL-WOPI-ExtendedData", attribs.getExtendedData());
             }
 
             if (!attribs.isForced() && isLastModifiedTimeSafe())
             {
                 // Request WOPI host to not overwrite if timestamps mismatch
-                httpHeader.set("X-COOL-WOPI-Timestamp", getLastModifiedTime());
+                httpRequest.set("X-COOL-WOPI-Timestamp", getLastModifiedTime());
                 if (isLegacyServer())
-                    httpHeader.set("X-LOOL-WOPI-Timestamp", getLastModifiedTime());
+                    httpRequest.set("X-LOOL-WOPI-Timestamp", getLastModifiedTime());
             }
         }
         else
@@ -729,60 +811,37 @@ void WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, LockC
             // the suggested target has to be in UTF-7; default to extension
             // only when the conversion fails
             std::string suggestedTarget = '.' + Poco::Path(saveAsFilename).getExtension();
-
-            //TODO: Perhaps we should cache this descriptor and reuse, as iconv_open might be expensive.
-            iconv_t cd = iconv_open("UTF-7", "UTF-8");
-            if (cd == (iconv_t)-1)
-                LOG_ERR(wopiLog << " failed to initialize iconv for UTF-7 conversion, using ["
-                                << suggestedTarget << ']');
-            else
-            {
-                std::vector<char> input(saveAsFilename.begin(), saveAsFilename.end());
-                std::vector<char> buffer(8 * saveAsFilename.size());
-
-                char* in = &input[0];
-                std::size_t in_left = input.size();
-                char* out = &buffer[0];
-                std::size_t out_left = buffer.size();
-
-                if (iconv(cd, &in, &in_left, &out, &out_left) == (size_t)-1)
-                    LOG_ERR(wopiLog << " failed to convert [" << saveAsFilename
-                                    << "] to UTF-7, using [" << suggestedTarget << ']');
-                else
-                {
-                    // conversion succeeded
-                    suggestedTarget = std::string(&buffer[0], buffer.size() - out_left);
-                    LOG_TRC(wopiLog << " converted [" << saveAsFilename << "] to UTF-7 as ["
-                                    << suggestedTarget << ']');
-                }
-
-                iconv_close(cd);
-            }
+            suggestedTarget = _utf7Converter.convert(saveAsFilename);
+            LOG_TRC(wopiLog << " converted [" << saveAsFilename << "] to UTF-7 as ["
+                            << suggestedTarget << ']');
 
             if (isRename)
             {
                 // rename file
-                httpHeader.set("X-WOPI-Override", "RENAME_FILE");
-                httpHeader.set("X-WOPI-RequestedName", std::move(suggestedTarget));
+                httpRequest.set("X-WOPI-Override", "RENAME_FILE");
+                httpRequest.set("X-WOPI-RequestedName", std::move(suggestedTarget));
             }
             else
             {
                 // save as
-                httpHeader.set("X-WOPI-Override", "PUT_RELATIVE");
-                httpHeader.set("X-WOPI-Size", std::to_string(size));
+                httpRequest.set("X-WOPI-Override", "PUT_RELATIVE");
+                httpRequest.set("X-WOPI-Size", std::to_string(size));
                 LOG_TRC("Save as: suggested target is '" << suggestedTarget << "'.");
-                httpHeader.set("X-WOPI-SuggestedTarget", std::move(suggestedTarget));
+                httpRequest.set("X-WOPI-SuggestedTarget", std::move(suggestedTarget));
             }
         }
 
-        httpHeader.setContentType("application/octet-stream");
-        httpHeader.setContentLength(size);
+        httpRequest.setContentType("application/octet-stream");
+        httpRequest.setContentLength(size);
 
         httpRequest.setBodyFile(filePath);
 
         http::Session::FinishedCallback finishedCallback =
-            [this, startTime, wopiLog, filePathAnonym, uriAnonym, size, isSaveAs, isRename,
-             asyncUploadCallback, profileZone = std::move(profileZone)](
+            [this, startTime, wopiLog,
+             filePathAnonym = std::move(filePathAnonym),
+             uriAnonym = std::move(uriAnonym),
+             size, isSaveAs, isRename, asyncUploadCallback,
+             profileZone = std::move(profileZone)](
                 const std::shared_ptr<http::Session>& httpSession)
         {
             profileZone->end();
@@ -800,44 +859,62 @@ void WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, LockC
             WopiUploadDetails details = { filePathAnonym,
                                           uriAnonym,
                                           httpResponse->statusLine().reasonPhrase(),
-                                          httpResponse->statusLine().statusCode(),
                                           size,
+                                          httpResponse->statusLine().statusCode(),
                                           isSaveAs,
                                           isRename };
 
             // Handle the response.
-            const StorageBase::UploadResult res =
+            StorageBase::UploadResult res =
                 handleUploadToStorageResponse(details, httpResponse->getBody());
 
             // Fire the callback to our client (DocBroker, typically).
-            asyncUploadCallback(AsyncUpload(AsyncUpload::State::Complete, res));
+            asyncUploadCallback(AsyncUpload(AsyncUpload::State::Complete, std::move(res)));
         };
 
         _uploadHttpSession->setFinishedHandler(std::move(finishedCallback));
 
-        LOG_DBG(wopiLog << " async upload request: " << httpRequest.header().toString());
+        LOG_DBG(wopiLog << " async upload request: " << httpRequest.header());
+
+        _uploadHttpSession->setConnectFailHandler(
+            [this, asyncUploadCallback,
+             uri=uriObject.toString()](const std::shared_ptr<http::Session>& /* httpSession */)
+            {
+                LOG_ERR("Cannot connect to [" << uri << "] for uploading to wopi storage");
+                // Retire.
+                _uploadHttpSession.reset();
+                asyncUploadCallback(
+                    AsyncUpload(AsyncUpload::State::Error,
+                                UploadResult(UploadResult::Result::FAILED, "Connection failed.")));
+            });
+
+        // Notify client via callback that the request is in progress...
+        asyncUploadCallback(
+            AsyncUpload(AsyncUpload::State::Running, UploadResult(UploadResult::Result::OK)));
 
         // Make the request.
         _uploadHttpSession->asyncRequest(httpRequest, socketPoll);
 
-        scopedInvokeCallback.setArg(
-            AsyncUpload(AsyncUpload::State::Running, UploadResult(UploadResult::Result::OK)));
-        return;
+        return size;
     }
     catch (const Poco::Exception& ex)
     {
         LOG_ERR(wopiLog << " cannot upload file to WOPI storage uri [" << uriAnonym
                         << "]. Error: " << ex.displayText()
                         << (ex.nested() ? " (" + ex.nested()->displayText() + ')' : ""));
+        _uploadHttpSession.reset();
     }
     catch (const std::exception& ex)
     {
-        LOG_ERR(wopiLog << " cannot upload file to WOPI storage uri [" + uriAnonym + "]. Error: "
+        LOG_ERR(wopiLog << " cannot upload file to WOPI storage uri [" << uriAnonym << "]. Error: "
                         << ex.what());
+        _uploadHttpSession.reset();
     }
 
-    scopedInvokeCallback.setArg(AsyncUpload(
+    asyncUploadCallback(AsyncUpload(
         AsyncUpload::State::Error, UploadResult(UploadResult::Result::FAILED, "Internal error.")));
+
+    return 0;
 }
 
 StorageBase::UploadResult
@@ -869,14 +946,14 @@ WopiStorage::handleUploadToStorageResponse(const WopiUploadDetails& details,
                         JsonUtil::findJSONValue(object, "Name", filename))
                     {
                         // Get the FileId form the URL, which we use as the anonymized filename.
-                        std::string decodedUrl;
-                        Poco::URI::decode(url, decodedUrl);
-                        const std::string obfuscatedFileId = Util::getFilenameFromURL(decodedUrl);
-                        Util::mapAnonymized(obfuscatedFileId,
-                                            obfuscatedFileId); // Identity, to avoid re-anonymizing.
+                        const std::string decodedUrl = Uri::decode(url);
+                        const std::string obfuscatedFileId = Uri::getFilenameFromURL(decodedUrl);
+                        Anonymizer::mapAnonymized(
+                            obfuscatedFileId,
+                            obfuscatedFileId); // Identity, to avoid re-anonymizing.
 
-                        const std::string filenameOnly = Util::getFilenameFromURL(filename);
-                        Util::mapAnonymized(filenameOnly, obfuscatedFileId);
+                        const std::string filenameOnly = Uri::getFilenameFromURL(filename);
+                        Anonymizer::mapAnonymized(filenameOnly, obfuscatedFileId);
                         object->set("Name", COOLWSD::anonymizeUrl(filename));
                     }
 
@@ -958,18 +1035,34 @@ WopiStorage::handleUploadToStorageResponse(const WopiUploadDetails& details,
             // Internal server error, and other failures.
             if (responseString.empty())
             {
-                responseString = "No response received. Connection terminated or timed-out.";
+                if (http::StatusLine(details.httpResponseCode).statusCategory() ==
+                    http::StatusLine::StatusCodeClass::Invalid)
+                {
+                    responseString = "No response received. Connection terminated or timed-out.";
+                }
+                else
+                {
+                    std::ostringstream oss;
+                    oss << details.httpResponseCode << ' ' << details.httpResponseReason;
+                    responseString = oss.str();
+                }
+            }
+            else
+            {
+                std::ostringstream oss;
+                oss << details.httpResponseCode << ' ' << details.httpResponseReason << " - "
+                    << responseString;
+                responseString = oss.str();
             }
 
             LOG_ERR("Unexpected response to "
                     << wopiLog << ". Cannot upload file to WOPI storage uri [" << details.uriAnonym
-                    << "]: " << details.httpResponseCode << ' ' << details.httpResponseReason
-                    << ": " << responseString);
+                    << "]: " << responseString);
             result.setResult(StorageBase::UploadResult::Result::FAILED);
+            result.setReason(responseString);
 
             // If we cannot be sure whether we up-loaded successfully eg. we got
-            // a timeout then be tolerant of subsequent timestamp mismatch problems
-            setLastModifiedTimeUnSafe();
+            // a timeout then try to recover in DocBroker.
         }
     }
     catch (const Poco::Exception& pexc)
@@ -981,7 +1074,7 @@ WopiStorage::handleUploadToStorageResponse(const WopiUploadDetails& details,
     }
     catch (const BadRequestException& exc)
     {
-        LOG_ERR("Cannot upload file to WOPI storage uri [" + details.uriAnonym + "]. Error: "
+        LOG_ERR("Cannot upload file to WOPI storage uri [" << details.uriAnonym << "]. Error: "
                 << exc.what());
         result.setResult(StorageBase::UploadResult::Result::FAILED);
     }

@@ -10,6 +10,7 @@
  */
 
 #include <config.h>
+#include <config_version.h>
 
 #include <Unit.hpp>
 #include <Util.hpp>
@@ -23,17 +24,14 @@
 #include <test/lokassert.hpp>
 #include <Poco/Util/LayeredConfiguration.h>
 #include <tools/Replay.hpp>
+#include <common/Log.hpp>
 
 #include <string>
 #include <thread>
 
-
-/// Save torture testcase.
 class UnitPerf : public UnitWSD
 {
-    void testPerf();
-
-    void dumpCPUTimeToCSV(long cpuTime);
+    void testPerf(std::string testType, std::string fileType, std::string tracesStr);
 
     void configure(Poco::Util::LayeredConfiguration& config) override
     {
@@ -47,46 +45,38 @@ class UnitPerf : public UnitWSD
 public:
     UnitPerf();
     void invokeWSDTest() override;
+    void onPerfDocumentLoading() override;
+    void onPerfDocumentLoaded() override;
     std::unique_ptr<Util::SysStopwatch> _timer;
+    std::shared_ptr<Stats> stats;
 };
 
-void UnitPerf::testPerf()
+void UnitPerf::testPerf(std::string testType, std::string fileType, std::string traceStr)
 {
-    auto stats = std::make_shared<Stats>();
+    stats = std::make_shared<Stats>();
+    stats->setTypeOfTest(std::move(testType));
 
-    TerminatingPoll poll("performance test");
+    std::shared_ptr<TerminatingPoll> poll = std::make_shared<TerminatingPoll>("performance test");
 
-    std::string docName = "empty.odt";
+    std::string docName = "empty." + fileType;
 
     std::string filePath, dummy;
+
     helpers::getDocumentPathAndURL(docName, filePath, dummy, "testPerf");
 
-    const std::string tracePath;
-    StressSocketHandler::addPollFor(
-        poll, helpers::getTestServerURI("ws"),
-        filePath, TDOC "/../traces/perf-writer.txt",
-        stats);
+    const std::string tracePath = TDOC + traceStr;
+    constexpr float latencyFactor = 0.1; // ~10x faster replay than recorded.
+    StressSocketHandler::addPollFor(*poll, helpers::getTestServerURI("ws"), filePath, tracePath,
+                                    stats, latencyFactor);
 
     do {
-        poll.poll(TerminatingPoll::DefaultPollTimeoutMicroS);
-    } while (poll.continuePolling() && poll.getSocketCount() > 0);
+        poll->poll(TerminatingPoll::DefaultPollTimeoutMicroS);
+    } while (poll->continuePolling() && poll->getSocketCount() > 0);
 
-    stats->dump();
+    TST_LOG("Stats: " << [&](std::ostream& os) { stats->dump(os); });
 }
 
-void UnitPerf::dumpCPUTimeToCSV(long cpuTime)
-{
-    std::ofstream file("CPUUsage.csv", std::ios::out | std::ios::app);
 
-    if(file.tellp() == 0)
-    {
-        file << "CPU Time";
-        file << "\n";
-    }
-
-    file << cpuTime;
-    file << "\n";
-}
 
 UnitPerf::UnitPerf() : UnitWSD("UnitPerf")
 {
@@ -99,17 +89,34 @@ UnitPerf::UnitPerf() : UnitWSD("UnitPerf")
 
 void UnitPerf::invokeWSDTest()
 {
-    std::cerr << "startup: " << _timer->elapsedTime().count() << "us\n";
+    TST_LOG("startup: " << _timer->elapsedTime().count() << "us\n");
     _timer->restart();
 
-    testPerf();
+    testPerf("writer", "odt", "/../traces/perf-writer.txt");
+
+    testPerf("calc", "ods", "/../traces/perf-calc.txt");
+
+    testPerf("impress", "odp", "/../traces/perf-impress.txt");
+
+    testPerf("draw", "odg", "/../traces/perf-draw.txt");
 
     long cpuTime = _timer->elapsedTime().count();
-    dumpCPUTimeToCSV(cpuTime);
 
-    std::cerr << "test: " << cpuTime << "us\n";
+    TST_LOG("test: " << cpuTime << "us\n");
 
     exitTest(TestResult::Ok);
+}
+
+//Called when document loading process starts e.g. setup finishes
+void UnitPerf::onPerfDocumentLoading()
+{
+    stats->endPhase(Log::Phase::Setup);
+}
+
+//called when document has been loaded into core
+void UnitPerf::onPerfDocumentLoaded()
+{
+    stats->endPhase(Log::Phase::Load);
 }
 
 UnitBase* unit_create_wsd(void) { return new UnitPerf(); }

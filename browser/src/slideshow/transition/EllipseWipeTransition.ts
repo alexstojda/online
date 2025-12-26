@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -12,10 +14,8 @@ declare var SlideShow: any;
 
 function EllipseWipeTransition(transitionParameters: TransitionParameters) {
 	const transitionSubType =
-		stringToTransitionSubTypeMap[
-			transitionParameters.slideInfo.transitionSubtype
-		];
-	if (transitionSubType == TransitionSubType.CIRCLE) {
+		transitionParameters.transitionFilterInfo.transitionSubtype;
+	if (transitionSubType != TransitionSubType.VERTICAL) {
 		return new SlideShow.CircleTransition(transitionParameters);
 	} else {
 		return new SlideShow.OvalTransition(transitionParameters);

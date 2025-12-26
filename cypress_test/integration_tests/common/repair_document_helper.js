@@ -9,13 +9,20 @@ var mobileHelper = require('./mobile_helper');
  * @param {boolean} mobile - True if this is a mobile test, otherwise false
  * @returns {void}
  */
-function openRepairDialog(mobile = false) {
+function openRepairDialog(mobile = false, notebookbar = false) {
 	cy.log('>> openRepairDialog - start');
 
 	if (mobile) {
 		return mobileHelper.selectHamburgerMenuItem(['Edit', 'Repair']);
 	}
-	cy.cGet('#menu-editmenu').click().cGet('#menu-repair').click();
+
+	if (notebookbar) {
+		cy.cGet('#File-tab-label').click();
+		cy.cGet('#repair-button').click();
+	} else {
+		cy.cGet('#menu-editmenu').click()
+		cy.cGet('#menu-repair').click();
+	}
 
 	cy.log('<< openRepairDialog - end');
 }
@@ -27,23 +34,23 @@ function openRepairDialog(mobile = false) {
   * @param {boolean} mobile - True if this is a mobile test, otherwise false
  * @returns {void}
  */
-function rollbackPastChange(selector, mobile = false) {
+function rollbackPastChange(selector, mobile = false, notebookbar = false) {
 	cy.log('>> rollbackPastChange - start');
 
-	openRepairDialog(mobile);
+	openRepairDialog(mobile, notebookbar);
 
 	cy.cGet('#DocumentRepairDialog').should('exist');
 
 	const versions = cy.cGet('#versions');
 
 	versions
-		.contains('.ui-listview-entry', selector)
+		.contains('.ui-treeview-entry', selector)
 		.click();
 
 	if (mobile) {
-		cy.cGet('#ok.ui-pushbutton.mobile-wizard').click();
+		cy.cGet('#ok.ui-pushbutton-wrapper.mobile-wizard').click();
 	} else {
-		cy.cGet('#ok.ui-pushbutton.jsdialog').click();
+		cy.cGet('#ok.ui-pushbutton-wrapper.jsdialog').click();
 	}
 
 	cy.log('<< rollbackPastChange - end');

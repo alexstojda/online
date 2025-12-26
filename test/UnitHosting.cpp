@@ -43,7 +43,7 @@ public:
 
 UnitBase::TestResult UnitHosting::testDiscovery()
 {
-    LOG_TST("Getting /hosting/discovery the first time.");
+    TST_LOG("Getting /hosting/discovery the first time.");
     const std::shared_ptr<const http::Response> httpResponse
         = http::get(helpers::getTestServerURI(), "/hosting/discovery");
 
@@ -55,12 +55,12 @@ UnitBase::TestResult UnitHosting::testDiscovery()
     LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
     LOK_ASSERT(httpResponse->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
-    LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse->statusLine().httpVersion());
-    LOK_ASSERT_EQUAL(std::string("OK"), httpResponse->statusLine().reasonPhrase());
-    LOK_ASSERT_EQUAL(std::string("text/xml"), httpResponse->header().getContentType());
+    LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+    LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
+    LOK_ASSERT_EQUAL_STR("text/xml", httpResponse->header().getContentType());
 
-    // Repeat, with a trailing foreslash in the URL.
-    LOG_TST("Getting /hosting/discovery the second time.");
+    // Repeat, with a trailing slash in the URL.
+    TST_LOG("Getting /hosting/discovery the second time.");
     const std::shared_ptr<const http::Response> httpResponse2
         = http::get(helpers::getTestServerURI(), "/hosting/discovery/");
 
@@ -72,11 +72,11 @@ UnitBase::TestResult UnitHosting::testDiscovery()
     LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse2->statusLine().statusCode());
     LOK_ASSERT(httpResponse2->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
-    LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse2->statusLine().httpVersion());
-    LOK_ASSERT_EQUAL(std::string("OK"), httpResponse2->statusLine().reasonPhrase());
-    LOK_ASSERT_EQUAL(std::string("text/xml"), httpResponse2->header().getContentType());
+    LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse2->statusLine().httpVersion());
+    LOK_ASSERT_EQUAL_STR("OK", httpResponse2->statusLine().reasonPhrase());
+    LOK_ASSERT_EQUAL_STR("text/xml", httpResponse2->header().getContentType());
 
-    LOG_TST("Comparing /hosting/discovery from both requests.");
+    TST_LOG("Comparing /hosting/discovery from both requests.");
     LOK_ASSERT_EQUAL(httpResponse2->getBody(), httpResponse->getBody());
 
     return TestResult::Ok;
@@ -95,9 +95,9 @@ UnitBase::TestResult UnitHosting::testCapabilities()
     std::string capabilitiesURI;
     {
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-        LOK_ASSERT_EQUAL(std::string("text/xml"), httpResponse->header().getContentType());
+        LOK_ASSERT_EQUAL_STR("text/xml", httpResponse->header().getContentType());
 
-        const std::string discoveryXML = httpResponse->getBody();
+        const std::string& discoveryXML = httpResponse->getBody();
 
         Poco::XML::DOMParser parser;
         Poco::XML::AutoPtr<Poco::XML::Document> docXML = parser.parseString(discoveryXML);
@@ -129,9 +129,9 @@ UnitBase::TestResult UnitHosting::testCapabilities()
         LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
 
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-        LOK_ASSERT_EQUAL(std::string("application/json"), httpResponse->header().getContentType());
+        LOK_ASSERT_EQUAL_STR("application/json", httpResponse->header().getContentType());
 
-        const std::string responseString = httpResponse->getBody();
+        const std::string& responseString = httpResponse->getBody();
 
         Poco::JSON::Parser parser;
         Poco::Dynamic::Var jsonFile = parser.parse(responseString);

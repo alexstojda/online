@@ -20,7 +20,10 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Apply paragraph properties 
 		// Only the svg (shape selection) is needed for the verifications,
 		// but the text needs to be selected for the subsequent button clicks
 
-		cy.cGet('#document-container').dblclick('center');
+		cy.cGet('#document-canvas');
+		cy.wait(500); // Wait for document callbacks.
+		cy.cGet('#document-canvas').dblclick('center');
+		cy.wait(500);
 		helper.typeIntoDocument('{ctrl}a');
 		helper.textSelectionShouldExist();
 	}
@@ -50,7 +53,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Apply paragraph properties 
 		impressHelper.removeShapeSelection();
 		selectText();
 		cy.cGet('#document-container g.Page .TextParagraph .TextPosition')
-			.should('have.attr', 'x', '23586');
+			.should('have.attr', 'x', '23583');
 
 		// Set left alignment
 		openParagraphPropertiesPanel();
@@ -70,7 +73,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Apply paragraph properties 
 		impressHelper.removeShapeSelection();
 		selectText();
 		cy.cGet('#document-container g.Page .TextParagraph .TextPosition')
-			.should('have.attr', 'x', '12493');
+			.should('have.attr', 'x', '12491');
 
 		// Set justified alignment
 		openParagraphPropertiesPanel();
@@ -224,7 +227,7 @@ describe(['tagmobile', 'tagnextcloud', 'tagproxy'], 'Apply paragraph properties 
 		impressHelper.removeShapeSelection();
 		selectText();
 		cy.cGet('#document-container g.Page .TextParagraph .TextPosition')
-			.should('have.attr', 'x', '23586');
+			.should('have.attr', 'x', '23584');
 
 		// Change back to the default left-to-right
 		openParagraphPropertiesPanel();

@@ -43,11 +43,11 @@ public:
         if (_phase == Phase::WaitPutFile)
         {
             // The document is modified.
-            LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsModifiedByUser"));
+            LOK_ASSERT_EQUAL_STR("true", request.get("X-COOL-WOPI-IsModifiedByUser"));
             LOK_ASSERT_EQUAL(false, request.has("X-LOOL-WOPI-IsModifiedByUser"));
 
             // Triggered manually or during closing, not auto-save.
-            LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsAutosave"));
+            LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsAutosave"));
             LOK_ASSERT_EQUAL(false, request.has("X-LOOL-WOPI-IsAutosave"));
 
             TRANSITION_STATE(_phase, Phase::WaitDestroy);
@@ -56,7 +56,7 @@ public:
         }
 
         // This during closing the document.
-        LOG_TST("assertPutFileRequest: unexpected");
+        TST_LOG("assertPutFileRequest: unexpected");
         failTest("PutFile multiple times.");
 
         return nullptr;
@@ -65,7 +65,7 @@ public:
     /// The document is loaded.
     bool onDocumentLoaded(const std::string& message) override
     {
-        LOG_TST("onDocumentLoaded: [" << message << ']');
+        TST_LOG("onDocumentLoaded: [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::WaitLoadStatus);
 
         TRANSITION_STATE(_phase, Phase::WaitPutFile);
@@ -80,7 +80,7 @@ public:
     // Wait for clean unloading.
     void onDocBrokerDestroy(const std::string& docKey) override
     {
-        LOG_TST("Destroyed dockey [" << docKey << ']');
+        TST_LOG("Destroyed dockey [" << docKey << ']');
         LOK_ASSERT_STATE(_phase, Phase::WaitDestroy);
 
         passTest("Document unloaded as expected.");
@@ -94,7 +94,7 @@ public:
             {
                 TRANSITION_STATE(_phase, Phase::WaitLoadStatus);
 
-                LOG_TST("Load: initWebsocket.");
+                TST_LOG("Load: initWebsocket.");
                 initWebsocket("/wopi/files/0?access_token=anything");
 
                 WSD_CMD("load url=" + getWopiSrc());

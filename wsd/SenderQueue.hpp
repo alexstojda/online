@@ -11,10 +11,13 @@
 
 #pragma once
 
-#include "common/SigUtil.hpp"
-#include "Log.hpp"
-#include "TileDesc.hpp"
-#include "JsonUtil.hpp"
+#include <common/SigUtil.hpp>
+#include <common/Log.hpp>
+#include <TileDesc.hpp>
+#include <Protocol.hpp>
+
+#include <Poco/JSON/Parser.h>
+#include <Poco/JSON/Object.h>
 
 #include <deque>
 #include <mutex>
@@ -24,10 +27,7 @@ template <typename Item>
 class SenderQueue final
 {
 public:
-
-    SenderQueue()
-    {
-    }
+    SenderQueue() = default;
 
     size_t enqueue(const Item& item)
     {
@@ -45,7 +45,7 @@ public:
         // This check is always thread-safe.
         if (SigUtil::getTerminationFlag())
         {
-            LOG_DBG("SenderQueue: TerminationFlag is set");
+            LOG_DBG("SenderQueue: TerminationFlag is set, will not dequeue");
             return false;
         }
 
@@ -69,13 +69,36 @@ public:
 
     void dumpState(std::ostream& os)
     {
-        os << "\n\t\tqueue size " << _queue.size() << '\n';
         std::lock_guard<std::mutex> lock(_mutex);
+        size_t queueSize = _queue.size();
+        size_t totalSize = 0;
+
+        os << "\t\tqueue items: " << queueSize << '\n';
+
+        std::size_t repeats = 0;
+        std::string lastStr;
         for (const Item &item : _queue)
         {
-            os << "\t\t\ttype: " << (item->isBinary() ? "binary\n" : "text\n");
-            os << "\t\t\t" << item->abbr() << '\n';
+            std::string itemStr = COOLProtocol::getAbbreviatedMessage(
+                item->data().data(), item->size());
+            if (lastStr == itemStr && !item->isBinary())
+                repeats++;
+            else if (repeats > 0)
+            {
+                os << "\t\t\t<repeats " << repeats << " times>\n";
+                repeats = 0;
+            }
+            if (repeats == 0)
+            {
+                os << "\t\t\ttype: " << (item->isBinary() ? "binary" : "text");
+                os << ": " << item->id() << " - " << itemStr << '\n';
+            }
+            lastStr = std::move(itemStr);
+            totalSize += item->size();
         }
+        if (repeats > 0)
+            os << "\t\t\t<repeats " << repeats << " times>\n";
+        os << "\t\tqueue size: " << totalSize << " bytes\n";
     }
 
 private:
@@ -85,7 +108,7 @@ private:
     bool deduplicate(const Item& item)
     {
         // Deduplicate messages based on the incoming one.
-        const std::string command = item->firstToken();
+        std::string command = item->firstToken();
         if (command == "tile:")
         {
             // Remove previous identical tile, if any, and use most recent (incoming).
@@ -130,7 +153,7 @@ private:
         else if (command == "progress:")
         {
             // find other progress commands with similar content
-            static const std::string setvalueTag = "\"id\":\"setvalue\"";
+            static constexpr std::string_view setvalueTag = R"("id":"setvalue")";
             if (item->contains(setvalueTag))
             {
                 const auto& pos = std::find_if(_queue.begin(), _queue.end(),
@@ -152,9 +175,10 @@ private:
             Poco::JSON::Parser newParser;
             const Poco::Dynamic::Var newResult = newParser.parse(newMsg);
             const auto& newJson = newResult.extract<Poco::JSON::Object::Ptr>();
-            const std::string viewId = newJson->get("viewId").toString();
+            std::string viewId = newJson->get("viewId").toString();
             const auto& pos = std::find_if(_queue.begin(), _queue.end(),
-                [command, viewId](const queue_item_t& cur)
+                [command=std::move(command),
+                 viewId=std::move(viewId)](const queue_item_t& cur)
                 {
                     if (cur->firstTokenMatches(command))
                     {
@@ -178,7 +202,7 @@ private:
 private:
     mutable std::mutex _mutex;
     std::deque<Item> _queue;
-    typedef typename std::deque<Item>::value_type queue_item_t;
+    using queue_item_t = typename std::deque<Item>::value_type;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

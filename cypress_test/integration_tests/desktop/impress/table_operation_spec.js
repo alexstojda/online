@@ -8,18 +8,10 @@ describe(['tagdesktop'], 'Table operations', function() {
 
 	beforeEach(function() {
 		helper.setupAndLoadDocument('impress/table_operation.odp');
-		desktopHelper.selectZoomLevel('50');
-	});
+		cy.viewport(1920,1080);
 
-	function selectOptionNotebookbar(optionId) {
-		var optionButton = cy.cGet(optionId);
-		// It takes time for the ui to enable the various table toolbar buttons after
-		// the table gets focus, but we can continue as soon as:
-		// a) the parent container is enabled
-		optionButton.parent().should('not.have.class', 'disabled');
-		// b) the specific button is enabled
-		optionButton.should('not.have.class', 'disabled').click();
-	}
+		desktopHelper.switchUIToNotebookbar();
+	});
 
 	function retriggerNewSvgForTableInTheCenter() {
 		impressHelper.removeShapeSelection();
@@ -31,10 +23,10 @@ describe(['tagdesktop'], 'Table operations', function() {
 		helper.typeIntoDocument('{ctrl}{a}');
 
 		impressHelper.selectTableInTheCenter();
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
+		cy.cGet('.table-row-resize-marker')
 			.should('have.length', 3);
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
-			.should('have.length', 2);
+		cy.cGet('.table-column-resize-marker')
+			.should('have.length', 3); // One is invisible but it is included here.
 
 		// Click doesn't work without wait
 		cy.wait(500);
@@ -43,10 +35,9 @@ describe(['tagdesktop'], 'Table operations', function() {
 	}
 
 	it('Insert Row Before', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-insert-rows-before-button');
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should('have.length', 4);
+		desktopHelper.getNbIcon('InsertRowsBefore', 'Table').click();
+		cy.cGet('.table-row-resize-marker').should('have.length', 4);
 		retriggerNewSvgForTableInTheCenter();
 		cy.cGet('#document-container g.Page g').should('have.class', 'com.sun.star.drawing.TableShape');
 
@@ -63,11 +54,10 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Insert Row After', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-insert-rows-after-button');
+		desktopHelper.getNbIcon('InsertRowsAfter', 'Table').click();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker').should('have.length', 4);
+		cy.cGet('.table-row-resize-marker').should('have.length', 4);
 		retriggerNewSvgForTableInTheCenter();
 
 		cy.cGet('#document-container g.Page g')
@@ -87,12 +77,11 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Insert column before.', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-insert-columns-before-button');
+		desktopHelper.getNbIcon('InsertColumnsBefore', 'Table').click();
 
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
-			.should('have.length', 3);
+		cy.cGet('.table-column-resize-marker')
+			.should('have.length', 4);
 
 		retriggerNewSvgForTableInTheCenter();
 
@@ -113,12 +102,11 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Insert column after.', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-insert-columns-after-button');
+		desktopHelper.getNbIcon('InsertColumnsAfter', 'Table').click();
 
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
-			.should('have.length', 3);
+		cy.cGet('.table-column-resize-marker')
+			.should('have.length', 4);
 
 		retriggerNewSvgForTableInTheCenter();
 
@@ -139,11 +127,10 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Delete row.', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-delete-rows-button');
+		desktopHelper.getNbIcon('DeleteRows', 'Table').click();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
+		cy.cGet('.table-row-resize-marker')
 			.should('have.length', 2);
 
 		retriggerNewSvgForTableInTheCenter();
@@ -161,17 +148,16 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Delete Column.', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-insert-columns-before-button');
+		desktopHelper.getNbIcon('InsertColumnsBefore', 'Table').click();
 
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
+		cy.cGet('.table-column-resize-marker')
+			.should('have.length', 4);
+
+		desktopHelper.getNbIcon('DeleteColumns', 'Table').click();
+
+		cy.cGet('.table-column-resize-marker')
 			.should('have.length', 3);
-
-		selectOptionNotebookbar('#table-delete-columns-button');
-
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
-			.should('have.length', 2);
 
 		retriggerNewSvgForTableInTheCenter();
 
@@ -192,13 +178,12 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Delete Table', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
-		selectOptionNotebookbar('#table-delete-table-button');
+		desktopHelper.getNbIcon('DeleteTable', 'Table').click();
 
 		retriggerNewSvgForTableInTheCenter();
 
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker')
+		cy.cGet('.table-column-resize-marker')
 			.should('not.exist');
 
 		cy.cGet('#document-container g.Page g')
@@ -206,15 +191,13 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Merge Row', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
+		cy.cGet('.table-row-resize-marker')
 			.should('have.length', 3);
 
-		selectOptionNotebookbar('#table-entire-row-button');
-		cy.wait(1000);
-		selectOptionNotebookbar('#table-merge-cells-button');
+		desktopHelper.getNbIcon('EntireRow', 'Table').click();
+		desktopHelper.getNbIcon('MergeCells', 'Table').should('not.be.disabled').click();
 
 		retriggerNewSvgForTableInTheCenter();
 
@@ -235,15 +218,13 @@ describe(['tagdesktop'], 'Table operations', function() {
 	});
 
 	it('Merge Column', function() {
-		desktopHelper.switchUIToNotebookbar();
 		selectFullTable();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
+		cy.cGet('.table-row-resize-marker')
 			.should('have.length', 3);
 
-		selectOptionNotebookbar('#table-entire-column-button');
-		cy.wait(1000);
-		selectOptionNotebookbar('#table-merge-cells-button');
+		desktopHelper.getNbIcon('EntireColumn', 'Table').click();
+		desktopHelper.getNbIcon('MergeCells', 'Table').should('not.be.disabled').click();
 
 		retriggerNewSvgForTableInTheCenter();
 
@@ -265,20 +246,19 @@ describe(['tagdesktop'], 'Table operations', function() {
 
 	it.skip('Split Cells', function() {
 		// ToDo: Merge cells before calling split cells function.
-		desktopHelper.switchUIToNotebookbar();
 		impressHelper.selectTableInTheCenter();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
-			.should('have.length', 3);
+		cy.cGet('.table-row-resize-marker')
+			.should('have.length', 4);
 
-		selectOptionNotebookbar('.notebookbar #SplitCell');
+		desktopHelper.getNbIcon('SplitCell', 'Table').click();
 
 		cy.cGet('#SplitCellsDialog').should('be.visible');
 
 		cy.cGet('#SplitCellsDialog .ui-pushbutton.jsdialog.button-primary')
 			.click();
 
-		cy.cGet('.leaflet-marker-icon.table-row-resize-marker')
+		cy.cGet('.table-row-resize-marker')
 			.should('have.length', 4);
 	});
 });

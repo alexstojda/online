@@ -13,29 +13,38 @@
  * Class Tooltip - tooltip manager
  */
 
-/* global */
+/* global app */
 
 class Tooltip {
 	constructor(options) {
-		this._options = L.extend({ timeout: 150 }, options);
-		this._container = L.DomUtil.create('div', 'cooltip-text', document.body);
+		this._options = window.L.extend({ timeout: 150 }, options);
+		let win = this._options.window ? this._options.window : window;
+		this._container = this._options.container
+			? this._options.container
+			: window.L.DomUtil.create('div', 'cooltip-text', win.document.body);
 		this._container.id = 'cooltip';
 		this._container.addEventListener(
 			'mouseenter',
-			L.bind(this.mouseEnter, this),
+			window.L.bind(this.mouseEnter, this),
 		);
 		this._container.addEventListener(
 			'mouseleave',
-			L.bind(this.mouseLeave, this),
+			window.L.bind(this.mouseLeave, this),
 		);
+
+		win.addEventListener('keydown', window.L.bind(this.keyDown, this), {
+			capture: true,
+			passive: true,
+		});
 	}
 
 	beginShow(elem) {
 		if (this._cancel) return;
 
-		clearTimeout(this._showTimeout);
-		this._showTimeout = setTimeout(
-			L.bind(this.show, this, elem),
+		let win = this._options.window ? this._options.window : window;
+		win.clearTimeout(this._showTimeout);
+		this._showTimeout = win.setTimeout(
+			window.L.bind(this.show, this, elem),
 			this._options.timeout,
 		);
 	}
@@ -43,12 +52,13 @@ class Tooltip {
 	beginHide(elem) {
 		if (this._cancel) return;
 
-		clearTimeout(this._showTimeout);
-		clearTimeout(this._hideTimeout);
+		let win = this._options.window ? this._options.window : window;
+		win.clearTimeout(this._showTimeout);
+		win.clearTimeout(this._hideTimeout);
 		if (this._current)
-			this._hideTimeout = setTimeout(
-				L.bind(this.hide, this, elem),
-				this._options.timeout,
+			this._hideTimeout = win.setTimeout(
+				window.L.bind(this.hide, this, elem),
+				this._options.timeout / 8,
 			);
 	}
 
@@ -109,8 +119,9 @@ class Tooltip {
 		return rect;
 	}
 
-	show(elem) {
-		let content = elem.dataset.cooltip,
+	show(elem, textContent) {
+		// `textContent` adds flexibility, enabling custom messages like document "Saved" instead of the fixed "cool-tooltip."
+		let content = textContent ? textContent : elem.dataset.cooltip,
 			rectView = new DOMRect(0, 0, window.innerWidth, window.innerHeight),
 			rectElem = elem.getBoundingClientRect(),
 			rectCont,
@@ -124,7 +135,7 @@ class Tooltip {
 
 		do {
 			rectTooltip = this.position(rectElem, rectCont, index++);
-		} while (index < 8 && !L.LOUtil.containsDOMRect(rectView, rectTooltip));
+		} while (index < 8 && !app.LOUtil.containsDOMRect(rectView, rectTooltip));
 		// containsDOMRect() checks if the tooltip box(rectTooltip) is inside the boundaries of the window(rectView)
 
 		this._container.style.left = rectTooltip.left + 'px';
@@ -142,9 +153,10 @@ class Tooltip {
 
 	mouseEnter() {
 		if (this._current) {
+			let win = this._options.window ? this._options.window : window;
 			this._cancel = true;
-			clearTimeout(this._hideTimeout);
-			clearTimeout(this._showTimeout);
+			win.clearTimeout(this._hideTimeout);
+			win.clearTimeout(this._showTimeout);
 		}
 	}
 
@@ -152,8 +164,33 @@ class Tooltip {
 		this._cancel = false;
 		this.beginHide();
 	}
+
+	keyDown(e) {
+		let key = e.key.toUpperCase();
+		if (key === 'ESCAPE') {
+			this.mouseLeave();
+		}
+	}
+
+	static attachEventListener(elem, map) {
+		if (!map.tooltip) {
+			return;
+		}
+
+		elem.addEventListener('mouseenter', function () {
+			map.tooltip.beginShow(elem);
+		});
+		elem.addEventListener('mouseleave', function () {
+			map.tooltip.beginHide(elem);
+		});
+		elem.addEventListener('click', function () {
+			map.tooltip.mouseLeave();
+		});
+	}
 }
 
-L.control.tooltip = function (options) {
+window.L.control.tooltip = function (options) {
 	return new Tooltip(options);
 };
+
+window.L.control.attachTooltipEventListener = Tooltip.attachEventListener;

@@ -20,6 +20,7 @@
 #include <common/Session.hpp>
 #include <common/ThreadPool.hpp>
 #include <kit/KitQueue.hpp>
+#include <kit/LogUI.hpp>
 
 #include <wsd/TileDesc.hpp>
 
@@ -37,9 +38,10 @@
 
 void lokit_main(
 #if !MOBILEAPP
-    const std::string& childRoot, const std::string& jailId, const std::string& sysTemplate,
-    const std::string& loTemplate, bool noCapabilities, bool noSeccomp, bool useMountNamespaces,
-    bool queryVersionInfo, bool displayVersion,
+    const std::string& childRoot, const std::string& jailId, const std::string& configId,
+    const std::string& sysTemplate, const std::string& loTemplate, bool noCapabilities,
+    bool noSeccomp, bool useMountNamespaces, bool queryVersionInfo, bool displayVersion,
+    bool sysTemplateIncomplete,
 #else
     int docBrokerSocket, const std::string& userInterface,
 #endif
@@ -51,7 +53,7 @@ void runKitLoopInAThread();
 
 bool globalPreinit(const std::string& loTemplate);
 /// Wrapper around private Document::ViewCallback().
-void documentViewCallback(const int type, const char* p, void* data);
+void documentViewCallback(int type, const char* p, void* data);
 
 class Document;
 class DeltaGenerator;
@@ -120,7 +122,7 @@ private:
 /// We have two types of password protected documents
 /// 1) Documents which require password to view
 /// 2) Document which require password to modify
-enum class DocumentPasswordType
+enum class DocumentPasswordType : std::uint8_t
 {
     ToView,
     ToModify
@@ -169,6 +171,7 @@ public:
 #endif
     int kitPoll(int timeoutMicroS);
     void setDocument(std::shared_ptr<Document> document) { _document = std::move(document); }
+    const std::shared_ptr<Document>& getDocument() const { return _document; }
 
     // unusual LOK event from another thread, push into our loop to process.
     static bool pushToMainThread(LibreOfficeKitCallback callback, int type, const char* p,
@@ -185,7 +188,6 @@ public:
 #endif
 };
 
-class KitQueue;
 class ChildSession;
 
 /// A document container.
@@ -195,7 +197,7 @@ class ChildSession;
 /// per process. But for security reasons don't.
 /// However, we could have a coolkit instance
 /// per user or group of users (a trusted circle).
-class Document final : public std::enable_shared_from_this<Document>
+class Document final : public std::enable_shared_from_this<Document>, private TilePrioritizer
 {
 public:
     Document(const std::shared_ptr<lok::Office>& loKit, const std::string& jailId,
@@ -206,7 +208,7 @@ public:
     const std::string& getUrl() const { return _url; }
 
     /// Post the message - in the unipoll world we're in the right thread anyway
-    bool postMessage(const char* data, int size, const WSOpCode code) const;
+    bool postMessage(const char* data, int size, WSOpCode code) const;
 
     bool createSession(const std::string& sessionId);
 
@@ -219,42 +221,42 @@ public:
 
     void renderTiles(TileCombined& tileCombined);
 
-
-    bool sendTextFrame(const std::string& message)
+    bool sendTextFrame(const std::string& message) const
     {
         return sendFrame(message.data(), message.size());
     }
 
-    bool sendFrame(const char* buffer, int length, WSOpCode opCode = WSOpCode::Text);
+    bool sendFrame(const char* buffer, int length, WSOpCode opCode = WSOpCode::Text) const;
 
-    void alertNotAsync()
+    void alertNotAsync() const
     {
         // load unfortunately enables inputprocessing in some cases.
-        if (processInputEnabled() && !_duringLoad)
+        if (processInputEnabled() && !_duringLoad && !isBackgroundSaveProcess())
             notifyAll("error: cmd=notasync kind=failure");
     }
 
-    void alertAllUsers(const std::string& cmd, const std::string& kind)
+    void alertAllUsers(const std::string& cmd, const std::string& kind) const
     {
         sendTextFrame("errortoall: cmd=" + cmd + " kind=" + kind);
     }
 
     /// Notify all views with the given message
-    bool notifyAll(const std::string& msg)
+    bool notifyAll(const std::string& msg) const
     {
         // Broadcast updated viewinfo to all clients.
         return sendTextFrame("client-all " + msg);
     }
 
     unsigned getMobileAppDocId() const { return _mobileAppDocId; }
+    const std::string& getDocId() const { return _docId; }
 
     /// See if we should clear out our memory
     void trimIfInactive();
     void trimAfterInactivity();
 
     // LibreOfficeKit callback entry points
-    static void GlobalCallback(const int type, const char* p, void* data);
-    static void ViewCallback(const int type, const char* p, void* data);
+    static void GlobalCallback(int type, const char* p, void* data);
+    static void ViewCallback(int type, const char* p, void* data);
 
 private:
     /// Helper method to broadcast callback and its payload to all clients
@@ -262,6 +264,13 @@ private:
     {
         _queue->putCallback(-1, type, payload);
     }
+
+    /// Cleanup bgSave child processes.
+    static void reapZombieChildren();
+
+    /// Calculate tile rendering priority from a TileDesc
+    virtual Priority getTilePriority(const TileDesc &desc) const override;
+    virtual std::vector<ViewIdInactivity> getViewIdsByInactivity() const override;
 
 public:
     /// Request loading a document, or a new view, if one exists,
@@ -288,6 +297,37 @@ public:
 
     void updateActivityHeader() const;
 
+    /// Really important that if we drop, we re-start for the kit.
+    class ThreadDropper final {
+        Document *_doc;
+    public:
+        ThreadDropper() : _doc(nullptr) { }
+        ~ThreadDropper()
+        {
+            if (_doc) _doc->startThreads();
+        }
+        void clear()
+        {
+            _doc = nullptr;
+        }
+        bool dropThreads(Document *doc)
+        {
+            if (doc->joinThreads())
+            {
+                // only this path starts later.
+                _doc = doc;
+                return true;
+            }
+            return false;
+        }
+        void startThreads()
+        {
+            if (_doc)
+                _doc->startThreads();
+            _doc = nullptr;
+        }
+    };
+
     bool joinThreads();
     void startThreads();
 
@@ -312,39 +352,55 @@ private:
 
     std::string getDefaultTheme(const std::shared_ptr<ChildSession>& session) const;
 
+    std::string getDefaultBackgroundTheme(const std::shared_ptr<ChildSession>& session) const;
+
     std::shared_ptr<lok::Document> load(const std::shared_ptr<ChildSession>& session,
                                         const std::string& renderOpts);
 
-    bool forwardToChild(const std::string& prefix, const std::vector<char>& payload);
+    bool forwardToChild(std::string_view prefix, const std::vector<char>& payload);
 
     static std::string makeRenderParams(const std::string& renderOpts, const std::string& userName,
-                                        const std::string& spellOnline, const std::string& theme);
-    bool isTileRequestInsideVisibleArea(const TileCombined& tileCombined);
+                                        const std::string& spellOnline, const std::string& theme,
+                                        const std::string& backgroundTheme,
+                                        const std::string& userPrivateInfo);
+
+    /// Returns true iff at least one session is loaded.
+    bool haveLoadedSessions() const;
 
 public:
     bool processInputEnabled() const;
 
     /// A new message from wsd for the queue
     void queueMessage(const std::string &msg) { _queue->put(msg); }
+    /// Do we have incoming messages from wsd ?
     bool hasQueueItems() const { return _queue && !_queue->isEmpty(); }
+    bool canRenderTiles() const {
+        return processInputEnabled() && !isLoadOngoing() &&
+            !isBackgroundSaveProcess() && _queue &&
+            !_queue->isTileQueueEmpty();
+    }
     bool hasCallbacks() const { return _queue && _queue->callbackSize() > 0; }
 
-    /// Should we get through the SocketPoll fast to process queus ?
+    /// Should we get through the SocketPoll fast to process queues ?
     bool needsQuickPoll() const
     {
         if (hasCallbacks())
             return true;
-        if (hasQueueItems() && processInputEnabled())
+        // not processing input messages or tile renders
+        if (!processInputEnabled())
+            return false;
+        if (hasQueueItems() || canRenderTiles())
             return true;
         return false;
     }
 
-    // poll is idle, are we ?
-    void checkIdle();
     void drainQueue();
     void drainCallbacks();
 
     void dumpState(std::ostream& oss);
+
+    /// Returns true iff we have a LOKit Document instance.
+    bool isLoaded() const { return !!_loKitDocument; }
 
     /// Return access to the lok::Office instance.
     std::shared_ptr<lok::Office> getLOKit() { return _loKit; }
@@ -355,6 +411,8 @@ public:
     std::string getObfuscatedFileId() { return _obfuscatedFileId; }
 
     bool isBackgroundSaveProcess() const { return _isBgSaveProcess; }
+
+    static void shutdownBackgroundWatchdog();
 
     /// Save is async, so we need to set 'unmodified' while we are saving
     /// but this can transition back to modified if save fails.
@@ -368,17 +426,29 @@ public:
     /// Restore the Document's 'modified' state if necessary
     void updateModifiedOnFailedBgSave();
 
-    /// Let WSD know our true modified state affter bg save success.
+    /// Let WSD know our true modified state after bg save success.
     void notifySyntheticUnmodifiedState();
 
     /// Snoop document modified, and return true if filtering notification
     bool trackDocModifiedState(const std::string &stateChanged);
 
-    /// Permanantly disable background save for this process
+    /// Permanently disable background save for this process
     void disableBgSave(const std::string &reason);
+
+    void bgSaveStarted() { _bgSavesOngoing++; }
+    void bgSaveEnded();
 
     /// Are we currently performing a load ?
     bool isLoadOngoing() const { return _duringLoad > 0; }
+
+    LogUiCmd& getLogUiCmd() { return logUiCmd; }
+
+    /// Get a thread-pool to perform an operation in
+    /// all operations must complete by the time we
+    /// return to the poll
+    ThreadPool& getSyncPool() { return _deltaPool; }
+
+    int getViewsCount() const;
 
 private:
     void postForceModifiedCommand(bool modified);
@@ -401,8 +471,9 @@ private:
     std::shared_ptr<lok::Document> _loKitDocument;
 #ifdef __ANDROID__
     static std::shared_ptr<lok::Document> _loKitDocumentForAndroidOnly;
+    static std::weak_ptr<DocumentBroker> _documentBrokerForAndroidOnly;
 #endif
-    std::shared_ptr<KitQueue> _queue;
+    std::unique_ptr<KitQueue> _queue;
 
     // Connection to the coolwsd process
     std::shared_ptr<WebSocketHandler> _websocketHandler;
@@ -412,6 +483,7 @@ private:
     ModifiedState _modified;
     bool _isBgSaveProcess;
     bool _isBgSaveDisabled;
+    bool _trimIfInactivePostponed;
 
     // Document password provided
     std::string _docPassword;
@@ -427,7 +499,6 @@ private:
     ThreadPool _deltaPool;
     std::unique_ptr<DeltaGenerator> _deltaGen;
 
-    std::condition_variable _cvLoading;
     int _editorId;
     bool _editorChangeWarning;
     std::map<int, std::unique_ptr<CallbackDescriptor>> _viewIdToCallbackDescr;
@@ -442,10 +513,14 @@ private:
     std::map<int, UserInfo> _sessionUserInfo;
 #ifdef __ANDROID__
     friend std::shared_ptr<lok::Document> getLOKDocumentForAndroidOnly();
+    friend std::shared_ptr<DocumentBroker> getDocumentBrokerForAndroidOnly();
 #endif
 
     const unsigned _mobileAppDocId;
     int _duringLoad;
+    int _bgSavesOngoing;
+
+    LogUiCmd logUiCmd;
 };
 
 /// main function of the forkit process or thread
@@ -463,12 +538,13 @@ void consistencyCheckJail();
 /// check how many theads we have currently
 int getCurrentThreadCount();
 
-/// Fetch the latest montonically incrementing wire-id
+/// Fetch the latest monotonically incrementing wire-id
 TileWireId getCurrentWireId(bool increment = false);
 
 #ifdef __ANDROID__
 /// For the Android app, for now, we need access to the one and only document open to perform eg. saveAs() for printing.
 std::shared_ptr<lok::Document> getLOKDocumentForAndroidOnly();
+std::shared_ptr<DocumentBroker> getDocumentBrokerForAndroidOnly();
 #endif
 
 extern _LibreOfficeKit* loKitPtr;
@@ -477,7 +553,7 @@ extern _LibreOfficeKit* loKitPtr;
 bool isURPEnabled();
 
 /// Start a URP connection, checking if URP is enabled and there is not already an active URP session
-bool startURP(std::shared_ptr<lok::Office> LOKit, void** ppURPContext);
+bool startURP(const std::shared_ptr<lok::Office>& LOKit, void** ppURPContext);
 
 /// Ensure all recorded traces hit the disk
 void flushTraceEventRecordings();

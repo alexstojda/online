@@ -18,6 +18,7 @@
     "no-debugger": 1,
     "no-unreachable": 1,
     "no-unused-vars": 1,
+    "no-await-in-loop": 1,
   },
   "globals": {
     "L": true,
@@ -25,7 +26,8 @@
     "define": false
   },
   "env": {
-    "browser": true
+    "browser": true,
+    "es6": true
   },
   "parserOptions": {
     "ecmaVersion": 2017

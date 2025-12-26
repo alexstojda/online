@@ -6,6 +6,7 @@
  */
 
 #include <config.h>
+
 #include <jni.h>
 #include <android/log.h>
 
@@ -55,9 +56,9 @@ JNI_OnLoad(JavaVM* vm, void*) {
     // Uncomment the following to see the logs from the core too
     //setenv("SAL_LOG", "+WARN+INFO", 0);
 #if ENABLE_DEBUG
-    Log::initialize("Mobile", "debug", false, false, {});
+    Log::initialize("Mobile", "debug", false, false, {}, false, {});
 #else
-    Log::initialize("Mobile", "information", false, false, {});
+    Log::initialize("Mobile", "information", false, false, {}, false, {});
 #endif
     return JNI_VERSION_1_6;
 }
@@ -100,65 +101,15 @@ static void send2JS(const JNIThreadContext &jctx, const std::vector<char>& buffe
 {
     LOG_DBG("Send to JS: " << COOLProtocol::getAbbreviatedMessage(buffer.data(), buffer.size()));
 
-    std::string js;
-
-    // Check if the message is binary. We say that any message that isn't just a single line is
-    // "binary" even if that strictly speaking isn't the case; for instance the commandvalues:
-    // message has a long bunch of non-binary JSON on multiple lines. But _onMessage() in Socket.js
-    // handles it fine even if such a message, too, comes in as an ArrayBuffer. (Look for the
-    // "textMsg = String.fromCharCode.apply(null, imgBytes);".)
-
-    const char *newline = (const char *)memchr(buffer.data(), '\n', buffer.size());
-    if (newline != nullptr)
-    {
-        // The data needs to be an ArrayBuffer
-        std::stringstream ss;
-        ss << "Base64ToArrayBuffer('";
-
-        Poco::Base64Encoder encoder(ss);
-        encoder.rdbuf()->setLineLength(0); // unlimited
-        encoder << std::string(buffer.data(), buffer.size());
-        encoder.close();
-
-        ss << "')";
-
-        js = ss.str();
-    }
-    else
-    {
-        const unsigned char *ubufp = (const unsigned char *)buffer.data();
-        std::vector<char> data;
-        data.push_back('\'');
-        for (int i = 0; i < buffer.size(); i++)
-        {
-            if (ubufp[i] < ' ' || ubufp[i] == '\'' || ubufp[i] == '\\')
-            {
-                data.push_back('\\');
-                data.push_back('x');
-                data.push_back("0123456789abcdef"[(ubufp[i] >> 4) & 0x0F]);
-                data.push_back("0123456789abcdef"[ubufp[i] & 0x0F]);
-            }
-            else
-            {
-                data.push_back(ubufp[i]);
-            }
-        }
-        data.push_back('\'');
-
-        js = std::string(data.data(), data.size());
-    }
-
-    std::string subjs = js.substr(0, std::min(std::string::size_type(SHOW_JS_MAXLEN), js.length()));
-    if (js.length() > SHOW_JS_MAXLEN)
-        subjs += "...";
-
-    LOG_DBG("Sending to JavaScript: " << subjs);
-
     JNIEnv *env = jctx.getEnv();
-    jstring jstr = env->NewStringUTF(js.c_str());
-    jmethodID callFakeWebsocket = env->GetMethodID(g_loActivityClz, "callFakeWebsocketOnMessage", "(Ljava/lang/String;)V");
-    env->CallVoidMethod(g_loActivityObj, callFakeWebsocket, jstr);
-    env->DeleteLocalRef(jstr);
+
+    jbyteArray jmessage = env->NewByteArray(buffer.size());
+    env->SetByteArrayRegion(jmessage, 0, buffer.size(),
+                            reinterpret_cast<const jbyte *>(buffer.data()));
+
+    jmethodID callFakeWebsocket = env->GetMethodID(g_loActivityClz, "rawCallFakeWebsocketOnMessage", "([B)V");
+    env->CallVoidMethod(g_loActivityObj, callFakeWebsocket, jmessage);
+    env->DeleteLocalRef(jmessage);
 
     if (env->ExceptionCheck())
         env->ExceptionDescribe();
@@ -271,11 +222,7 @@ Java_org_libreoffice_androidlib_LOActivity_postMobileMessageNative(JNIEnv *env, 
             LOG_DBG("Actually sending to Online:" << fileURL);
 
             // Send the document URL to COOLWSD to setup the docBroker URL
-            struct pollfd pollfd;
-            pollfd.fd = currentFakeClientFd;
-            pollfd.events = POLLOUT;
-            fakeSocketPoll(&pollfd, 1, -1);
-            fakeSocketWrite(currentFakeClientFd, fileURL.c_str(), fileURL.size());
+            fakeSocketWriteQueue(currentFakeClientFd, fileURL.c_str(), fileURL.size());
         }
         else if (strcmp(string_value, "BYE") == 0)
         {
@@ -286,15 +233,7 @@ Java_org_libreoffice_androidlib_LOActivity_postMobileMessageNative(JNIEnv *env, 
         else
         {
             // Send the message to COOLWSD
-            char *string_copy = strdup(string_value);
-
-            struct pollfd pollfd;
-            pollfd.fd = currentFakeClientFd;
-            pollfd.events = POLLOUT;
-            fakeSocketPoll(&pollfd, 1, -1);
-            fakeSocketWrite(currentFakeClientFd, string_copy, strlen(string_copy));
-
-            free(string_copy);
+            fakeSocketWriteQueue(currentFakeClientFd, string_value, strlen(string_value));
         }
     }
     else
@@ -568,6 +507,14 @@ Java_org_libreoffice_androidlib_LOActivity_paste(JNIEnv *env, jobject, jstring i
     env->GetByteArrayRegion(inData, 0, dataArrayLength, reinterpret_cast<jbyte*>(dataArray));
     getLOKDocumentForAndroidOnly()->paste(mimeType, dataArray, dataArrayLength);
     env->ReleaseStringUTFChars(inMimeType, mimeType);
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_org_libreoffice_androidlib_COWebViewClient_getEmbeddedMediaPath(JNIEnv *env, jobject, jstring inTag) {
+    std::string tag = copyJavaString(env, inTag);
+    std::string mediaPath = getDocumentBrokerForAndroidOnly()->getEmbeddedMediaPath(tag);
+    return env->NewStringUTF(mediaPath.c_str());
 }
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab cinoptions=b1,g0,N-s cinkeys+=0=break: */

@@ -10,26 +10,34 @@
 */
 
 class ShapeHandleRotationSubSection extends CanvasSectionObject {
-	processingOrder: number = L.CSections.DefaultForDocumentObjects.processingOrder;
-	drawingOrder: number = L.CSections.DefaultForDocumentObjects.drawingOrder + 1; // Handle events before the parent section.
-	zIndex: number = L.CSections.DefaultForDocumentObjects.zIndex;
+	processingOrder: number = app.CSections.DefaultForDocumentObjects.processingOrder;
+	drawingOrder: number = app.CSections.DefaultForDocumentObjects.drawingOrder + 1; // Handle events before the parent section.
+	zIndex: number = app.CSections.DefaultForDocumentObjects.zIndex;
     documentObject: boolean = true;
 
 	constructor (parentHandlerSection: ShapeHandlesSection, sectionName: string, size: number[], documentPosition: cool.SimplePoint, ownInfo: any) {
-        super();
+        super(sectionName);
 
-		this.name = sectionName;
 		this.size = size;
 
 		this.sectionProperties.position = documentPosition.clone();
         this.sectionProperties.parentHandlerSection = parentHandlerSection;
 		this.sectionProperties.ownInfo = ownInfo;
-		this.sectionProperties.mouseIsInside = false;
-		this.sectionProperties.previousCursorStyle = null;
 		this.sectionProperties.lastDraggingDistance = null;
-		this.sectionProperties.mapPane = (<HTMLElement>(document.querySelectorAll('.leaflet-map-pane')[0]));
-		this.sectionProperties.previousCursorStyle = null;
 		this.sectionProperties.cursorStyle = 'pointer';
+
+		app.events.on('TextCursorVisibility', this.onTextCursorVisibility.bind(this));
+	}
+
+	onTextCursorVisibility(event: any): void {
+		if (event.detail.visible) {
+			this.setShowSection(false);
+			this.interactable = false;
+		}
+		else {
+			this.setShowSection(true);
+			this.interactable = true;
+		}
 	}
 
 	calculateAngle(center: cool.SimplePoint, target: cool.SimplePoint): number {
@@ -51,18 +59,11 @@ class ShapeHandleRotationSubSection extends CanvasSectionObject {
 		this.setPosition(this.sectionProperties.position.pX, this.sectionProperties.position.pY);
 	}
 
-	onMouseEnter(point: Array<number>, e: MouseEvent): void {
-		app.map.dontHandleMouse = true;
-		this.sectionProperties.previousCursorStyle = this.sectionProperties.mapPane.style.cursor;
-		this.sectionProperties.mapPane.style.cursor = this.sectionProperties.cursorStyle;
+	onMouseEnter(point: cool.SimplePoint, e: MouseEvent): void {
+		this.context.canvas.style.cursor = this.sectionProperties.cursorStyle;
 	}
 
-	onMouseLeave(point: Array<number>, e: MouseEvent): void {
-		app.map.dontHandleMouse = false;
-		this.sectionProperties.mapPane.style.cursor = this.sectionProperties.previousCursorStyle;
-	}
-
-	onDraw(frameCount?: number, elapsedTime?: number, subsetBounds?: cool.Bounds): void {
+	onDraw(frameCount?: number, elapsedTime?: number): void {
 		this.context.fillStyle = 'white';
 		this.context.strokeStyle = 'black';
 		this.context.beginPath();
@@ -75,12 +76,12 @@ class ShapeHandleRotationSubSection extends CanvasSectionObject {
 	// This is called after dragging the rotation handler. It re-calculates initial angle with the handler's new position.
 	getAngleDifference(): number {
 		const dragDistanceInTwips = [this.sectionProperties.lastDraggingDistance[0] * app.pixelsToTwips, this.sectionProperties.lastDraggingDistance[1] * app.pixelsToTwips];
-		const draggedToPoint = new app.definitions.simplePoint(dragDistanceInTwips[0], dragDistanceInTwips[1]);
+		const draggedToPoint = new cool.SimplePoint(dragDistanceInTwips[0], dragDistanceInTwips[1]);
 
 		draggedToPoint.pX += this.position[0];
 		draggedToPoint.pY += this.position[1];
 
-		const selectionCenter = new app.definitions.simplePoint(app.map._docLayer._graphicSelection.center[0], app.map._docLayer._graphicSelection.center[1]);
+		const selectionCenter = new cool.SimplePoint(GraphicSelection.rectangle.center[0], GraphicSelection.rectangle.center[1]);
 
 		const initialPoint = this.sectionProperties.ownInfo.initialPosition;
 		const initialAngle = this.calculateAngle(selectionCenter, initialPoint);
@@ -89,14 +90,10 @@ class ShapeHandleRotationSubSection extends CanvasSectionObject {
 		return initialAngle - newAngle;
 	}
 
-	onMouseDown(point: Array<number>, e: MouseEvent): void {
-		(window as any).IgnorePanning = true;
-	}
-
-	onMouseUp(point: number[], e: MouseEvent): void {
+	onMouseUp(point: cool.SimplePoint, e: MouseEvent): void {
 		if (this.containerObject.isDraggingSomething()) {
 			if (this.sectionProperties.lastDraggingDistance) {
-				const center = app.map._docLayer._graphicSelection.center;
+				const center = GraphicSelection.rectangle.center;
 
 				const commandParameters = {
 					'TransformRotationDeltaAngle': {
@@ -117,17 +114,15 @@ class ShapeHandleRotationSubSection extends CanvasSectionObject {
 			}
 			this.sectionProperties.parentHandlerSection.hideSVG();
 		}
-
-		(window as any).IgnorePanning = false;
 	}
 
-	onMouseMove(position: number[], distance: number[]) {
+	onMouseMove(position: cool.SimplePoint, distance: number[]) {
 		if (this.containerObject.isDraggingSomething()) {
 			this.sectionProperties.lastDraggingDistance = distance;
 
 			if (this.containerObject.isDraggingSomething() && this.sectionProperties.parentHandlerSection.sectionProperties.svg) {
 				this.sectionProperties.parentHandlerSection.sectionProperties.svg.style.opacity = 0.5;
-				const angleDifference = (-this.getAngleDifference() / 100) * app.dpiScale;
+				const angleDifference = -this.getAngleDifference() / 100;
 				this.sectionProperties.parentHandlerSection.sectionProperties.svg.style.transform = 'rotate(' + angleDifference + 'deg)';
 				this.containerObject.requestReDraw();
 				this.sectionProperties.parentHandlerSection.showSVG();

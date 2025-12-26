@@ -12,9 +12,9 @@
  * Feature blocking handler
  */
 
-/* global $ _ */
+/* global $ _ app */
 
-L.Map.include({
+window.L.Map.include({
 
 	Locking: {
 		isLockedUser: false,
@@ -54,9 +54,9 @@ L.Map.include({
 			var that = this;
 
 			if (window.mode.isMobile()) {
-				var overlay = L.DomUtil.create('div', 'locking-overlay', DOMParentElement);
-				var lock = L.DomUtil.create('img', 'locking-overlay-lock', overlay);
-				L.LOUtil.setImage(lock, 'lc_lock.svg', this);
+				var overlay = window.L.DomUtil.create('div', 'locking-overlay', DOMParentElement);
+				var lock = window.L.DomUtil.create('img', 'locking-overlay-lock', overlay);
+				app.LOUtil.setImage(lock, 'lc_lock.svg', this);
 			}
 
 			$(DOMParentElement).click(function(event) {
@@ -82,31 +82,34 @@ L.Map.include({
 			if (highlight)
 				message.push('<li>' + highlight + '</li>');
 		});
-		message.push('</ul>', '</div>', '<div>');
+		message.push('</ul>', '</div>', '</div>');
 
 		message = message.join('');
 
-		this.uiManager.showInfoModal('unlock-features-popup', null, ' ', ' ', _('Unlock'), function() {
-			window.open(this.Locking.unlockLink, '_blank');
-			this.uiManager.closeModal(this.uiManager.generateModalId('unlock-features-popup'));
-		}.bind(this), true);
+		const modalId = 'unlock-features-popup';
+                this.uiManager.showInfoModal(modalId, null, ' ', ' ', _('Unlock'), () => {
+                        window.open(this.Locking.unlockLink, '_blank');
+                        this.uiManager.closeModal(this.uiManager.generateModalId('unlock-features-popup'));
+                }, true);
 
-		var paraTag = document.getElementById('unlock-features-popup').querySelectorAll('p')[0];
-		if (paraTag)
-			paraTag.outerHTML = message;
-		else {
-			var popup = document.getElementById('unlock-features-popup');
-			var el = document.createElement('p');
-			popup.insertBefore(el, popup.firstChild);
-			el.outerHTML = message;
-		}
+		app.layoutingService.appendLayoutingTask(() => {
+			let modal = document.getElementById(modalId);
+			let paraTag = modal.querySelectorAll('p')[0];
+			if (paraTag)
+				paraTag.outerHTML = message;
+			else {
+				var el = document.createElement('p');
+				modal.insertBefore(el, modal.firstChild);
+				el.outerHTML = message;
+			}
 
-		var unlockImage = L.DomUtil.get('unlock-image');
-		if (this.Locking.unlockImageUrlPath) {
-			unlockImage.src = 'remote/static' + this.Locking.unlockImageUrlPath;
-		} else {
-			unlockImage.src = 'images/lock-illustration.svg';
-		}
+			let unlockImage = document.getElementById('unlock-image');
+			if (this.Locking.unlockImageUrlPath) {
+				unlockImage.src = 'remote/static' + this.Locking.unlockImageUrlPath;
+			} else {
+				unlockImage.src = 'images/lock-illustration.svg';
+			}
+		});
 	},
 
 	isLockedItem: function(item) {

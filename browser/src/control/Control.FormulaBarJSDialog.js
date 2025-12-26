@@ -13,27 +13,28 @@
  * JSDialog.FormulaBar - implementation of formulabar toolbar
  */
 
-/* global JSDialog _ _UNO UNOKey */
+/* global JSDialog _ _UNO UNOKey WindowId */
 
+const EXPAND_FORMULA_BAR_TEXT = _('Expand Formula Bar');
+const FUNCTION_WIZARD_TEXT = _('Function Wizard');
 class FormulaBar {
 	constructor(map) {
 		this.map = map;
-		this.parentContainer = L.DomUtil.get('formulabar');
+		this.parentContainer = window.L.DomUtil.get('formulabar');
 
 		this.map.on('formulabar', this.onFormulaBar, this);
 		this.map.on('jsdialogupdate', this.onJSUpdate, this);
 		this.map.on('jsdialogaction', this.onJSAction, this);
-
 		this.map.on('doclayerinit', this.onDocLayerInit, this);
-		this.map.on('updatepermission', this.onUpdatePermission, this);
-		this.map.on('celladdress', this.onCellAddress, this);
 
-		this.builder = new L.control.jsDialogBuilder(
+		this.builder = new window.L.control.jsDialogBuilder(
 			{
 				mobileWizard: this,
 				map: this.map,
+				windowId: WindowId.Formulabar,
 				cssClass: 'formulabar jsdialog',
-				callback: this.callback.bind(this)
+				callback: this.callback.bind(this),
+				suffix: 'formulabar',
 			});
 
 		this.createFormulabar('');
@@ -45,8 +46,6 @@ class FormulaBar {
 		this.map.off('jsdialogaction', this.onJSAction, this);
 
 		this.map.off('doclayerinit', this.onDocLayerInit, this);
-		this.map.off('updatepermission', this.onUpdatePermission, this);
-		this.map.off('celladdress', this.onCellAddress, this);
 	}
 
 	onDocLayerInit() {
@@ -55,55 +54,9 @@ class FormulaBar {
 			this.showFormulabar();
 	}
 
-	onUpdatePermission(e) {
-		var adressInput = L.DomUtil.get('addressInput-input');
-
-		if (e.perm === 'edit') {
-			if (adressInput)
-				adressInput.removeAttribute('disabled');
-			this.enable();
-		} else {
-			if (adressInput)
-				adressInput.setAttribute('disabled', '');
-			this.disable();
-		}
-	}
-
-	onCellAddress (e) {
-		var adressInput = L.DomUtil.get('addressInput-input');
-		if (adressInput && document.activeElement !== adressInput) {
-			// if the user is not editing the address field
-			adressInput.value = e.address;
-		}
-		this.map.formulabarSetDirty();
-	}
-
-	onAddressInputChange() {
-		// address control should not have focus anymore
-		L.DomUtil.get('addressInput-input').blur();
-		this.map.focus();
-		var value = L.DomUtil.get('addressInput-input').value;
-		var command = {
-			ToPoint : {
-				type: 'string',
-				value: value
-			}
-
-		};
-		this.map.sendUnoCommand('.uno:GoToCell', command);
-		// TODO: create clear helper to provide one-time allow ticket for view jump
-		this.map._docLayer._searchRequested = true;
-	}
-
 	createFormulabar(text) {
 		if (!window.mode.isMobile()) {
 			var data = [
-				{
-					id: 'addressInput',
-					type: 'edit',
-					text: _('cell address'),
-					changedCallback: this.callbackAddress.bind(this)
-				},
 				{
 					id: 'formulabar-buttons-toolbox',
 					type: 'toolbox',
@@ -111,13 +64,15 @@ class FormulaBar {
 						{
 							id: 'functiondialog',
 							type: 'toolitem',
-							text: _('Function Wizard'),
+							text: FUNCTION_WIZARD_TEXT,
 							command: '.uno:FunctionDialog'
 						},
 						{
 							id: 'AutoSumMenu:AutoSumMenu',
 							type: 'menubutton',
 							class: 'AutoSumMenu',
+							noLabel: true,
+							text: _('Select Function'),
 							command: '.uno:AutoSumMenu'
 						},
 						{
@@ -152,25 +107,20 @@ class FormulaBar {
 						{
 							id: 'expand',
 							type: 'pushbutton',
-							text: '',
+							text: EXPAND_FORMULA_BAR_TEXT,
 							symbol: 'SPIN_DOWN',
 						}]
 				}];
 		} else {
 			var data = [
 				{
-					id: 'addressInput',
-					type: 'edit',
-					text: _('cell address'),
-					changedCallback: this.callbackAddress.bind(this)
-				},
-				{
+					id: 'formulabar-toolbox',
 					type: 'toolbox',
 					children: [
 						{
 							id: 'functiondialog',
 							type: 'toolitem',
-							text: _('Function Wizard'),
+							text: FUNCTION_WIZARD_TEXT,
 							command: '.uno:FunctionDialog'
 						}, {
 							id: 'sc_input_window',
@@ -180,20 +130,20 @@ class FormulaBar {
 						{
 							id: 'expand',
 							type: 'pushbutton',
-							text: '',
+							text: EXPAND_FORMULA_BAR_TEXT,
 							symbol: 'SPIN_DOWN',
 						}]
 				}];
 		}
 
-		this.parentContainer.innerHTML = '';
+		this.parentContainer.replaceChildren();
 		this.builder.build(this.parentContainer, data);
 	}
 
 	toggleMultiLine(input) {
-		if (L.DomUtil.hasClass(input, 'expanded')) {
-			L.DomUtil.removeClass(input, 'expanded');
-			L.DomUtil.removeClass(this.parentContainer, 'expanded');
+		if (window.L.DomUtil.hasClass(input, 'expanded')) {
+			window.L.DomUtil.removeClass(input, 'expanded');
+			window.L.DomUtil.removeClass(this.parentContainer, 'expanded');
 			this.onJSUpdate({
 				data: {
 					jsontype: 'formulabar',
@@ -202,14 +152,14 @@ class FormulaBar {
 					control: {
 						id: 'expand',
 						type: 'pushbutton',
-						text: '',
+						text: EXPAND_FORMULA_BAR_TEXT,
 						symbol: 'SPIN_DOWN'
 					}
 				}
 			});
 		} else {
-			L.DomUtil.addClass(input, 'expanded');
-			L.DomUtil.addClass(this.parentContainer, 'expanded');
+			window.L.DomUtil.addClass(input, 'expanded');
+			window.L.DomUtil.addClass(this.parentContainer, 'expanded');
 			this.onJSUpdate({
 				data: {
 					jsontype: 'formulabar',
@@ -218,16 +168,12 @@ class FormulaBar {
 					control: {
 						id: 'expand',
 						type: 'pushbutton',
-						text: '',
+						text: _('Collapse Formula Bar'),
 						symbol: 'SPIN_UP'
 					}
 				}
 			});
 		}
-	}
-
-	callbackAddress() {
-		this.onAddressInputChange();
 	}
 
 	callback(objectType, eventType, object, data, builder) {
@@ -238,29 +184,30 @@ class FormulaBar {
 			return;
 		}
 
-		if (object.id === 'addressInput')
-			return;
-
 		// in the core we have DrawingArea not TextView
 		if (object.id.indexOf('sc_input_window') === 0) {
+			const map = builder.map;
 			objectType = 'drawingarea';
+
 			if (eventType === 'keypress' && data === UNOKey.RETURN || data === UNOKey.ESCAPE)
-				builder.map.focus();
+				map.focus();
 			else if (eventType === 'grab_focus') {
 				this.focusField();
-				builder.map.onFormulaBarFocus();
+				map.onFormulaBarFocus();
 			}
+
+			map.userList.followUser(map._docLayer._getViewId(), false);
 		}
 
 		builder._defaultCallbackHandler(objectType, eventType, object, data, builder);
 	}
 
 	focusField() {
-		L.DomUtil.addClass(this.getInputField(), 'focused');
+		window.L.DomUtil.addClass(this.getInputField(), 'focused');
 	}
 
 	blurField() {
-		L.DomUtil.removeClass(this.getInputField(), 'focused');
+		window.L.DomUtil.removeClass(this.getInputField(), 'focused');
 	}
 
 	enable() {
@@ -283,7 +230,14 @@ class FormulaBar {
 		var input = this.getInputField();
 		if (!input)
 			return false;
-		return L.DomUtil.hasClass(input, 'focused');
+		return window.L.DomUtil.hasClass(input, 'focused');
+	}
+
+	isInEditMode() {
+		var acceptButton = this.parentContainer.querySelector('#acceptformula');
+		if (acceptButton)
+			return !acceptButton.classList.contains('hidden');
+		return false;
 	}
 
 	showFormulabar() {
@@ -351,10 +305,10 @@ class FormulaBar {
 			return;
 
 		control.style.visibility = 'hidden';
-		var temporaryParent = L.DomUtil.create('div');
+		var temporaryParent = window.L.DomUtil.create('div');
 		this.builder.build(temporaryParent, [data.control], false);
 		parent.insertBefore(temporaryParent.firstChild, control.nextSibling);
-		L.DomUtil.remove(control);
+		window.L.DomUtil.remove(control);
 	}
 
 	onJSAction (e) {
@@ -390,8 +344,9 @@ class FormulaBar {
 			}
 
 			this.builder.executeAction(this.parentContainer, innerData);
-		} else
+		} else if (innerData) {
 			this.createFormulabar(innerData.text);
+		}
 	}
 }
 

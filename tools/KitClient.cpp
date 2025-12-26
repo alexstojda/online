@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <sysexits.h>
+#include <unistd.h>
 
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKitInit.h>
@@ -92,7 +93,7 @@ protected:
             std::string line;
             std::getline(std::cin, line);
 
-            StringVector tokens(StringVector::tokenize(line, ' '));
+            StringVector tokens(StringVector::tokenize(std::move(line), ' '));
 
             if (tokens.empty())
                 continue;
@@ -114,10 +115,6 @@ protected:
                     continue;
                 }
                 std::cout << LOKitHelper::documentStatus(loKitDocument) << std::endl;
-                for (int i = 0; i < loKitDocument->pClass->getParts(loKitDocument); i++)
-                {
-                    std::cout << "  " << i << ": '" << loKitDocument->pClass->getPartName(loKitDocument, i) << '\'' << std::endl;
-                }
             }
             else if (tokens.equals(0, "tile"))
             {

@@ -11,14 +11,18 @@
 
 #pragma once
 
-#include <atomic>
-#include <mutex>
-#include <signal.h>
+#include <cstdint>
 #include <string>
 
 namespace SigUtil
 {
-#ifndef IOS
+    /// All of this is implemented as no-ops for the mobile apps. No flags are set and functions
+    /// checking them always return false. There is no "signal log". The functions do exist, though,
+    /// so calls don't need to be surrounded by ifdefs or bypassed using Util::isMobileApp().
+
+    /// Send the current process the SIGUSR1 signal.
+    void triggerDumpState(const std::string &testname);
+
     /// Get the flag used to commence clean shutdown.
     /// requestShutdown() is used to set the flag.
     bool getShutdownRequestFlag();
@@ -28,27 +32,10 @@ namespace SigUtil
     bool getTerminationFlag();
     /// Set the flag to stop pump loops forcefully and request shutting down.
     void setTerminationFlag();
-#if MOBILEAPP
+
     /// Reset the flags to stop pump loops forcefully.
     /// Only necessary in Mobile.
     void resetTerminationFlags();
-#endif
-#else
-    // In the mobile apps we have no need to shut down the app.
-    inline constexpr bool getShutdownRequestFlag()
-    {
-        return false;
-    }
-
-    inline constexpr bool getTerminationFlag()
-    {
-        return false;
-    }
-
-    inline void setTerminationFlag()
-    {
-    }
-#endif
 
     extern "C" { typedef void (*GlobalDumpStateFn)(void); }
 
@@ -67,12 +54,23 @@ namespace SigUtil
     /// Add a message on a view to a round-robin buffer to be dumped on fatal signal
     void addActivity(const std::string &id, const std::string &message);
 
+    /// Dump recent activity to the signal log
+    void signalLogActivity();
+
     /// Called to flag that we are running in unattended mode, not interactive.
     /// In unattended mode we know there is no one to attach a debugger on
     /// faulting, so we do not wait unnecessarily. Otherwise, we wait for 60s.
     void setUnattended();
 
-#if !MOBILEAPP
+    /// Reap one or more children.
+    /// Returns a pair of the return value of waitpid(2)
+    /// and WTERMSIG(stat_loc), if it were SEGV, ABRT, or BUS.
+    /// @sighandler is true if we are invoked from a signal handler.
+    /// This is needed to comply with signal handler requirements.
+    std::pair<int, int> reapZombieChild(int pid, bool sighandler);
+
+    /// Uninitialize and free memory.
+    void uninitialize();
 
     /// Open the signalLog file.
     void signalLogOpen();
@@ -86,12 +84,13 @@ namespace SigUtil
     /// Signal log number
     void signalLogNumber(std::size_t num, int base = 10);
 
-    /// Wait for the signal handler, if any,
-    /// and prevent _Exit while collecting backtrace.
-    void waitSigHandlerTrap();
-
     /// Returns the name of the signal.
     const char* signalName(int signo);
+
+    extern "C"
+    {
+        typedef void (*SigChildHandler)(int);
+    }
 
     /// Register a wakeup function when changing
 
@@ -121,8 +120,6 @@ namespace SigUtil
     /// after a certain (short) timeout.
     bool killChild(const int pid, const int signal);
 
-    extern "C" { typedef void (*SigChildHandler)(uint32_t); }
-
     /// Sets a child death signal handler
     void setSigChildHandler(SigChildHandler fn);
 
@@ -131,8 +128,6 @@ namespace SigUtil
 
     /// Dump a signal-safe back-trace
     void dumpBacktrace();
-
-#endif // !MOBILEAPP
 
 } // end namespace SigUtil
 

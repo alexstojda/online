@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -8,8 +9,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
-declare var L: any;
-declare var app: any;
 
 namespace cool {
 
@@ -38,17 +37,13 @@ export class SplitPanesContext {
 	protected _splitPos: Point;
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-	constructor(docLayer: any, createSplitters: boolean = false) {
+	constructor(docLayer: any) {
 		console.assert(docLayer, 'no docLayer!');
 		console.assert(docLayer._map, 'no map!');
 
 		this._docLayer = docLayer;
 		this._map = docLayer._map;
 		this._setDefaults();
-
-		if (createSplitters) {
-			this.updateSplitters();
-		}
 	}
 
 	protected _setDefaults(): void {
@@ -60,12 +55,12 @@ export class SplitPanesContext {
 	}
 
 	public getMaxSplitPosX(): number {
-		const rawMax = Math.floor(app.canvasSize.pX * this.options.maxHorizontalSplitPercent / 100);
+		const rawMax = Math.floor(app.sectionContainer.getWidth() * this.options.maxHorizontalSplitPercent / 100);
 		return this._docLayer.getSnapDocPosX(rawMax);
 	}
 
 	public getMaxSplitPosY(): number {
-		const rawMax = Math.floor(app.canvasSize.pY * this.options.maxVerticalSplitPercent / 100);
+		const rawMax = Math.floor(app.sectionContainer.getHeight() * this.options.maxVerticalSplitPercent / 100);
 		return this._docLayer.getSnapDocPosY(rawMax);
 	}
 
@@ -73,8 +68,13 @@ export class SplitPanesContext {
 
 		var xchanged = this.setHorizSplitPos(splitX, forceUpdate, true /* noFire */);
 		var ychanged = this.setVertSplitPos(splitY, forceUpdate, true /* noFire */);
-		if (xchanged || ychanged)
+		if (xchanged || ychanged) {
 			this._map.fire('splitposchanged');
+			const section = app.sectionContainer.getSectionWithName(app.CSections.Splitter.name);
+			if (section) {
+				section.setPosition(0, 0); // To refresh myTopLeft property.
+			}
+		}
 	}
 
 	public getSplitPos(): Point {
@@ -100,9 +100,6 @@ export class SplitPanesContext {
 		console.assert(typeof splitX === 'number', 'splitX must be a number');
 
 		if (this._splitPos.x === splitX) {
-			if (forceUpdate || !this._docLayer.hasXSplitter()) {
-				this._updateXSplitter();
-			}
 			return false;
 		}
 
@@ -114,7 +111,6 @@ export class SplitPanesContext {
 		}
 
 		app.calc.splitCoordinate.pX = newX;
-		this._updateXSplitter();
 
 		if (!noFire)
 			this._map.fire('splitposchanged');
@@ -127,9 +123,6 @@ export class SplitPanesContext {
 		console.assert(typeof splitY === 'number', 'splitY must be a number');
 
 		if (this._splitPos.y === splitY) {
-			if (forceUpdate || !this._docLayer.hasYSplitter()) {
-				this._updateYSplitter();
-			}
 			return false;
 		}
 
@@ -141,25 +134,11 @@ export class SplitPanesContext {
 		}
 
 		app.calc.splitCoordinate.pY = newY;
-		this._updateYSplitter();
 
 		if (!noFire)
 			this._map.fire('splitposchanged');
 
 		return changed;
-	}
-
-	public updateSplitters(): void {
-		this._updateXSplitter();
-		this._updateYSplitter();
-	}
-
-	private _updateXSplitter(): void {
-		this._docLayer.updateHorizPaneSplitter();
-	}
-
-	private _updateYSplitter(): void {
-		this._docLayer.updateVertPaneSplitter();
 	}
 
 	public getPanesProperties(): PaneStatus[] {
@@ -201,7 +180,7 @@ export class SplitPanesContext {
 	// This function returns the viewed parts' coordinates as simple rectangles.
 	public getViewRectangles(): cool.SimpleRectangle[] {
 		const viewRectangles: cool.SimpleRectangle[] = new Array<cool.SimpleRectangle>();
-		viewRectangles.push(app.file.viewedRectangle.clone()); // If view is not splitted, this will be the only view rectangle.
+		viewRectangles.push(app.activeDocument.activeLayout.viewedRectangle.clone()); // If view is not splitted, this will be the only view rectangle.
 
 		/*
 			|----------------------------|
@@ -219,9 +198,9 @@ export class SplitPanesContext {
 			viewRectangles[0].pX1 = 0;
 			viewRectangles[0].pX2 = this._splitPos.x;
 
-			const topRightPane: cool.SimpleRectangle = app.file.viewedRectangle.clone();
-			const width = app.file.viewedRectangle.pWidth - viewRectangles[0].pWidth;
-			topRightPane.pX1 = app.file.viewedRectangle.pX2 - width;
+			const topRightPane: cool.SimpleRectangle = app.activeDocument.activeLayout.viewedRectangle.clone();
+			const width = app.activeDocument.activeLayout.viewedRectangle.pWidth - viewRectangles[0].pWidth;
+			topRightPane.pX1 = app.activeDocument.activeLayout.viewedRectangle.pX2 - width;
 			topRightPane.pWidth = width;
 			viewRectangles.push(topRightPane);
 		}
@@ -231,9 +210,9 @@ export class SplitPanesContext {
 			viewRectangles[0].pY1 = 0;
 			viewRectangles[0].pY2 = this._splitPos.y;
 
-			const bottomLeftPane = app.file.viewedRectangle.clone();
-			const height = app.file.viewedRectangle.pHeight - viewRectangles[0].pHeight;
-			bottomLeftPane.pY1 = app.file.viewedRectangle.pY2 - height;
+			const bottomLeftPane = app.activeDocument.activeLayout.viewedRectangle.clone();
+			const height = app.activeDocument.activeLayout.viewedRectangle.pHeight - viewRectangles[0].pHeight;
+			bottomLeftPane.pY1 = app.activeDocument.activeLayout.viewedRectangle.pY2 - height;
 			bottomLeftPane.pHeight = height;
 			viewRectangles.push(bottomLeftPane);
 		}
@@ -246,12 +225,12 @@ export class SplitPanesContext {
 			viewRectangles[2].pX1 = 0;
 			viewRectangles[2].pX2 = this._splitPos.x;
 
-			const bottomRightPane = app.file.viewedRectangle.clone();
-			const width = app.file.viewedRectangle.pWidth - viewRectangles[0].pWidth;
-			const height = app.file.viewedRectangle.pHeight - viewRectangles[0].pHeight;
-			bottomRightPane.pX1 = app.file.viewedRectangle.pX2 - width;
+			const bottomRightPane = app.activeDocument.activeLayout.viewedRectangle.clone();
+			const width = app.activeDocument.activeLayout.viewedRectangle.pWidth - viewRectangles[0].pWidth;
+			const height = app.activeDocument.activeLayout.viewedRectangle.pHeight - viewRectangles[0].pHeight;
+			bottomRightPane.pX1 = app.activeDocument.activeLayout.viewedRectangle.pX2 - width;
 			bottomRightPane.pWidth = width;
-			bottomRightPane.pY1 = app.file.viewedRectangle.pY2 - height;
+			bottomRightPane.pY1 = app.activeDocument.activeLayout.viewedRectangle.pY2 - height;
 			bottomRightPane.pHeight = height;
 
 			viewRectangles.push(bottomRightPane);
@@ -335,5 +314,3 @@ export class SplitPanesContext {
 }
 
 }
-
-L.SplitPanesContext = cool.SplitPanesContext;

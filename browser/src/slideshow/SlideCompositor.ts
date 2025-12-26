@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -16,23 +19,11 @@ declare var SlideShow: any;
 
 abstract class SlideCompositor {
 	_slideShowPresenter: SlideShowPresenter = null;
-	_presentationInfo: PresentationInfo = null;
-	_width: number = 0;
-	_height: number = 0;
 	_initialSlideNumber: number = 0;
 	_onGotSlideCallback: VoidFunction = null;
 
-	constructor(
-		slideShowPresenter: SlideShowPresenter,
-		presentationInfo: PresentationInfo,
-		width: number,
-		height: number,
-	) {
+	constructor(slideShowPresenter: SlideShowPresenter) {
 		this._slideShowPresenter = slideShowPresenter;
-		this._presentationInfo = presentationInfo;
-		this._width = width;
-		this._height = height;
-
 		this._addHooks();
 	}
 
@@ -40,28 +31,48 @@ abstract class SlideCompositor {
 
 	public abstract removeHooks(): void;
 
-	public updatePresentationInfo(presentationInfo: PresentationInfo) {
-		this._presentationInfo = presentationInfo;
-	}
+	public abstract onUpdatePresentationInfo(): void;
 
 	public fetchAndRun(slideNumber: number, callback: VoidFunction) {
 		this._initialSlideNumber = slideNumber;
 		this._onGotSlideCallback = callback;
 	}
 
-	protected _getSlidesCount() {
-		return this._presentationInfo ? this._presentationInfo.slides.length : 0;
-	}
-
-	protected _getSlideWidth() {
-		return this._width;
-	}
-
-	protected _getSlideHeight() {
-		return this._height;
-	}
+	public abstract getCanvasSize(): [number, number]; // [width, height]
 
 	public abstract getSlide(slideNumber: number): ImageBitmap;
+
+	public abstract getLayerImage(
+		slideHash: string,
+		targetElement: string,
+	): ImageBitmap;
+
+	public abstract getLayerBounds(
+		slideHash: string,
+		targetElement: string,
+	): BoundingBoxType;
+
+	public abstract getAnimatedSlide(slideIndex: number): ImageBitmap;
+
+	public abstract getAnimatedLayerInfo(
+		slideHash: string,
+		targetElement: string,
+	): AnimatedShapeInfo;
+
+	public abstract getLayerRendererContext(): RenderContext;
+
+	public abstract getVideoRenderer(
+		slideHash: string,
+		videoInfo: VideoInfo,
+	): VideoRenderer;
+
+	public abstract deleteResources(): void;
+
+	public abstract pauseVideos(slideHash: string): void;
+
+	public abstract notifyTransitionStart(): void;
+
+	public abstract notifyTransitionEnd(slideHash: string): void;
 }
 
 SlideShow.SlideCompositor = SlideCompositor;

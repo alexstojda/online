@@ -10,13 +10,13 @@ describe.skip('Repair Document', function() {
 	function repairDoc(frameId1, frameId2) {
 		cy.wait(1000);
 		cy.cSetActiveFrame(frameId1);
-		cy.cGet('.leaflet-layer').click('center', {force:true});
+		cy.cGet('#document-container').click('center', {force:true});
 		cy.cGet('g.leaflet-control-buttons-disabled svg').dblclick({force:true});
 
 		helper.typeIntoDocument('Hello');
 		helper.typeIntoDocument('{esc}');
 
-		cy.cGet('.leaflet-layer').click('center', {force:true});
+		cy.cGet('#document-container').click('center', {force:true});
 		cy.cGet('g.leaflet-control-buttons-disabled svg').dblclick({force:true});
 		cy.cSetActiveFrame(frameId2);
 		helper.typeIntoDocument('{ctrl}{a}');
@@ -32,9 +32,8 @@ describe.skip('Repair Document', function() {
 		cy.cGet('#DocumentRepairDialog').should('exist');
 		cy.cGet('#versions').should('exist');
 
-		cy.cGet('body').contains('#versions .ui-treeview-body .ui-listview-entry td','Typing: “World”').click();
-		cy.cGet('#ok.ui-pushbutton.jsdialog').should('exist');
-		cy.cGet('#ok.ui-pushbutton.jsdialog').click();
+		cy.cGet('body').contains('#versions .ui-treeview-entry div','Typing: “World”').click();
+		cy.cGet('#ok.ui-pushbutton-wrapper.jsdialog').should('exist').click();
 		helper.typeIntoDocument('{ctrl}{a}');
 		helper.expectTextForClipboard('Hello');
 
@@ -43,7 +42,7 @@ describe.skip('Repair Document', function() {
 		helper.typeIntoDocument('{esc}');
 
 		cy.cSetActiveFrame(frameId1);
-		cy.cGet('.leaflet-layer').click('center', {force:true});
+		cy.cGet('#document-container').click('center', {force:true});
 		cy.cGet('g.leaflet-control-buttons-disabled svg').dblclick({force:true});
 
 		cy.wait(1000);

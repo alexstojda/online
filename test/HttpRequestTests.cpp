@@ -11,8 +11,22 @@
 
 #include <config.h>
 
-#include "ConfigUtil.hpp"
 #include <HttpTestServer.hpp>
+
+#if ENABLE_SSL
+#include <net/SslSocket.hpp>
+#endif // ENABLE_SSL
+#include <common/FileUtil.hpp>
+#include <common/Util.hpp>
+#include <net/AsyncDNS.hpp>
+#include <net/DelaySocket.hpp>
+#include <net/HttpRequest.hpp>
+#include <net/ServerSocket.hpp>
+#include <net/Socket.hpp>
+#include <test/helpers.hpp>
+#include <test/lokassert.hpp>
+
+#include <cppunit/extensions/HelperMacros.h>
 
 #include <Poco/URI.h>
 #include <Poco/Net/AcceptCertificateHandler.h>
@@ -24,22 +38,12 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <test/lokassert.hpp>
+#include <thread>
 
-#if ENABLE_SSL
-#include "Ssl.hpp"
-#include <net/SslSocket.hpp>
-#endif
-#include <net/ServerSocket.hpp>
-#include <net/DelaySocket.hpp>
-#include <net/HttpRequest.hpp>
-#include <FileUtil.hpp>
-#include <Util.hpp>
-#include <helpers.hpp>
-
-#include <cppunit/extensions/HelperMacros.h>
+using namespace std::literals;
 
 /// When enabled, in addition to the loopback
 /// server, an external server will be used
@@ -64,8 +68,10 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST(testSimplePost_External);
 #endif
     CPPUNIT_TEST(testTimeout);
+    CPPUNIT_TEST(testInvalidPoll);
     CPPUNIT_TEST(testOnFinished_Complete);
     CPPUNIT_TEST(testOnFinished_Timeout);
+    CPPUNIT_TEST(testPost);
 
     CPPUNIT_TEST_SUITE_END();
 
@@ -80,23 +86,25 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     void testChunkedGetSync_External();
     void testSimplePost_External();
     void testTimeout();
+    void testInvalidPoll();
     void testOnFinished_Complete();
     void testOnFinished_Timeout();
+    void testPost();
 
     static constexpr std::chrono::seconds DefTimeoutSeconds{ 5 };
 
     std::string _localUri;
-    SocketPoll _pollServerThread;
-    std::shared_ptr<ServerSocket> _socket;
+    std::shared_ptr<SocketPoll> _pollServerThread;
     int _port;
 
     static const int SimulatedLatencyMs = 0;
 
 public:
     HttpRequestTests()
-        : _pollServerThread("HttpServerPoll")
+        : _pollServerThread(std::make_shared<SocketPoll>("HttpServerPoll"))
         , _port(0)
     {
+        net::AsyncDNS::startAsyncDNS();
 #if ENABLE_SSL
         Poco::Net::initializeSSL();
         // Just accept the certificate anyway for testing purposes
@@ -114,6 +122,7 @@ public:
 #if ENABLE_SSL
         Poco::Net::uninitializeSSL();
 #endif
+        net::AsyncDNS::stopAsyncDNS();
     }
 
     class ServerSocketFactory final : public SocketFactory
@@ -129,12 +138,12 @@ public:
 #if ENABLE_SSL
             if (helpers::haveSsl())
                 return StreamSocket::create<SslStreamSocket>(
-                    std::string(), fd, type, false, std::make_shared<ServerRequestHandler>());
+                    std::string(), fd, type, false, HostType::Other, std::make_shared<ServerRequestHandler>());
             else
-                return StreamSocket::create<StreamSocket>(std::string(), fd, type, false,
+                return StreamSocket::create<StreamSocket>(std::string(), fd, type, false, HostType::Other,
                                                           std::make_shared<ServerRequestHandler>());
 #else
-            return StreamSocket::create<StreamSocket>(std::string(), fd, type, false,
+            return StreamSocket::create<StreamSocket>(std::string(), fd, type, false, HostType::Other,
                                                       std::make_shared<ServerRequestHandler>());
 #endif
         }
@@ -143,15 +152,17 @@ public:
     void setUp()
     {
         LOG_INF("HttpRequestTests::setUp");
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
         std::shared_ptr<SocketFactory> factory = std::make_shared<ServerSocketFactory>();
         _port = 9990;
+        std::shared_ptr<ServerSocket> socket;
         for (int i = 0; i < 40; ++i, ++_port)
         {
             // Try listening on this port.
             LOG_INF("HttpRequestTests::setUp: creating socket to listen on port " << _port);
-            _socket = ServerSocket::create(ServerSocket::Type::Local, _port, Socket::Type::IPv4,
-                                           _pollServerThread, factory);
-            if (_socket)
+            socket = ServerSocket::create(ServerSocket::Type::Local, _port, Socket::Type::IPv4,
+                                           now, *_pollServerThread, factory);
+            if (socket)
                 break;
         }
 
@@ -160,15 +171,14 @@ public:
         else
             _localUri = "http://127.0.0.1:" + std::to_string(_port);
 
-        _pollServerThread.startThread();
-        _pollServerThread.insertNewSocket(_socket);
+        _pollServerThread->startThread();
+        _pollServerThread->insertNewSocket(socket);
     }
 
     void tearDown()
     {
         LOG_INF("HttpRequestTests::tearDown");
-        _pollServerThread.stop();
-        _socket.reset();
+        _pollServerThread->stop();
     }
 };
 
@@ -177,13 +187,14 @@ constexpr std::chrono::seconds HttpRequestTests::DefTimeoutSeconds;
 void HttpRequestTests::testSslHostname()
 {
 #if ENABLE_SSL
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     if (helpers::haveSsl())
     {
         const std::string host = "localhost";
         std::shared_ptr<SslStreamSocket> socket = StreamSocket::create<SslStreamSocket>(
-            host, _port, Socket::Type::All, false, std::make_shared<ServerRequestHandler>());
+            host, _port, Socket::Type::All, false, HostType::LocalHost,
+            std::make_shared<ServerRequestHandler>());
         LOK_ASSERT_EQUAL(host, socket->getSslServername());
     }
 #endif
@@ -191,7 +202,7 @@ void HttpRequestTests::testSslHostname()
 
 void HttpRequestTests::testInvalidURI()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     try
     {
@@ -207,16 +218,14 @@ void HttpRequestTests::testInvalidURI()
 
 void HttpRequestTests::testBadResponse()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
-    const std::string URL = "/inject/" + Util::bytesToHexString("\0\0xa", 2);
-
-    http::Request httpRequest(URL);
+    http::Request httpRequest(std::string("/inject/" + HexUtil::bytesToHexString("\0\0xa", 2)));
 
     auto httpSession = http::Session::create(_localUri);
     if (httpSession)
     {
-        httpSession->setTimeout(std::chrono::seconds(1));
+        httpSession->setTimeout(1s);
         const std::shared_ptr<const http::Response> httpResponse =
             httpSession->syncRequest(httpRequest);
 
@@ -227,17 +236,17 @@ void HttpRequestTests::testBadResponse()
 
 void HttpRequestTests::testGoodResponse()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     // Inject the following response:
     // HTTP/1.1 200 OK
     // Date: Wed, 02 Jun 2021 02:30:52 GMT
-    // Content-Type: text/html; charset=utf-8
+    // Content-Type: text/html;charset=utf-8
     // Content-Length: 0
-    const std::string URL =
+    constexpr auto URL =
         "/inject/"
         "485454502F312E3120323030204F4B0D0A446174653A205765642C203032204A756E20323032312030323A3330"
-        "3A353220474D540D0A436F6E74656E742D547970653A20746578742F68746D6C3B20636861727365743D757466"
+        "3A353220474D540D0A436F6E74656E742D547970653A20746578742F68746D6C3B636861727365743D757466"
         "2D380D0A436F6E74656E742D4C656E6774683A20300D0A0D0A";
 
     http::Request httpRequest(URL);
@@ -245,7 +254,7 @@ void HttpRequestTests::testGoodResponse()
     auto httpSession = http::Session::create(_localUri);
     if (httpSession)
     {
-        httpSession->setTimeout(std::chrono::seconds(1));
+        httpSession->setTimeout(1s);
         const std::shared_ptr<const http::Response> httpResponse =
             httpSession->syncRequest(httpRequest);
 
@@ -256,12 +265,10 @@ void HttpRequestTests::testGoodResponse()
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
         LOK_ASSERT(httpResponse->statusLine().statusCategory() ==
                    http::StatusLine::StatusCodeClass::Successful);
-        LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse->statusLine().httpVersion());
-        LOK_ASSERT_EQUAL(std::string("OK"), httpResponse->statusLine().reasonPhrase());
-        LOK_ASSERT_EQUAL(std::string("text/html; charset=utf-8"),
-                         httpResponse->header().getContentType());
-        LOK_ASSERT_EQUAL(std::string("Wed, 02 Jun 2021 02:30:52 GMT"),
-                         httpResponse->header().get("Date"));
+        LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+        LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
+        LOK_ASSERT_EQUAL_STR("text/html;charset=utf-8", httpResponse->header().getContentType());
+        LOK_ASSERT_EQUAL_STR("Wed, 02 Jun 2021 02:30:52 GMT", httpResponse->header().get("Date"));
 
         LOK_ASSERT_EQUAL(std::string(), httpResponse->getBody());
     }
@@ -269,13 +276,13 @@ void HttpRequestTests::testGoodResponse()
 
 void HttpRequestTests::testSimpleGet()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     constexpr auto URL = "/";
 
     // Start the polling thread.
-    SocketPoll pollThread("AsyncReqPoll");
-    pollThread.startThread();
+    std::shared_ptr<SocketPoll> pollThread = std::make_shared<SocketPoll>("AsyncReqPoll");
+    pollThread->startThread();
 
     http::Request httpRequest(URL);
 
@@ -307,12 +314,15 @@ void HttpRequestTests::testSimpleGet()
 
         std::unique_lock<std::mutex> lock(mutex);
 
-        LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread));
+        httpSession->setConnectFailHandler([testname](const std::shared_ptr<http::Session>&)
+                                           { LOK_ASSERT_FAIL("Unexpected connection failure"); });
+
+        LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread, false));
 
         // Use Poco to get the same URL in parallel.
         const auto pocoResponse = helpers::pocoGetRetry(Poco::URI(_localUri + URL));
 
-        cv.wait_for(lock, DefTimeoutSeconds);
+        cv.wait_for(lock, DefTimeoutSeconds, [&]() { return timedout == false; });
 
         const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
@@ -327,24 +337,23 @@ void HttpRequestTests::testSimpleGet()
         LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse->getBody());
     }
 
-    pollThread.joinThread();
+    pollThread->joinThread();
 }
 
 void HttpRequestTests::testSimpleGetSync()
 {
-    constexpr auto testname = "simpleGetSync";
+    constexpr std::string_view testname = "simpleGetSync";
 
-    const auto data = Util::rng::getHexString(Util::rng::getNext() % 1024);
-    const auto body = std::string(data.data(), data.size());
-    const std::string URL = "/echo/" + body;
+    const std::string body = Util::rng::getHexString(Util::rng::getNext() % 1024);
+    std::string URL = "/echo/" + body;
     TST_LOG("Requesting URI: [" << URL << ']');
 
     const auto pocoResponse = helpers::pocoGet(Poco::URI(_localUri + URL));
 
-    http::Request httpRequest(URL);
+    http::Request httpRequest(std::move(URL));
 
     auto httpSession = http::Session::create(_localUri);
-    httpSession->setTimeout(std::chrono::seconds(1));
+    httpSession->setTimeout(1s);
 
     for (int i = 0; i < 5; ++i)
     {
@@ -359,8 +368,8 @@ void HttpRequestTests::testSimpleGetSync()
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
         LOK_ASSERT(httpResponse->statusLine().statusCategory()
                    == http::StatusLine::StatusCodeClass::Successful);
-        LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse->statusLine().httpVersion());
-        LOK_ASSERT_EQUAL(std::string("OK"), httpResponse->statusLine().reasonPhrase());
+        LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+        LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
 
         LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse->getBody());
         LOK_ASSERT_EQUAL(body, httpResponse->getBody());
@@ -369,16 +378,15 @@ void HttpRequestTests::testSimpleGetSync()
 
 void HttpRequestTests::testChunkedGetSync()
 {
-    constexpr auto testname = "chunkedGetSync";
+    constexpr std::string_view testname = "chunkedGetSync";
 
-    const auto data = Util::rng::getHexString(Util::rng::getNext() % 1024);
-    const auto body = std::string(data.data(), data.size());
-    const std::string URL = "/echo/chunked/" + body;
+    const std::string body = Util::rng::getHexString(Util::rng::getNext() % 1024);
+    std::string URL = "/echo/chunked/" + body;
     TST_LOG("Requesting URI: [" << URL << ']');
 
     const auto pocoResponse = helpers::pocoGet(Poco::URI(_localUri + URL));
 
-    http::Request httpRequest(URL);
+    http::Request httpRequest(std::move(URL));
 
     auto httpSession = http::Session::create(_localUri);
     httpSession->setTimeout(DefTimeoutSeconds);
@@ -396,8 +404,8 @@ void HttpRequestTests::testChunkedGetSync()
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
         LOK_ASSERT(httpResponse->statusLine().statusCategory()
                    == http::StatusLine::StatusCodeClass::Successful);
-        LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse->statusLine().httpVersion());
-        LOK_ASSERT_EQUAL(std::string("OK"), httpResponse->statusLine().reasonPhrase());
+        LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+        LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
 
         LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse->getBody());
         LOK_ASSERT_EQUAL(body, httpResponse->getBody());
@@ -406,15 +414,15 @@ void HttpRequestTests::testChunkedGetSync()
 
 void HttpRequestTests::testChunkedGetSync_External()
 {
-    constexpr auto testname = "chunkedGetSync_External";
+    constexpr std::string_view testname = "chunkedGetSync_External";
 
     const std::string hostname = "http://anglesharp.azurewebsites.net";
-    const std::string URL = "/Chunked";
+    std::string URL = "/Chunked";
     TST_LOG("Requesting URI: [" << hostname << URL << ']');
 
     const auto pocoResponse = helpers::pocoGet(Poco::URI(hostname + URL));
 
-    http::Request httpRequest(URL);
+    http::Request httpRequest(std::move(URL));
 
     auto httpSession = http::Session::create(hostname);
     httpSession->setTimeout(DefTimeoutSeconds);
@@ -432,8 +440,8 @@ void HttpRequestTests::testChunkedGetSync_External()
         LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
         LOK_ASSERT(httpResponse->statusLine().statusCategory()
                    == http::StatusLine::StatusCodeClass::Successful);
-        LOK_ASSERT_EQUAL(std::string("HTTP/1.1"), httpResponse->statusLine().httpVersion());
-        LOK_ASSERT_EQUAL(std::string("OK"), httpResponse->statusLine().reasonPhrase());
+        LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+        LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
 
         LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse->getBody());
     }
@@ -448,7 +456,7 @@ void HttpRequestTests::testChunkedGetSync_External()
 /// there is some content at all or not.
 static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::string& pocoBody,
                     const http::Response& httpResponse, bool checkReasonPhrase, bool checkBody,
-                    const std::string& testname)
+                    const std::string_view testname)
 {
     LOK_ASSERT_EQUAL_MESSAGE("Response state", httpResponse.state(),
                              http::Response::State::Complete);
@@ -482,7 +490,7 @@ static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::stri
 /// It exercises a few hundred requests/responses.
 void HttpRequestTests::test500GetStatuses()
 {
-    constexpr auto testname = "test500GetStatuses ";
+    constexpr std::string_view testname = "test500GetStatuses ";
 
     // These should live longer than the pollThread,
     // in case the socket isn't removed by the time we
@@ -499,8 +507,8 @@ void HttpRequestTests::test500GetStatuses()
     };
 
     // Start the polling thread.
-    SocketPoll pollThread("AsyncReqPoll");
-    pollThread.startThread();
+    std::shared_ptr<SocketPoll> pollThread = std::make_shared<SocketPoll>("AsyncReqPoll");
+    pollThread->startThread();
 
     constexpr http::StatusLine::StatusCodeClass statusCodeClasses[] = {
         http::StatusLine::StatusCodeClass::Informational,
@@ -511,6 +519,7 @@ void HttpRequestTests::test500GetStatuses()
     };
 
     int curStatusCodeClass = -1;
+    int retry = 0;
     for (unsigned statusCode = 100; statusCode < 512; ++statusCode)
     {
         auto httpSession = http::Session::create(_localUri);
@@ -527,7 +536,10 @@ void HttpRequestTests::test500GetStatuses()
         std::unique_lock<std::mutex> lock(mutex);
         timedout = true; // Assume we timed out until we prove otherwise.
 
-        LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread));
+        httpSession->setConnectFailHandler([testname](const std::shared_ptr<http::Session>&)
+                                           { LOK_ASSERT_FAIL("Unexpected connection failure"); });
+
+        LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread, false));
 
         // Get via Poco in parallel.
         std::pair<std::shared_ptr<Poco::Net::HTTPResponse>, std::string> pocoResponse;
@@ -536,15 +548,45 @@ void HttpRequestTests::test500GetStatuses()
 #ifdef ENABLE_EXTERNAL_REGRESSION_CHECK
         std::pair<std::shared_ptr<Poco::Net::HTTPResponse>, std::string> pocoResponseExt;
         if (statusCode > 100)
-            pocoResponseExt = helpers::pocoGet(false, "httpbin.org", 80, url);
+        {
+#if ENABLE_SSL
+            pocoResponseExt = helpers::pocoGetRetry(Poco::URI("https://httpbin.org:443" + url));
+#else
+            pocoResponseExt = helpers::pocoGetRetry(Poco::URI("http://httpbin.org:80" + url));
+#endif // ENABLE_SSL
+        }
 #endif
 
         const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
         cv.wait_for(lock, DefTimeoutSeconds, [&]() { return httpResponse->done(); });
-        TST_LOG("Finished async GET: " << url);
+        TST_LOG("Finished async GET of [" << url << "]: " << httpResponse->state());
 
         httpSession->asyncShutdown(); // Request to shutdown.
+
+        if (httpResponse->state() != http::Response::State::Complete)
+        {
+            ++retry;
+            --statusCode;
+
+            if (httpResponse->statusLine().statusCode() == http::StatusCode::ServiceUnavailable ||
+                httpResponse->statusLine().statusCode() == http::StatusCode::BadGateway ||
+                retry < 5)
+            {
+                // Give up, eventually.
+                if (retry < 10)
+                {
+                    LOG_WRN("Retrying (#" << retry << ") of " << url << " due to status "
+                                          << httpResponse->statusLine().statusCode() << "...");
+                    // coverity[sleep : SUPPRESS] - don't report sleep with lock held
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(200 * retry)); // Cool off.
+                    continue;
+                }
+            }
+        }
+
+        retry = 0; // Reset, since we either succeed or fail, but never retry this one.
 
         LOK_ASSERT_EQUAL(http::Response::State::Complete, httpResponse->state());
         LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
@@ -552,6 +594,7 @@ void HttpRequestTests::test500GetStatuses()
 
         if (statusCode % 100 == 0)
             ++curStatusCodeClass;
+        assert(curStatusCodeClass >= 0 && "statusCode starts as 100");
         LOK_ASSERT(httpResponse->statusLine().statusCategory()
                    == statusCodeClasses[curStatusCodeClass]);
 
@@ -577,19 +620,18 @@ void HttpRequestTests::test500GetStatuses()
         }
     }
 
-    pollThread.joinThread();
+    pollThread->joinThread();
 }
 
 void HttpRequestTests::testSimplePost_External()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
-    const std::string Host = "httpbin.org";
     const char* URL = "/post";
 
     // Start the polling thread.
-    SocketPoll pollThread("AsyncReqPoll");
-    pollThread.startThread();
+    std::shared_ptr<SocketPoll> pollThread = std::make_shared<SocketPoll>("AsyncReqPoll");
+    pollThread->startThread();
 
     http::Request httpRequest(URL, http::Request::VERB_POST);
 
@@ -602,7 +644,12 @@ void HttpRequestTests::testSimplePost_External()
 
     httpRequest.setBodyFile(path);
 
-    auto httpSession = http::Session::createHttpSsl(Host);
+#if ENABLE_SSL
+    auto httpSession = http::Session::createHttpSsl("httpbin.org");
+#else
+    auto httpSession = http::Session::createHttp("httpbin.org");
+#endif // ENABLE_SSL
+
     httpSession->setTimeout(DefTimeoutSeconds);
 
     std::condition_variable cv;
@@ -616,9 +663,12 @@ void HttpRequestTests::testSimplePost_External()
 
     std::unique_lock<std::mutex> lock(mutex);
 
-    LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread));
+    httpSession->setConnectFailHandler([testname](const std::shared_ptr<http::Session>&)
+                                       { LOK_ASSERT_FAIL("Unexpected connection failure"); });
 
-    cv.wait_for(lock, DefTimeoutSeconds);
+    LOK_ASSERT(httpSession->asyncRequest(httpRequest, pollThread, false));
+
+    cv.wait_for(lock, DefTimeoutSeconds, [&]() { return timedout == false; });
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
     LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
@@ -628,17 +678,17 @@ void HttpRequestTests::testSimplePost_External()
     LOK_ASSERT(httpResponse->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
 
-    const std::string body = httpResponse->getBody();
+    const std::string& body = httpResponse->getBody();
     LOK_ASSERT(!body.empty());
     std::cerr << "[" << body << "]\n";
     LOK_ASSERT(body.find(data) != std::string::npos);
 
-    pollThread.joinThread();
+    pollThread->joinThread();
 }
 
 void HttpRequestTests::testTimeout()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     const char* URL = "/timeout";
 
@@ -646,7 +696,7 @@ void HttpRequestTests::testTimeout()
 
     auto httpSession = http::Session::create(_localUri);
 
-    httpSession->setTimeout(std::chrono::milliseconds(1)); // Very short interval.
+    httpSession->setTimeout(1ms); // Very short interval.
 
     const std::shared_ptr<const http::Response> httpResponse
         = httpSession->syncRequest(httpRequest);
@@ -654,9 +704,37 @@ void HttpRequestTests::testTimeout()
     LOK_ASSERT(httpResponse->state() == http::Response::State::Timeout);
 }
 
+void HttpRequestTests::testInvalidPoll()
+{
+    constexpr std::string_view testname = __func__;
+
+    const char* URL = "/timeout";
+
+    http::Request httpRequest(URL);
+
+    auto httpSession = http::Session::create(_localUri);
+
+    bool calledFinished = false;
+    http::Session::FinishedCallback finishedCallback = [&](const std::shared_ptr<http::Session>&)
+    { calledFinished = true; };
+    httpSession->setFinishedHandler(std::move(finishedCallback));
+
+    bool calledFailed = false;
+    httpSession->setConnectFailHandler([&calledFailed](const std::shared_ptr<http::Session>&)
+                                       { calledFailed = true; });
+
+    std::weak_ptr<SocketPoll> poll;
+    LOK_ASSERT(httpSession->asyncRequest(httpRequest, poll, false) == false);
+
+    LOK_ASSERT(httpSession->response() == nullptr);
+
+    LOK_ASSERT(calledFailed == true);
+    LOK_ASSERT(calledFinished == false); //FIXME: We should call onFinished.
+}
+
 void HttpRequestTests::testOnFinished_Complete()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     const char* URL = "/";
 
@@ -681,7 +759,7 @@ void HttpRequestTests::testOnFinished_Complete()
 
 void HttpRequestTests::testOnFinished_Timeout()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     const char* URL = "/timeout";
 
@@ -689,7 +767,7 @@ void HttpRequestTests::testOnFinished_Timeout()
 
     auto httpSession = http::Session::create(_localUri);
 
-    httpSession->setTimeout(std::chrono::milliseconds(1)); // Very short interval.
+    httpSession->setTimeout(1ms); // Very short interval.
 
     bool completed = false;
     httpSession->setFinishedHandler([&](const std::shared_ptr<http::Session>& session) {
@@ -705,6 +783,46 @@ void HttpRequestTests::testOnFinished_Timeout()
     LOK_ASSERT(httpResponse->done());
     LOK_ASSERT(httpResponse->state() == http::Response::State::Timeout);
 }
+
+void HttpRequestTests::testPost()
+{
+    constexpr std::string_view testname = __func__;
+
+    constexpr auto URL = "/post";
+
+    http::Request httpRequest(URL, http::Request::VERB_POST);
+
+    // Write the test data to file.
+    const std::string data = Util::rng::getHexString(10 * 1024 * 1024);
+    const std::string path = FileUtil::getSysTempDirectoryPath() + "/test_http_post";
+    std::ofstream ofs(path, std::ios::binary);
+    ofs.write(data.data(), data.size());
+    ofs.close();
+
+    httpRequest.setBodyFile(path);
+
+    auto httpSession = http::Session::create(_localUri);
+    if (httpSession)
+    {
+        httpSession->setTimeout(5s);
+        const std::shared_ptr<const http::Response> httpResponse =
+            httpSession->syncRequest(httpRequest);
+
+        LOK_ASSERT(httpResponse->done());
+        LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+        LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+        LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
+        LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
+        LOK_ASSERT(httpResponse->statusLine().statusCategory() ==
+                   http::StatusLine::StatusCodeClass::Successful);
+        LOK_ASSERT_EQUAL_STR("HTTP/1.1", httpResponse->statusLine().httpVersion());
+        LOK_ASSERT_EQUAL_STR("OK", httpResponse->statusLine().reasonPhrase());
+        LOK_ASSERT_EQUAL_STR("text/html;charset=utf-8", httpResponse->header().getContentType());
+
+        LOK_ASSERT_EQUAL_STR(data, httpResponse->getBody());
+    }
+}
+
 
 CPPUNIT_TEST_SUITE_REGISTRATION(HttpRequestTests);
 

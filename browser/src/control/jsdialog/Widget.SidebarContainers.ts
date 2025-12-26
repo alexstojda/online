@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -18,17 +19,18 @@ declare var JSDialog: any;
 JSDialog.deck = function (
 	parentContainer: Element,
 	data: WidgetJSON,
-	builder: any,
+	builder: JSBuilder,
 ) {
-	var deck = L.DomUtil.create(
+	var deck = window.L.DomUtil.create(
 		'div',
 		'deck ' + builder.options.cssClass,
 		parentContainer,
 	);
 	deck.id = data.id;
+	deck.tabIndex = '-1';
 
 	for (var i = 0; i < data.children.length; i++) {
-		builder.build(deck, [data.children[i]]);
+		builder.build(deck, [data.children[i]], undefined);
 	}
 
 	return false;
@@ -37,46 +39,47 @@ JSDialog.deck = function (
 JSDialog.panel = function (
 	parentContainer: Element,
 	data: PanelWidgetJSON,
-	builder: any,
+	builder: JSBuilder,
 ) {
-	// we want to show the contents always, hidden property decides if we collapse the panel
-	if (data.children && data.children.length) data.children[0].visible = true;
-
 	var expanderData: ExpanderWidgetJSON = data;
 	expanderData.type = 'expander';
 	expanderData.children = ([{ text: data.text }] as Array<any>).concat(
 		data.children,
 	);
-	expanderData.id = data.id + 'PanelExpander';
-	builder._expanderHandler(parentContainer, expanderData, builder, () => {
-		expanderData; /*do nothing*/
-	});
+
+	builder._controlHandlers['expander'](
+		parentContainer,
+		expanderData,
+		builder,
+		() => {
+			/*do nothing*/
+		},
+	);
 
 	var expander = $(parentContainer).children('#' + expanderData.id);
+
+	if (data.name) window.L.DomUtil.addClass(expander.get(0), data.name);
 	if (expanderData.hidden === true) expander.hide();
 
 	if (expanderData.command) {
 		var iconParent = expander.children('.ui-expander').get(0);
-		var icon = L.DomUtil.create(
+		var icon = window.L.DomUtil.create(
 			'div',
 			'ui-expander-icon-right ' + builder.options.cssClass,
 			iconParent,
 		);
+		const moreOptionsText = expanderData.children[0].text
+			? _('More options for {1}').replace('{1}', expanderData.children[0].text)
+			: '';
 		builder._controlHandlers['toolitem'](
 			icon,
 			{
 				type: 'toolitem',
 				command: expanderData.command,
-				aria: {
-					label: expanderData.children[0].text
-						? _('More options for {name}').replace(
-								'{name}',
-								expanderData.children[0].text,
-							)
-						: '',
-				},
-				icon: builder._createIconURL('morebutton'),
-			},
+				aria: { label: moreOptionsText },
+				icon: app.LOUtil.getIconNameOfCommand('morebutton'),
+				tooltip: moreOptionsText,
+			} as any as WidgetJSON, // FIXME: use toolitem JSON type
 			builder,
 		);
 	}

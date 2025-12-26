@@ -3,20 +3,23 @@
 	overflow-x: hidden;
 	overflow-y: visible;
 	background: var(--color-background-lighter);
-	max-height: 100%;
-	scrollbar-color: var(--color-background-darker) var(--color-background-lighter);
-	scrollbar-width: thin;
+	max-height: 95%;
+	scrollbar-color: var(--scrollbar-color);
+	scrollbar-width: var(--scrollbar-width);
 }
 
 #sidebar-panel {
 	height: 100%
 }
 
+#first-drop-site {
+	padding: 0px;
+}
+
 .preview-frame {
-	max-width: 190px;
 	white-space: nowrap;
 	text-align: center;
-	margin: 1em 0;
+	padding: 1em 0;
 }
 
 .preview-helper {
@@ -40,13 +43,14 @@
 
 /* The current part the user is on. */
 .preview-img-currentpart {
-	border-color: var(--color-background-lighter) !important;
-	outline-color: var(--color-primary-dark);
+	border-color: transparent !important;
+	outline-color: rgba(var(--doc-type), 1);
 }
 
 /* One of (potentially many) selected parts, but not the current. */
 .preview-img-selectedpart {
-	border-color: var(--color-primary) !important;
+	border-color: transparent !important;
+	outline-color: rgba(var(--doc-type), 0.65);
 }
 
 /* Highlight where a slide can be dropped when reordering by drag-and-drop. */

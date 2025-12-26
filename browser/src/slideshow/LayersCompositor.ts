@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -12,35 +15,26 @@
  * LayersCompositor generates slide from layers
  */
 
-declare var app: any;
 declare var SlideShow: any;
 
-class LayersCompositor extends SlideShow.SlideCompositor {
-	private firstSlideHash: string = null;
-	private lastSlideHash: string = null;
-	private slidesInfo: Map<string, SlideInfo> = new Map();
-	private partHashes: Map<number, string> = new Map();
-	private backgroundChecksums: Map<string, string> = new Map();
-	private cachedBackgrounds: Map<string, HTMLImageElement> = new Map();
+class LayersCompositor extends SlideCompositor {
 	private layerDrawing: LayerDrawing; // setup in constructor
+	private metaPresentation: MetaPresentation;
 
 	constructor(
 		slideShowPresenter: SlideShowPresenter,
-		presentationInfo: PresentationInfo,
-		width: number,
-		height: number,
+		metaPres: MetaPresentation,
 	) {
-		super(slideShowPresenter, presentationInfo, width, height);
+		super(slideShowPresenter);
+		this.metaPresentation = metaPres;
 	}
 
 	protected _addHooks() {
-		app.map.on('slidebackground', this.onSlideBackground, this);
 		this.layerDrawing = new SlideShow.LayerDrawing(app.map, this);
 		this.layerDrawing.addHooks();
 	}
 
 	public removeHooks() {
-		app.map.off('slidebackground', this.onSlideBackground, this);
 		this.layerDrawing.removeHooks();
 	}
 
@@ -49,149 +43,78 @@ class LayersCompositor extends SlideShow.SlideCompositor {
 		this.layerDrawing.requestSlide(this._initialSlideNumber, () => {
 			const oldCallback = this._onGotSlideCallback;
 			this._onGotSlideCallback = null;
-			oldCallback.call(this._slideShowPresenter);
+			oldCallback();
 		});
 	}
 
-	private onSlideBackground(e: any) {
-		if (!e.data) {
-			window.app.console.log(
-				'LayersCompositor.onSlideLayer: no json data available.',
-			);
-			return;
-		}
-		this.handleBackgroundLayer(e.data, e.image);
+	public getSlideInfo(slideHash: string): SlideInfo {
+		return this.metaPresentation.getSlideInfo(slideHash);
 	}
 
-	public getSlideInfo(slideHash: string) {
-		return this.slidesInfo.get(slideHash);
+	public getDocWidth(): number {
+		return this.metaPresentation.getDocWidth();
 	}
 
-	public updatePresentationInfo(presentationInfo: PresentationInfo) {
-		this._presentationInfo = presentationInfo;
-		this.onSlidesInfo(presentationInfo);
+	public getDocHeight(): number {
+		return this.metaPresentation.getDocHeight();
 	}
 
-	private onSlidesInfo(data: any) {
-		const slides = data.slides as Array<SlideInfo>;
-		const numberOfSlides = slides.length;
-		if (numberOfSlides === 0) return;
-		this.firstSlideHash = slides[0].hash;
-		this.lastSlideHash = slides[numberOfSlides - 1].hash;
-
-		let prevSlideHash = this.lastSlideHash;
-		for (let i = 0; i < numberOfSlides; ++i) {
-			const slide = slides[i];
-			slide.prev = prevSlideHash;
-			slide.next =
-				i + 1 < numberOfSlides ? slides[i + 1].hash : this.firstSlideHash;
-			this.slidesInfo.set(slide.hash, slide);
-			this.partHashes.set(slide.index, slide.hash);
-			prevSlideHash = slide.hash;
-		}
-
-		this.docWidth = data.docWidth;
-		this.docHeight = data.docHeight;
+	public setDocWidth(slideWidth: number): void {
+		this.metaPresentation.setDocWidth(slideWidth);
 	}
 
-	private handleBackgroundLayer(data: any, img: any) {
-		console.error(data);
-		if (data.type === 'bitmap') {
-			if (!img || !img.src) {
-				window.app.console.log(
-					'LayersCompositor.handleBackgroundLayer: no bitmap available.',
-				);
-				return;
-			}
-			data.image = img as HTMLImageElement;
-
-			const slideInfo = this.slidesInfo.get(data.pageHash);
-			if (slideInfo && slideInfo.background && !slideInfo.background.isCustom)
-				data.pageHash = slideInfo.masterPage;
-
-			this.backgroundChecksums.set(data.pageHash, data.checksum);
-			if (!this.cachedBackgrounds.has(data.checksum)) {
-				this.cachedBackgrounds.set(data.checksum, data.image);
-			}
-
-			// if the background belongs to current slide signal it to SlideBackgroundSection
-			const currentSlideHash = this.getCurrentSlideHash();
-			const currentSlideInfo = this.slidesInfo.get(currentSlideHash);
-			if (currentSlideInfo && currentSlideInfo.background) {
-				const pageHash =
-					!this.isMasterPageMode() && currentSlideInfo.background.isCustom
-						? currentSlideHash
-						: currentSlideInfo.masterPage;
-				if (pageHash === data.pageHash) {
-					const image = this.cachedBackgrounds.get(data.checksum);
-					app.map.fire('slidebackgroundready', { image: image });
-				}
-			}
-		}
+	public setDocHeight(slideHeight: number): void {
+		this.metaPresentation.setDocHeight(slideHeight);
 	}
 
-	public getBackgroundForPage(slideHash: string, masterPageMode: boolean) {
-		const slideInfo = this.slidesInfo.get(slideHash);
-		if (slideInfo && slideInfo.background) {
-			const pageHash =
-				!masterPageMode && slideInfo.background.isCustom
-					? slideHash
-					: slideInfo.masterPage;
-			const checksum = this.backgroundChecksums.get(pageHash);
-			if (checksum) {
-				window.app.console.log(
-					'PresentationHelper.getBackgroundForPage: already cached',
-				);
-				const image = this.cachedBackgrounds.get(checksum);
-				app.map.fire('slidebackgroundready', { image: image });
-			} else {
-				this.requestBackgroundForPage(slideInfo.index, masterPageMode);
-			}
-		}
-	}
-
-	private requestBackgroundForPage(
-		slideIndex: number,
-		masterPageMode: boolean,
-	) {
-		const mode = masterPageMode ? 1 : 0;
-		const layerSize = this.getLayerSize();
-		app.socket.sendMessage(
-			`getslidebackground part=${slideIndex} mode=${mode} width=${layerSize[0]} height=${layerSize[1]}`,
-		);
-	}
-
-	public getCurrentSlideIndex(): number {
-		return this.docLayer._selectedPart;
-	}
-
-	public getCurrentSlideHash() {
-		return this.getSlideHash(this.getCurrentSlideIndex());
+	public onUpdatePresentationInfo() {
+		this.layerDrawing.onUpdatePresentationInfo();
+		// TODO: optimize
+		this.layerDrawing.invalidateAll();
 	}
 
 	public getSlideHash(slideIndex: number) {
-		return this.partHashes.get(slideIndex);
+		return this.metaPresentation.getSlideHash(slideIndex);
 	}
 
-	public isMasterPageMode() {
-		return this.docLayer._selectedMode === 1;
+	public getAnimatedElement(
+		slideHash: string,
+		animatedElementHash: string,
+	): AnimatedElement {
+		const metaSlide = this.metaPresentation.getMetaSlide(slideHash);
+		if (!metaSlide) {
+			window.app.console.log(
+				'LayersCompositor.getAnimatedElement: failed to retrieve meta slide for hash: ' +
+					slideHash,
+			);
+			return;
+		}
+		if (metaSlide.animationsHandler) {
+			const animElemMap = metaSlide.animationsHandler.getAnimatedElementMap();
+			return animElemMap.get(animatedElementHash);
+		}
 	}
 
 	public getSlideSizePixel() {
 		return [
-			app.twipsToPixels * this.docWidth,
-			app.twipsToPixels * this.docHeight,
+			app.twipsToPixels * this.metaPresentation.getDocWidth(),
+			app.twipsToPixels * this.metaPresentation.getDocHeight(),
 		];
 	}
 
 	public computeLayerResolution(width: number, height: number) {
 		width *= 1.2;
 		height *= 1.2;
-
 		let resolutionWidth = 960;
 		let resolutionHeight = 540;
 
-		if (width > 1920 || height > 1080) {
+		if (width > 3840 || height > 2160) {
+			resolutionWidth = 3840;
+			resolutionHeight = 2160;
+		} else if (width > 2560 || height > 1440) {
+			resolutionWidth = 2560;
+			resolutionHeight = 1440;
+		} else if (width > 1920 || height > 1080) {
 			resolutionWidth = 1920;
 			resolutionHeight = 1080;
 		} else if (width > 1280 || height > 720) {
@@ -203,8 +126,8 @@ class LayersCompositor extends SlideShow.SlideCompositor {
 
 	public computeLayerSize(width: number, height: number) {
 		// compute the slide size in pixel with respect to the current resolution
-		const slideWidth = this.docWidth;
-		const slideHeight = this.docHeight;
+		const slideWidth = this.metaPresentation.getDocWidth();
+		const slideHeight = this.metaPresentation.getDocHeight();
 		const slideRatio = slideWidth / slideHeight;
 		const resolutionRatio = width / height;
 		if (slideRatio > resolutionRatio) {
@@ -215,14 +138,66 @@ class LayersCompositor extends SlideShow.SlideCompositor {
 		return [width, height];
 	}
 
-	public getLayerSize() {
-		const slideSize = this.getSlideSizePixel();
-		const resolution = this.computeLayerResolution(slideSize[0], slideSize[1]);
-		return this.computeLayerSize(resolution[0], resolution[1]);
+	// return [width, height]
+	public getCanvasSize(): [number, number] {
+		return this.layerDrawing.getCanvasSize();
 	}
 
 	public getSlide(slideNumber: number): ImageBitmap {
 		return this.layerDrawing.getSlide(slideNumber);
+	}
+
+	public getLayerRendererContext(): RenderContext {
+		return this.layerDrawing.getLayerRendererContext();
+	}
+
+	public getVideoRenderer(
+		slideHash: string,
+		videoInfo: VideoInfo,
+	): VideoRenderer {
+		return this.layerDrawing.getVideoRenderer(slideHash, videoInfo);
+	}
+
+	public getAnimatedSlide(slideIndex: number): ImageBitmap {
+		return this.layerDrawing.getAnimatedSlide(slideIndex);
+	}
+
+	public getAnimatedLayerInfo(
+		slideHash: string,
+		targetElement: string,
+	): AnimatedShapeInfo {
+		return this.layerDrawing.getAnimatedLayerInfo(slideHash, targetElement);
+	}
+
+	public getLayerImage(slideHash: string, targetElement: string): ImageBitmap {
+		return this.layerDrawing.getLayerImage(slideHash, targetElement);
+	}
+
+	public getLayerBounds(
+		slideHash: string,
+		targetElement: string,
+	): BoundingBoxType {
+		return this.layerDrawing.getLayerBounds(slideHash, targetElement);
+	}
+
+	public isSlideShowPlaying() {
+		return this._slideShowPresenter._checkAlreadyPresenting();
+	}
+
+	public deleteResources() {
+		this.layerDrawing.deleteResources();
+	}
+
+	public pauseVideos(slideHash: string) {
+		this.layerDrawing.pauseVideos(slideHash);
+	}
+
+	public notifyTransitionStart() {
+		this.layerDrawing.notifyTransitionStart();
+	}
+
+	public notifyTransitionEnd(slideHash: string) {
+		this.layerDrawing.notifyTransitionEnd(slideHash);
 	}
 }
 

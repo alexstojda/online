@@ -13,6 +13,7 @@
 
 #if MOBILEAPP
 
+#define LIBO_INTERNAL_ONLY
 #include <LibreOfficeKit/LibreOfficeKit.hxx>
 
 #include <Storage.hpp>
@@ -36,7 +37,7 @@
 // In practice it will probably be equivalent to the DocumentBroker::DocBrokerId or the number that
 // the core SfxViewShell::GetDocId() returns, but there might be situations where multi-threading
 // and opening of several documents in sequence very quickly might cause discrepancies, so it is
-// better to usea different counter to be sure. Patches to use just one counter welcome.
+// better to use a different counter to be sure. Patches to use just one counter welcome.
 
 class DocumentData
 {
@@ -58,6 +59,7 @@ public:
 
 #ifdef IOS
     CODocument *coDocument;
+    std::weak_ptr<DocumentBroker> docBroker;
 #endif
 };
 
@@ -65,10 +67,10 @@ public:
 class WopiStorage : public StorageBase
 {
 public:
-    class WOPIFileInfo : public FileInfo
+    class WOPIFileInfo final : public FileInfo
     {
     public:
-        enum class TriState
+        enum class TriState : std::uint8_t
         {
             False,
             True,
@@ -90,3 +92,5 @@ public:
 };
 
 #endif
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

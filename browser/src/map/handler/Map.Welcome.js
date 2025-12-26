@@ -1,24 +1,33 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Map.Welcome.
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+/*
+ * window.L.Map.Welcome.
  */
 
 /* global app _ */
-L.Map.mergeOptions({
+window.L.Map.mergeOptions({
 	welcome: true
 });
 
-L.Map.Welcome = L.Handler.extend({
+window.L.Map.Welcome = window.L.Handler.extend({
 
-	_getLocalWelcomeUrl: function() {
-		var welcomeLocation = L.LOUtil.getURL('/welcome/welcome.html');
+	_getLocalWelcomeUrl: function () {
+		var welcomeLocation = app.LOUtil.getURL('/welcome/welcome.html');
 		if (window.socketProxy)
 			welcomeLocation = window.makeWsUrl(welcomeLocation);
 		return welcomeLocation;
 	},
 
 	initialize: function (map) {
-		L.Handler.prototype.initialize.call(this, map);
+		window.L.Handler.prototype.initialize.call(this, map);
 		this._map.on('updateviewslist', this.onUpdateList, this);
 
 		// temporarily use only local welcome dialog
@@ -28,14 +37,14 @@ L.Map.Welcome = L.Handler.extend({
 	},
 
 	addHooks: function () {
-		L.DomEvent.on(window, 'message', this.onMessage, this);
+		window.L.DomEvent.on(window, 'message', this.onMessage, this);
 		this.remove();
 	},
 
-	isGuest: function() {
+	isGuest: function () {
 		var docLayer = this._map._docLayer || {};
 		var viewInfo = this._map._viewInfo[docLayer._viewId];
-		return  viewInfo && viewInfo.userextrainfo && viewInfo.userextrainfo.is_guest;
+		return viewInfo && viewInfo.userextrainfo && viewInfo.userextrainfo.is_guest;
 	},
 
 	onUpdateList: function () {
@@ -44,15 +53,17 @@ L.Map.Welcome = L.Handler.extend({
 		}
 	},
 
-	shouldWelcome: function() {
-		var storedVersion = window.prefs.get('WSDWelcomeVersion');
-		var currentVersion = app.socket.WSDServer.Version;
-		var welcomeDisabledCookie = window.prefs.getBoolean('WSDWelcomeDisabled');
-		var welcomeDisabledDate = window.prefs.get('WSDWelcomeDisabledDate');
-		var isWelcomeDisabled = false;
+	shouldWelcome: function () {
+		let storedVersion = window.prefs.get('WSDWelcomeVersion');
+		let currentVersion = app.socket.WSDServer.Version;
+		let welcomeDisabledCookie = window.prefs.getBoolean('WSDWelcomeDisabled');
+		let welcomeDisabledDate = window.prefs.get('WSDWelcomeDisabledDate');
+		if (welcomeDisabledDate)
+			welcomeDisabledDate = welcomeDisabledDate.replaceAll('-', ' ');
+		let isWelcomeDisabled = false;
 
 		if (welcomeDisabledCookie && welcomeDisabledDate) {
-			// Check if we are stil in the same day
+			// Check if we are still in the same day
 			var currentDate = new Date();
 			if (welcomeDisabledDate === currentDate.toDateString())
 				isWelcomeDisabled = true;
@@ -70,19 +81,19 @@ L.Map.Welcome = L.Handler.extend({
 		return false;
 	},
 
-	showWelcomeDialog: function() {
+	showWelcomeDialog: function () {
 		if (this._iframeWelcome && this._iframeWelcome.queryContainer())
 			this.remove();
 
 		var uiTheme = window.prefs.getBoolean('darkTheme') ? 'dark' : 'light';
-		var params = [{'ui_theme' : uiTheme}];
+		var params = [{ 'ui_theme': uiTheme }];
 
-		this._iframeWelcome = L.iframeDialog(this._url, params, null, { prefix: 'iframe-welcome' });
+		this._iframeWelcome = window.L.iframeDialog(this._url, params, null, { prefix: 'iframe-welcome' });
 		this._iframeWelcome._iframe.title = _('Welcome Dialog');
 	},
 
 	removeHooks: function () {
-		L.DomEvent.off(window, 'message', this.onMessage, this);
+		window.L.DomEvent.off(window, 'message', this.onMessage, this);
 		this.remove();
 	},
 
@@ -117,22 +128,22 @@ L.Map.Welcome = L.Handler.extend({
 		} else if (data.MessageId == 'iframe-welcome-load' && !this._iframeWelcome.isVisible()) {
 			if (this._retries-- > 0) {
 				this.remove();
-				setTimeout(L.bind(this.showWelcomeDialog, this), 200);
+				setTimeout(window.L.bind(this.showWelcomeDialog, this), 200);
 			} else if (this._fallback) {
 				var currentDate = new Date();
 				window.prefs.set('WSDWelcomeDisabled', true);
-				window.prefs.set('WSDWelcomeDisabledDate', currentDate.toDateString());
+				window.prefs.set('WSDWelcomeDisabledDate', currentDate.toDateString().replaceAll(' ', '-'));
 				this.remove();
 			} else {
 				// fallback
 				this._url = this._getLocalWelcomeUrl();
 				this._fallback = true;
-				setTimeout(L.bind(this.showWelcomeDialog, this), 200);
+				setTimeout(window.L.bind(this.showWelcomeDialog, this), 200);
 			}
 		}
 	}
 });
 
-if (!L.Browser.cypressTest && window.enableWelcomeMessage && window.prefs.canPersist) {
-	L.Map.addInitHook('addHandler', 'welcome', L.Map.Welcome);
+if (!window.L.Browser.cypressTest && window.enableWelcomeMessage && window.prefs.canPersist) {
+	window.L.Map.addInitHook('addHandler', 'welcome', window.L.Map.Welcome);
 }

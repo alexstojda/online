@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -11,7 +14,7 @@
  * Class for idle handling of the view.
  */
 
-/* global app L */
+/* global app L TileManager */
 
 declare var mode: any;
 declare var ThisIsTheAndroidApp: any;
@@ -52,6 +55,14 @@ class IdleHandler {
 		return (Date.now() - this._lastActivity) / 1000;
 	}
 
+	refreshAnnotations() {
+		var docLayer = this.map._docLayer;
+		if (docLayer.isCalc() && docLayer.options.sheetGeometryDataEnabled) {
+			docLayer.requestSheetGeometryData();
+		}
+		app.socket.sendMessage('commandvalues command=.uno:ViewAnnotations');
+	}
+
 	_activate() {
 		window.app.console.debug('IdleHandler: _activate()');
 
@@ -67,11 +78,21 @@ class IdleHandler {
 			if (app.socket.connected()) {
 				app.socket.sendMessage('useractive');
 				this._active = true;
-				var docLayer = this.map._docLayer;
-				if (docLayer && docLayer.isCalc() && docLayer.options.sheetGeometryDataEnabled) {
-					docLayer.requestSheetGeometryData();
+
+				/*
+				  If we have the docLayer then refresh annotations now. If not then
+				  postpone until we do have the docLayer so we know if this is calc
+				  or not, because for calc we have to ensure we have the sheet
+				  geometry before requesting annotations otherwise we will lack the
+				  requirements to position them.
+				*/
+				if (this.map._docLayer) {
+					this.map._docLayer.allowDrawing();
+					this.refreshAnnotations();
 				}
-				app.socket.sendMessage('commandvalues command=.uno:ViewAnnotations');
+				else {
+					this.map.once('doclayerinit', this.refreshAnnotations, this);
+				}
 
 				if (this.isDimActive()) {
 					this.map.jsdialog.closeDialog(this.dimId, false);
@@ -87,6 +108,7 @@ class IdleHandler {
 		if (window.mode.isDesktop()
 		&& !this.map.uiManager.isAnyDialogOpen()
 		&& !cool.Comment.isAnyEdit()
+		&& (this.map.formulabar && !this.map.formulabar.hasFocus())
 		&& $('input:focus').length === 0) {
 			this.map.focus();
 		}
@@ -103,7 +125,7 @@ class IdleHandler {
 
 		this._inactivityTimer = setTimeout(() => {
 			this._dimIfInactive();
-		}, (L.Browser.cypressTest ? 1000 : 1 * 60 * 1000)); // Check once a minute
+		}, (window.L.Browser.cypressTest ? 1000 : 1 * 60 * 1000)); // Check once a minute
 	}
 
 	_startOutOfFocusTimer() {
@@ -131,6 +153,9 @@ class IdleHandler {
 	}
 
 	_dim() {
+		if (this.map.slideShowPresenter && this.map.slideShowPresenter._checkAlreadyPresenting())
+			return; // do not stop presentation
+
 		this.map.fire('closealldialogs');
 		const message = this.getIdleMessage();
 
@@ -142,38 +167,47 @@ class IdleHandler {
 		this._active = false;
 		var map = this.map;
 
-		var restartConnectionFn = function() {
+		var restartConnectionFn = () => {
 			if (app.idleHandler._documentIdle)
 			{
 				window.app.console.debug('idleness: reactivating');
 				map.fire('postMessage', {msgId: 'User_Active'});
 				app.idleHandler._documentIdle = false;
-				app.idleHandler.map._docLayer._setCursorVisible();
+				app.setCursorVisibility(true);
 			}
 			return app.idleHandler._activate();
 		};
 
 		this.map._textInput.hideCursor();
 
-		var uiManager = this.map.uiManager;
-		var dialogId = uiManager.generateModalId(this.dimId);
+		const uiManager = this.map.uiManager;
+		const dialogId = uiManager.generateModalId(this.dimId);
 		uiManager.showInfoModal(this.dimId);
-		document.getElementById(this.dimId).textContent = message;
 
-		var restartConnection = function() { restartConnectionFn(); }.bind(this);
+		app.layoutingService.appendLayoutingTask(() => {
+			const dimNode = document.getElementById(this.dimId);
+			if (!dimNode)
+				return;
 
-		if (message === '') {
-			document.getElementById(dialogId).style.display = 'none';
-			L.LOUtil.onRemoveHTMLElement(document.getElementById(this.dimId), restartConnection);
-		}
-		else {
-			var overlayId = dialogId + '-overlay';
-			var overlay = document.getElementById(overlayId);
-			overlay.onmouseover = () => { restartConnection(); uiManager.closeModal(dialogId); };
-			L.LOUtil.onRemoveHTMLElement(overlay, restartConnection);
-		}
+			dimNode.textContent = message;
+
+			const restartConnection = () => { restartConnectionFn(); };
+
+			if (message === '') {
+				const dialogNode = document.getElementById(dialogId);
+				if (dialogNode) dialogNode.style.display = 'none';
+				app.LOUtil.onRemoveHTMLElement(dimNode, restartConnection);
+			} else {
+				const overlayId = dialogId + '-overlay';
+				const overlay = document.getElementById(overlayId);
+				if (overlay) overlay.onmouseover = () => { restartConnection(); uiManager.closeModal(dialogId); };
+				app.LOUtil.onRemoveHTMLElement(overlay, restartConnection);
+			}
+		});
 
 		this._sendInactiveMessage();
+
+		TileManager.clearPreFetch();
 	}
 
 	notifyActive() {
@@ -207,6 +241,10 @@ class IdleHandler {
 
 			return;
 		}
+
+		if (app.map && app.map.formulabar &&
+			(app.map.formulabar.hasFocus() || app.map.formulabar.isInEditMode()))
+			app.dispatcher.dispatch('acceptformula'); // save data from the edited cell on exit
 
 		this._startOutOfFocusTimer();
 	}

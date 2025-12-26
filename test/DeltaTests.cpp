@@ -13,8 +13,11 @@
 
 #include <test/lokassert.hpp>
 
+#include <random>
+
 #include <Delta.hpp>
-#include <Util.hpp>
+#include <common/HexUtil.hpp>
+#include <common/Util.hpp>
 #include <Png.hpp>
 
 #include <cppunit/extensions/HelperMacros.h>
@@ -28,6 +31,7 @@ class DeltaTests : public CPPUNIT_NS::TestFixture
 
     CPPUNIT_TEST(testRle);
     CPPUNIT_TEST(testRleComplex);
+    CPPUNIT_TEST(testRleRandom);
     CPPUNIT_TEST(testRleIdentical);
     CPPUNIT_TEST(testDeltaSequence);
     CPPUNIT_TEST(testRandomDeltas);
@@ -37,31 +41,27 @@ class DeltaTests : public CPPUNIT_NS::TestFixture
 
     void testRle();
     void testRleComplex();
+    void testRleRandom();
     void testRleIdentical();
     void testDeltaSequence();
     void testRandomDeltas();
     void testDeltaCopyOutOfBounds();
 
-    std::vector<char> applyDelta(
-        const std::vector<char> &pixmap,
-        uint32_t width, uint32_t height,
-        const std::vector<char> &delta,
-        const std::string& testname);
+    std::vector<char> applyDelta(const std::vector<char>& pixmap, uint32_t width, uint32_t height,
+                                 const std::vector<char>& delta, const std::string_view testname);
 
-    void assertEqual(const std::vector<char> &a,
-                     const std::vector<char> &b,
-                     int width, int height,
-                     const std::string& testname);
+    void assertEqual(const std::vector<char>& a, const std::vector<char>& b, int width, int height,
+                     const std::string_view testname);
 };
 
 namespace {
 void checkzDelta(const std::vector<char> &zDelta, const char *legend)
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
 #if DEBUG_DELTA_TESTS
     std::cout << "zdelta: " << legend << "\n";
-    Util::dumpHex(std::cout, zDelta, "");
+    HexUtil::dumpHex(std::cout, zDelta, "");
 #else
     (void)legend;
 #endif
@@ -110,7 +110,7 @@ void checkzDelta(const std::vector<char> &zDelta, const char *legend)
 #if DEBUG_DELTA_TESTS
             std::cout << "d(new pixels) to row " << destRow << " col " << destCol << " number of pixels: " << length << "\n";
             std::vector<char> data(delta.data() + 1, delta.data() + i + length * 4);
-            std::cout << Util::stringifyHexLine(data, 0) << "\n";
+            std::cout << HexUtil::stringifyHexLine(data, 0) << "\n";
 #endif
             i += 4 * length;
             break;
@@ -133,11 +133,9 @@ void checkzDelta(const std::vector<char> &zDelta, const char *legend)
 }
 
 // Quick hack for debugging
-std::vector<char> DeltaTests::applyDelta(
-    const std::vector<char> &pixmap,
-    uint32_t width, uint32_t height,
-    const std::vector<char> &zDelta,
-    const std::string& testname)
+std::vector<char> DeltaTests::applyDelta(const std::vector<char>& pixmap, uint32_t width,
+                                         uint32_t height, const std::vector<char>& zDelta,
+                                         const std::string_view testname)
 {
     LOK_ASSERT(zDelta.size() >= 4);
     LOK_ASSERT(zDelta[0] == 'D');
@@ -215,10 +213,8 @@ std::vector<char> DeltaTests::applyDelta(
     return output;
 }
 
-void DeltaTests::assertEqual(const std::vector<char> &a,
-                             const std::vector<char> &b,
-                             int width, int /* height */,
-                             const std::string& testname)
+void DeltaTests::assertEqual(const std::vector<char>& a, const std::vector<char>& b, int width,
+                             int /* height */, const std::string_view testname)
 {
     LOK_ASSERT_EQUAL(a.size(), b.size());
     for (size_t i = 0; i < a.size(); ++i)
@@ -236,8 +232,8 @@ void DeltaTests::assertEqual(const std::vector<char> &a,
                     std::cout<< '\n';
             }
             std::cout << " size " << len << '\n';
-            Util::dumpHex(std::cout, a, "a");
-            Util::dumpHex(std::cout, b, "b");
+            HexUtil::dumpHex(std::cout, a, "a");
+            HexUtil::dumpHex(std::cout, b, "b");
             LOK_ASSERT(false);
         }
     }
@@ -245,7 +241,7 @@ void DeltaTests::assertEqual(const std::vector<char> &a,
 
 void DeltaTests::testRle()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     DeltaGenerator::DeltaBitmapRow rowa;
     DeltaGenerator::DeltaBitmapRow rowb;
@@ -278,7 +274,7 @@ void DeltaTests::testRle()
 
 void DeltaTests::testRleComplex()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     DeltaGenerator gen;
 
@@ -289,7 +285,7 @@ void DeltaTests::testRleComplex()
 
     DeltaGenerator::DeltaData data(
         textWid, reinterpret_cast<unsigned char*>(text.data()),
-        0, 0, 256, 256, TileLocation(9, 9, 9, 0, 1), 256, 256);
+        0, 0, 256, 256, TileLocation(9, 9, 9, 0, CanonicalViewId(1), 0), 256, 256);
 
     size_t off = 0;
     for (int y = 0; y < 256; ++y)
@@ -310,9 +306,44 @@ void DeltaTests::testRleComplex()
     }
 }
 
+void DeltaTests::testRleRandom()
+{
+    constexpr std::string_view testname = __func__;
+
+    DeltaGenerator gen;
+
+    std::vector<unsigned char> randomImg(256*256*4);
+    std::mt19937 random;
+    random.seed(42);
+    std::uniform_int_distribution<unsigned char> dist(0,255);
+
+    for (size_t i = 0; i < randomImg.size(); ++i)
+        randomImg[i] = dist(random);
+
+    DeltaGenerator::DeltaData data(
+        1, randomImg.data(), 0, 0, 256, 256,
+        TileLocation(9, 9, 9, 0, CanonicalViewId(1), 0), 256, 256);
+
+    // Compress
+    std::vector<char> output;
+    size_t size = gen.compressOrDelta(
+        randomImg.data(), 0, 0, 256, 256, 256, 256,
+        TileLocation(42, 2, 3, 0, CanonicalViewId(1), 0),
+        output, 1, true, false, LOK_TILEMODE_RGBA);
+    LOK_ASSERT(size > 1);
+    LOK_ASSERT(output[0] == 'Z');
+
+    // Decompress
+    std::vector<char> frame;
+    frame.resize(1024*1024*4); // lots of extra space.
+    size_t compSize = ZSTD_decompress( frame.data(), frame.size(),
+                                       output.data() + 1, output.size() - 1);
+    LOK_ASSERT_EQUAL(ZSTD_isError(compSize), (unsigned)false);
+}
+
 void DeltaTests::testRleIdentical()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     DeltaGenerator gen;
 
@@ -325,7 +356,7 @@ void DeltaTests::testRleIdentical()
 
     DeltaGenerator::DeltaData data(
         textWid, reinterpret_cast<unsigned char*>(text.data()),
-        0, 0, 256, 256, TileLocation(9, 9, 9, 0, 1), 256, 256);
+        0, 0, 256, 256, TileLocation(9, 9, 9, 0, CanonicalViewId(1), 0), 256, 256);
 
     std::vector<char> text2 =
         Png::loadPng(TDOC "/delta-graphic2.png", height, width, rowBytes);
@@ -334,15 +365,15 @@ void DeltaTests::testRleIdentical()
 
     DeltaGenerator::DeltaData data2(
         textWid, reinterpret_cast<unsigned char*>(text.data()),
-        0, 0, 256, 256, TileLocation(9, 9, 9, 0, 1), 256, 256);
+        0, 0, 256, 256, TileLocation(9, 9, 9, 0, CanonicalViewId(1), 0), 256, 256);
 
     // find identical rows
     for (int y = 0; y < 256; ++y)
     {
         for (int y2 = 0; y2 < 256; y2++)
         {
-            auto &row = data.getRow(y);
-            auto &row2 = data2.getRow(y2);
+            const auto& row = data.getRow(y);
+            const auto& row2 = data2.getRow(y2);
             if (row.identical(row2))
             {
                 DeltaGenerator::DeltaBitmapRow::PixIterator it(row);
@@ -364,7 +395,7 @@ void DeltaTests::testRleIdentical()
 
 void DeltaTests::testDeltaSequence()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     DeltaGenerator gen;
 
@@ -386,16 +417,18 @@ void DeltaTests::testDeltaSequence()
 
     // Stash it in the cache
     LOK_ASSERT(gen.createDelta(
-                       reinterpret_cast<unsigned char *>(&text[0]),
+                       reinterpret_cast<unsigned char *>(text.data()),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false, LOK_TILEMODE_RGBA, rleData) == false);
+                       TileLocation(1, 2, 3, 0, CanonicalViewId(1), 0), delta,
+                       textWid, false, LOK_TILEMODE_RGBA, rleData) == false);
     LOK_ASSERT(delta.empty());
 
     // Build a delta between text2 & textWid
     LOK_ASSERT(gen.createDelta(
-                       reinterpret_cast<unsigned char *>(&text2[0]),
+                       reinterpret_cast<unsigned char *>(text2.data()),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false, LOK_TILEMODE_RGBA, rleData) == true);
+                       TileLocation(1, 2, 3, 0, CanonicalViewId(1), 0), delta,
+                       text2Wid, false, LOK_TILEMODE_RGBA, rleData) == true);
     LOK_ASSERT(delta.size() > 0);
     checkzDelta(delta, "text2 to textWid");
 
@@ -406,9 +439,10 @@ void DeltaTests::testDeltaSequence()
     // Build a delta between text & text2Wid
     std::vector<char> two2one;
     LOK_ASSERT(gen.createDelta(
-                       reinterpret_cast<unsigned char *>(&text[0]),
+                       reinterpret_cast<unsigned char *>(text.data()),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), two2one, textWid, false, LOK_TILEMODE_RGBA, rleData) == true);
+                       TileLocation(1, 2, 3, 0, CanonicalViewId(1), 0), two2one,
+                       textWid, false, LOK_TILEMODE_RGBA, rleData) == true);
     LOK_ASSERT(two2one.size() > 0);
     checkzDelta(two2one, "text to text2Wid");
 
@@ -423,7 +457,7 @@ void DeltaTests::testRandomDeltas()
 
 void DeltaTests::testDeltaCopyOutOfBounds()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     DeltaGenerator gen;
 
@@ -445,16 +479,18 @@ void DeltaTests::testDeltaCopyOutOfBounds()
 
     // Stash it in the cache
     LOK_ASSERT(gen.createDelta(
-                       reinterpret_cast<unsigned char *>(&text[0]),
+                       reinterpret_cast<unsigned char *>(text.data()),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, textWid, false, LOK_TILEMODE_RGBA, rleData) == false);
+                       TileLocation(1, 2, 3, 0, CanonicalViewId(1), 0), delta,
+                       textWid, false, LOK_TILEMODE_RGBA, rleData) == false);
     LOK_ASSERT(delta.empty());
 
     // Build a delta between the two frames
     LOK_ASSERT(gen.createDelta(
-                       reinterpret_cast<unsigned char *>(&text2[0]),
+                       reinterpret_cast<unsigned char *>(text2.data()),
                        0, 0, width, height, width, height,
-                       TileLocation(1, 2, 3, 0, 1), delta, text2Wid, false, LOK_TILEMODE_RGBA, rleData) == true);
+                       TileLocation(1, 2, 3, 0, CanonicalViewId(1), 0), delta,
+                       text2Wid, false, LOK_TILEMODE_RGBA, rleData) == true);
     LOK_ASSERT(delta.size() > 0);
     checkzDelta(delta, "copy out of bounds");
 

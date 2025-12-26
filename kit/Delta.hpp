@@ -11,22 +11,23 @@
 
 #pragma once
 
-#include <vector>
+#include <common/Common.hpp>
+#include <common/FileUtil.hpp>
+#include <common/HexUtil.hpp>
+#include <common/Log.hpp>
+#include <common/Png.hpp>
+#include <common/Simd.hpp>
+#include <kit/DeltaSimd.h>
+#include <wsd/TileDesc.hpp>
+
+#include <cassert>
+#include <cstdint>
+#include <fstream>
 #include <memory>
 #include <unordered_set>
-#include <fstream>
-#include <assert.h>
+#include <vector>
 #include <zlib.h>
 #include <zstd.h>
-#include <stdint.h>
-#include <endian.h>
-
-#include <Log.hpp>
-#include <Common.hpp>
-#include <FileUtil.hpp>
-#include <Png.hpp>
-#include <Simd.hpp>
-#include <DeltaSimd.h>
 
 #ifndef TILE_WIRE_ID
 #  define TILE_WIRE_ID
@@ -40,11 +41,12 @@ struct TileLocation {
     int _top;
     int _size;
     int _part;
-    int _canonicalViewId;
+    CanonicalViewId _canonicalViewId;
+    int _viewMode;
     TileLocation(int left, int top, int size, int part,
-                 int canonicalViewId)
+                 CanonicalViewId canonicalViewId, int viewMode)
         : _left(left), _top(top), _size(size), _part(part),
-          _canonicalViewId(canonicalViewId)
+          _canonicalViewId(canonicalViewId), _viewMode(viewMode)
     {
     }
     size_t hash() const
@@ -53,15 +55,17 @@ struct TileLocation {
         size_t top = _top;
         size_t part = _part;
         size_t size = _size;
-        size_t canonicalViewId = _canonicalViewId;
+        size_t canonicalViewId = to_underlying(_canonicalViewId);
+        size_t viewMode = _viewMode;
         return (left << 20) ^ top ^ (part << 15) ^ (size << 7) ^
-               (canonicalViewId << 24);
+               (canonicalViewId << 24) ^ (viewMode << 28);
     }
     bool operator==(const TileLocation& other) const
     {
         return _left == other._left && _top == other._top &&
                _size == other._size && _part == other._part &&
-               _canonicalViewId == other._canonicalViewId;
+               _canonicalViewId == other._canonicalViewId &&
+               _viewMode == other._viewMode;
     }
 };
 
@@ -84,7 +88,7 @@ class DeltaGenerator {
         class PixIterator final
         {
             const DeltaBitmapRow &_row;
-            unsigned int _nMask; // which mask to operate on
+            unsigned int _mask; // which mask to operate on
             uint32_t _lastPix; // last pixel (or possibly plain alpha)
             uint64_t _lastMask; // holding slot for mask
             uint64_t _bitToCheck; // which bit should we check.
@@ -92,7 +96,7 @@ class DeltaGenerator {
             const uint32_t *_endRleData; // end of pixel data
         public:
             PixIterator(const DeltaBitmapRow &row)
-                : _row(row), _nMask(0),
+                : _row(row), _mask(0),
                   _lastPix(0x00000000),
                   _lastMask(0),
                   _bitToCheck(0),
@@ -117,8 +121,8 @@ class DeltaGenerator {
 
                 if (!_bitToCheck)
                 { // slow path
-                    if (_nMask < 4)
-                        _lastMask = _row._rleMask[_nMask++];
+                    if (_mask < 4)
+                        _lastMask = _row._rleMask[_mask++];
                     else
                         _lastMask = 0xffffffffffffffff;
                     _bitToCheck = 1;
@@ -162,7 +166,7 @@ class DeltaGenerator {
             output[0] = _rleSize & 0xff;
             output[1] = _rleSize >> 8;
 
-#if __BYTE_ORDER != __BIG_ENDIAN || defined(IOS)
+#if __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__
             memcpy(output + 2, _rleMask, sizeof(_rleMask));
 #else
             // rare machine: little-endianize the bitmask if necessary:
@@ -177,8 +181,9 @@ class DeltaGenerator {
                          _rleSize, mode);
 
             size_t size = 2 + sizeof(_rleMask) + _rleSize * 4;
-            LOGA_TRC(Pixel,"packed row of size " << size << " bytes "
-                     << Util::dumpHex(std::string((char *)output, size)));
+            LOGA_TRC(Pixel, "packed row of size "
+                                << size << " bytes "
+                                << HexUtil::dumpHex(std::string((char*)output, size)));
 
             return size;
         }
@@ -192,7 +197,7 @@ class DeltaGenerator {
             unsigned int x = 0, outp = 0;
 
             // non-accelerated path
-            for (unsigned int nMask = 0; nMask < 4; ++nMask)
+            for (unsigned int mask = 0; mask < 4; ++mask)
             {
                 uint64_t rleMask = 0;
                 uint64_t bitToSet = 1;
@@ -224,7 +229,7 @@ class DeltaGenerator {
                         }
                     }
                 }
-                rleMaskBlock[nMask] = rleMask;
+                rleMaskBlock[mask] = rleMask;
             }
 
             if (x < width)
@@ -239,7 +244,7 @@ class DeltaGenerator {
 
         void initRow(const uint32_t *from, unsigned int width)
         {
-            uint32_t scratch[width];
+            auto* scratch = static_cast<uint32_t*>(alloca(sizeof(uint32_t) * width));
 
             bool done = false;
             if (simd::HasAVX2 && width == 256)
@@ -493,12 +498,14 @@ class DeltaGenerator {
     std::unordered_set<std::shared_ptr<DeltaData>, DeltaHasher, DeltaCompare> _deltaEntries;
     size_t _maxEntries;
 
-    void rebalanceDeltasT(bool bDropAll = false)
+    void rebalanceDeltasT(bool dropAll = false)
     {
-        if (_deltaEntries.size() > _maxEntries || bDropAll)
+        assert(!_deltaGuard.try_lock() && "Expected to have _deltaGuard lock taken");
+
+        if (_deltaEntries.size() > _maxEntries || dropAll)
         {
             size_t toRemove = _deltaEntries.size();
-            if (!bDropAll)
+            if (!dropAll)
                 toRemove -= (_maxEntries * 3 / 4);
             std::vector<std::shared_ptr<DeltaData>> entries;
             entries.insert(entries.end(), _deltaEntries.begin(), _deltaEntries.end());
@@ -634,7 +641,7 @@ class DeltaGenerator {
         }
 
         LOGA_TRC(Pixel, "Compressed delta of size " << output.size() << " to size " << compSize);
-//                << Util::dumpHex(std::string((char *)compressed.get(), compSize)));
+        //                << HexUtil::dumpHex(std::string((char *)compressed.get(), compSize)));
 
         // FIXME: should get zstd to drop it directly in-place really.
         outStream.push_back('D');
@@ -673,12 +680,14 @@ class DeltaGenerator {
 
     void dumpState(std::ostream& oss)
     {
-        oss << "\tdelta generator with " << _deltaEntries.size() << " entries vs. max " << _maxEntries << "\n";
+        oss << "\tdelta generator with " << _deltaEntries.size() << " entries vs. max "
+            << _maxEntries << '\n';
         size_t totalSize = 0;
-        for (auto &it : _deltaEntries)
+        for (const auto& it : _deltaEntries)
         {
             size_t size = it->sizeBytes();
-            oss << "\t\t" << it->_loc._size << "," << it->_loc._part << "," << it->_loc._left << "," << it->_loc._top << " wid: " << it->getWid() << " size: " << size << "\n";
+            oss << "\t\t" << it->_loc._size << ',' << it->_loc._part << ',' << it->_loc._left << ','
+                << it->_loc._top << " wid: " << it->getWid() << " size: " << size << '\n';
             totalSize += size;
         }
         oss << "\tdelta generator consumes " << totalSize << " bytes\n";
@@ -717,10 +726,8 @@ class DeltaGenerator {
         // FIXME: why duplicate this ? we could overwrite
         // as we make the delta into an existing cache entry,
         // and just do this as/when there is no entry.
-        std::shared_ptr<DeltaData> update(
-            new DeltaData(
-                wid, pixmap, startX, startY, width, height,
-                loc, bufferWidth, bufferHeight));
+        std::shared_ptr<DeltaData> update(std::make_shared<DeltaData>(
+            wid, pixmap, startX, startY, width, height, loc, bufferWidth, bufferHeight));
         std::shared_ptr<DeltaData> cacheEntry;
 
         {
@@ -731,7 +738,7 @@ class DeltaGenerator {
             if (it == _deltaEntries.end())
             {
                 _deltaEntries.insert(update);
-                rleData = update;
+                rleData = std::move(update);
                 return false;
             }
             cacheEntry = *it;
@@ -819,7 +826,8 @@ class DeltaGenerator {
                          loc, output, wid, forceKeyframe, mode, rleData))
         {
             assert(rleData);
-            size_t maxCompressed = ZSTD_COMPRESSBOUND((size_t)width * height * 4 + spaceForBitmask);
+            size_t rowSize = (size_t)width * 4 + spaceForBitmask + 2;
+            size_t maxCompressed = ZSTD_COMPRESSBOUND(rowSize * height);
 
             std::unique_ptr<char, void (*)(void*)> compressed((char*)malloc(maxCompressed), free);
             if (!compressed)
@@ -837,7 +845,7 @@ class DeltaGenerator {
             outb.size = maxCompressed;
             outb.pos = 0;
 
-            unsigned char packedLine[2 + spaceForBitmask + width * 4];
+            auto* packedLine = static_cast<unsigned char*>(alloca(rowSize));
 
             for (int y = 0; y < height; ++y)
             {
@@ -866,7 +874,7 @@ class DeltaGenerator {
 
             size_t compSize = outb.pos;
             LOGA_TRC(Pixel, "Compressed image of size " << (width * height * 4) << " to size " << compSize);
-//            << Util::dumpHex(std::string((char *)compressed, compSize)));
+            //            << HexUtil::dumpHex(std::string((char *)compressed, compSize)));
 
             // FIXME: get zstd to compress directly into this buffer.
             output.push_back('Z');
@@ -885,10 +893,13 @@ class DeltaGenerator {
                 oss << "tile-delta-" << loc._canonicalViewId << "-" << loc._part << "-" << loc._left << "-" << loc._top
                     << "-" << dumpedIndex - 1 << "_to_" << dumpedIndex << ".zstd";
                 path += oss.str();
-                std::ofstream tileFile(path, std::ios::binary);
-                // Skip first character which is a 'D' used to identify deltas
-                // The rest should be a zstd compressed delta
-                tileFile.write(output.data() + 1, output.size() - 1);
+                if (path.find("../") == std::string::npos && path.find("/..") == std::string::npos) // avoid funny paths to make CodeQL happy
+                {
+                    std::ofstream tileFile(path, std::ios::binary);
+                    // Skip first character which is a 'D' used to identify deltas
+                    // The rest should be a zstd compressed delta
+                    tileFile.write(output.data() + 1, output.size() - 1);
+                }
             }
         }
 
@@ -901,13 +912,13 @@ class DeltaGenerator {
         Blob img = std::make_shared<BlobData>();
         img->resize(1024*1024*4); // lots of extra space.
 
-        size_t const dSize = ZSTD_decompress(img->data(), img->size(), blob->data(), blob->size());
-        if (ZSTD_isError(dSize))
+        size_t const size = ZSTD_decompress(img->data(), img->size(), blob->data(), blob->size());
+        if (ZSTD_isError(size))
         {
-            LOG_ERR("Failed to decompress blob of size " << blob->size() << " with " << ZSTD_getErrorName(dSize));
+            LOG_ERR("Failed to decompress blob of size " << blob->size() << " with " << ZSTD_getErrorName(size));
             return Blob();
         }
-        img->resize(dSize);
+        img->resize(size);
 
 
         // cf. CanvasTileLayer's _applyDelta

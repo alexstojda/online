@@ -1,4 +1,5 @@
 /* -*- js-indent-level: 8; fill-column: 100 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -8,12 +9,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+
 /*
  * Collabora Online toolbar
  */
 
-/* global app $ _ JSDialog */
+/* global app $ _ _UNO JSDialog URLPopUpSection cool */
 /*eslint indent: [error, "tab", { "outerIIFEBody": 0 }]*/
+
 (function(global) {
 
 var map;
@@ -33,48 +36,114 @@ function getUNOCommand(unoData) {
 	return unoData.objectCommand;
 }
 
-function onClose() {
-	if (window.ThisIsAMobileApp) {
-		window.postMobileMessage('BYE');
-	} else {
-		map.fire('postMessage', {msgId: 'close', args: {EverModified: map._everModified, Deprecated: true}});
-		map.fire('postMessage', {msgId: 'UI_Close', args: {EverModified: map._everModified}});
-	}
-	if (!map._disableDefaultAction['UI_Close']) {
-		map.remove();
-	}
+function _setBorders(left, right, bottom, top, horiz, vert, color) {
+	map.sendUnoCommand(
+		getBorderStyleUNOCommand(left, right, bottom, top, horiz, vert, color),
+	);
 }
 
-function _setBorders(left, right, bottom, top, horiz, vert, color) {
-	var params = {
+function getBorderStyleUNOCommand(
+	left,
+	right,
+	bottom,
+	top,
+	horiz,
+	vert,
+	color,
+) {
+	const params = {
 		OuterBorder: {
-			type : '[]any',
-			value : [
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : left }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : right }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : bottom }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : top }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'long', value : 0 },
-				{ type : 'long', value : 0 },
-				{ type : 'long', value : 0 },
-				{ type : 'long', value : 0 },
-				{ type : 'long', value : 0 }
-			]
+			type: '[]any',
+			value: [
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: left },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: right },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: bottom },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: top },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{ type: 'long', value: 0 },
+				{ type: 'long', value: 0 },
+				{ type: 'long', value: 0 },
+				{ type: 'long', value: 0 },
+				{ type: 'long', value: 0 },
+			],
 		},
 		InnerBorder: {
-			type : '[]any',
-			value : [
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : horiz }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'com.sun.star.table.BorderLine2', value : { Color : { type : 'com.sun.star.util.Color', value : color }, InnerLineWidth : { type : 'short', value : 0 }, OuterLineWidth : { type : 'short', value : vert }, LineDistance : { type : 'short', value : 0 },  LineStyle : { type : 'short', value : 0 }, LineWidth : { type : 'unsigned long', value : 0 } } },
-				{ type : 'short', value : 0 },
-				{ type : 'short', value : 127 },
-				{ type : 'long', value : 0 }
-			]
-		}};
-	map.sendUnoCommand('.uno:SetBorderStyle', params);
+			type: '[]any',
+			value: [
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: horiz },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{
+					type: 'com.sun.star.table.BorderLine2',
+					value: {
+						Color: { type: 'com.sun.star.util.Color', value: color },
+						InnerLineWidth: { type: 'short', value: 0 },
+						OuterLineWidth: { type: 'short', value: vert },
+						LineDistance: { type: 'short', value: 0 },
+						LineStyle: { type: 'short', value: 0 },
+						LineWidth: { type: 'unsigned long', value: 0 },
+					},
+				},
+				{ type: 'short', value: 0 },
+				{ type: 'short', value: 127 },
+				{ type: 'long', value: 0 },
+			],
+		},
+	};
+
+	const jsonParams = JSON.stringify(params);
+
+	return `.uno:SetBorderStyle ${jsonParams}`;
 }
 
-// close the popup
+global.getBorderStyleUNOCommand = getBorderStyleUNOCommand;
 
 var lastClosePopupCallback = undefined;
 
@@ -120,20 +189,6 @@ function setBorderStyle(num, color) {
 
 global.setBorderStyle = setBorderStyle;
 
-function getBorderStyleMenuHtml(closeCallback) {
-	lastClosePopupCallback = closeCallback;
-	return '<table id="setborderstyle-grid"><tr><td class="w2ui-tb-image w2ui-icon frame01" onclick="setBorderStyle(1)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame02" onclick="setBorderStyle(2)"></td><td class="w2ui-tb-image w2ui-icon frame03" onclick="setBorderStyle(3)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame04" onclick="setBorderStyle(4)"></td></tr><tr><td class="w2ui-tb-image w2ui-icon frame05" onclick="setBorderStyle(5)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame06" onclick="setBorderStyle(6)"></td><td class="w2ui-tb-image w2ui-icon frame07" onclick="setBorderStyle(7)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame08" onclick="setBorderStyle(8)"></td></tr><tr><td class="w2ui-tb-image w2ui-icon frame09" onclick="setBorderStyle(9)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame10" onclick="setBorderStyle(10)"></td><td class="w2ui-tb-image w2ui-icon frame11" onclick="setBorderStyle(11)"></td>' +
-	'<td class="w2ui-tb-image w2ui-icon frame12" onclick="setBorderStyle(12)"></td></tr><tr>' +
-	'<td colspan="4" class="w2ui-tb-image w2ui-icon frame13" onclick="setBorderStyle(0)"><div id="div-frame13">' + _('More...') + '</div></td></tr></table>';
-}
-
-global.getBorderStyleMenuHtml = getBorderStyleMenuHtml;
-
 function setConditionalFormat(num, unoCommand, jsdialogDropdown) {
 	var params = {
 		IconSet: {
@@ -161,49 +216,65 @@ function moreConditionalFormat (unoCommand, jsdialogDropdown) {
 
 global.moreConditionalFormat = moreConditionalFormat;
 
-function getConditionalFormatMenuHtmlImpl(more, type, count, unoCommand, jsdialogDropdown) {
-	var table = '<div id="conditionalformatmenu-grid">';
-	for (var i = 0; i < count; i+=3) {
-		for (var j = i; j < i+3; j++) {
-			var number = j;
+function getConditionalFormatMenuElementsImpl(more, type, count, unoCommand, jsdialogDropdown) {
+	const table = document.createElement('table');
+	table.id = 'conditionalformatmenu-grid';
+
+	for (let i = 0; i < count; i += 3) {
+		for (let j = i; j < i + 3; j++) {
+			let number = j;
 
 			// iconset07 deliberately left out, see the .css for the reason
 			if (type === 'iconset' && number >= 7)
 				number++;
 
-			var iconclass = type + (number < 10 ? '0' : '') + number;
-			table += '<button class="w2ui-tb-image w2ui-icon ' + iconclass + '" onclick="setConditionalFormat(' + number + ', \'' + unoCommand + '\', ' + !!jsdialogDropdown + ')"/>';
+			const iconClass = type + (number < 10 ? '0': '') + number;
+			const button = document.createElement('button');
+			button.className = 'w2ui-tb-image w2ui-icon ' + iconClass;
+			button.onclick = function() {
+				setConditionalFormat(number, unoCommand, !!jsdialogDropdown);
+			};
+			table.appendChild(button);
 		}
 	}
+
 	if (more) {
-		table += '<button id="' + more + '" onclick="moreConditionalFormat(\'' + unoCommand + '\', ' + !!jsdialogDropdown + ')">' + _('More...') + '</button>';
+		const button = document.createElement('button');
+		button.id = 'more';
+		button.onclick = function() {
+			moreConditionalFormat(unoCommand, !!jsdialogDropdown);
+		};
+		button.textContent = _('More...');
+		table.appendChild(button);
 	}
-	table += '</div>';
+
 	return table;
 }
 
 // for icon set conditional formatting
-function getConditionalFormatMenuHtml(more, jsdialogDropdown) {
-	return getConditionalFormatMenuHtmlImpl(more, 'iconset', 21, '.uno:IconSetFormatDialog', jsdialogDropdown);
+function getConditionalFormatMenuElements(more, jsdialogDropdown) {
+	return getConditionalFormatMenuElementsImpl(more, 'iconset', 21, '.uno:IconSetFormatDialog', jsdialogDropdown);
 }
 
-global.getConditionalFormatMenuHtml = getConditionalFormatMenuHtml;
+global.getConditionalFormatMenuElements = getConditionalFormatMenuElements;
 
 // for color scale conditional formatting
-function getConditionalColorScaleMenuHtml(more, jsdialogDropdown) {
-	return getConditionalFormatMenuHtmlImpl(more, 'scaleset', 12, '.uno:ColorScaleFormatDialog', jsdialogDropdown);
+function getConditionalColorScaleMenuElements(more, jsdialogDropdown) {
+	return getConditionalFormatMenuElementsImpl(more, 'scaleset', 12, '.uno:ColorScaleFormatDialog', jsdialogDropdown);
 }
 
-global.getConditionalColorScaleMenuHtml = getConditionalColorScaleMenuHtml;
+global.getConditionalColorScaleMenuElements = getConditionalColorScaleMenuElements;
 
 // for data bar conditional formatting
-function getConditionalDataBarMenuHtml(more, jsdialogDropdown) {
-	return getConditionalFormatMenuHtmlImpl(more, 'databarset', 12, '.uno:DataBarFormatDialog', jsdialogDropdown);
+function getConditionalDataBarMenuElements(more, jsdialogDropdown) {
+	return getConditionalFormatMenuElementsImpl(more, 'databarset', 12, '.uno:DataBarFormatDialog', jsdialogDropdown);
 }
 
-global.getConditionalDataBarMenuHtml = getConditionalDataBarMenuHtml;
+global.getConditionalDataBarMenuElements = getConditionalDataBarMenuElements;
 
 var sendInsertTableFunction = function(event) {
+	if (event.target.tagName !== 'BUTTON')
+		return;
 	var col = $(event.target).index() + 1;
 	var row = $(event.target).parent().index() + 1;
 	$('.col').removeClass('bright');
@@ -220,41 +291,67 @@ var sendInsertTableFunction = function(event) {
 };
 
 var highlightTableFunction = function(event) {
+	if (event.target.tagName !== 'BUTTON')
+		return;
 	var col = $(event.target).index() + 1;
 	var row = $(event.target).parent().index() + 1;
 	$('.col').removeClass('bright');
-	$('.row:nth-child(-n+' + row + ') .col:nth-child(-n+' + col + ')')
+	$('.col').removeAttr('title');
+	var elements = $('.row:nth-child(-n+' + row + ') .col:nth-child(-n+' + col + ')')
 		.addClass('bright');
-	var status = $('#inserttable-status')
-	status.html(col + 'x' + row);
+
+	var lastHighlightedCell = elements.last();
+	lastHighlightedCell.attr('title', `${col} x ${row}`);
 };
 
-function getInsertTablePopupHtml(closeCallback) {
+function getInsertTablePopupElements(closeCallback) {
 	lastClosePopupCallback = closeCallback;
-	var grid = $('<div><div class="inserttable-grid" onmouseover="highlightTableFunction(event)" \
-		onclick="sendInsertTableFunction(event)"></div>\
-		<div id="inserttable-status" class="cool-font" style="padding: 5px;"><br/></div></div>');
 
-	insertTable(grid.children('.inserttable-grid'));
+	const container = document.createElement('div');
 
-	var wrapper = $('<div><div id="inserttable-wrapper">\
-		<div id="inserttable-popup" class="inserttable-pop ui-widget ui-corner-all" tabIndex=0>\
-		' + grid.html() + '</div></div></div>');
+	const grid = document.createElement('div');
+	grid.className = 'inserttable-grid';
+	grid.onmouseover = highlightTableFunction;
+	grid.onclick = sendInsertTableFunction;
 
-	return wrapper.html();
+	container.textContent = '\n';
+	container.appendChild(grid);
+
+	insertTable(container.children[0]);
+
+	const wrapperContainer = document.createElement('div');
+
+	const wrapper = document.createElement('div');
+	wrapper.id = 'inserttable-wrapper';
+
+	const popUp = document.createElement('div');
+	popUp.id = 'inserttable-popup';
+	popUp.className = 'inserttable-pop ui-widget ui-corner-all';
+	popUp.tabIndex = 0;
+
+	wrapperContainer.appendChild(wrapper);
+	wrapperContainer.appendChild(popUp);
+
+	popUp.appendChild(grid);
+
+	return wrapperContainer;
 }
 
-function insertTable($grid = $('.inserttable-grid')) {
+function insertTable(grid = document.getElementsByClassName('inserttable-grid')[0]) {
 	var rows = 10;
 	var cols = 10;
 
 	for (var r = 0; r < rows; r++) {
-		var $row = $('<div/>').addClass('row');
-		$grid.append($row);
+		const row = document.createElement('div');
+		row.className = 'row';
+		grid.appendChild(row);
+
 		for (var c = 0; c < cols; c++) {
-			var $col = $('<button aria-label="' + (1+r) + 'x' + (1+c) + '"\
-				onfocusin="highlightTableFunction(event)"/>').addClass('col');
-			$row.append($col);
+			const col = document.createElement('button');
+			col.setAttribute('aria-label', (1 + r) + 'x' + (1 + c));
+			col.onfocus = highlightTableFunction;
+			col.className = 'col';
+			row.appendChild(col);
 		}
 	}
 }
@@ -262,196 +359,212 @@ function insertTable($grid = $('.inserttable-grid')) {
 var shapes = {
 	'insertshapes': {
 		'Basic Shapes': [
-			{img: 'basicshapes_rectangle', uno: 'BasicShapes.rectangle'},
-			{img: 'basicshapes_round-rectangle', uno: 'BasicShapes.round-rectangle'},
-			{img: 'basicshapes_quadrat', uno: 'BasicShapes.quadrat'},
-			{img: 'basicshapes_round-quadrat', uno: 'BasicShapes.round-quadrat'},
-			{img: 'basicshapes_circle', uno: 'BasicShapes.circle'},
-			{img: 'basicshapes_ellipse', uno: 'BasicShapes.ellipse'},
+			{img: 'basicshapes_rectangle', uno: 'BasicShapes.rectangle', text: _UNO('.uno:BasicShapes.rectangle')},
+			{img: 'basicshapes_round-rectangle', uno: 'BasicShapes.round-rectangle', text: _UNO('.uno:BasicShapes.round-rectangle')},
+			{img: 'basicshapes_quadrat', uno: 'BasicShapes.quadrat', text: _UNO('.uno:BasicShapes.quadrat')},
+			{img: 'basicshapes_round-quadrat', uno: 'BasicShapes.round-quadrat', text: _UNO('.uno:BasicShapes.round-quadrat')},
+			{img: 'basicshapes_circle', uno: 'BasicShapes.circle', text: _UNO('.uno:BasicShapes.circle')},
+			{img: 'basicshapes_ellipse', uno: 'BasicShapes.ellipse', text: _UNO('.uno:BasicShapes.ellipse')},
 
-			{img: 'basicshapes_circle-pie', uno: 'BasicShapes.circle-pie'},
-			{img: 'basicshapes_isosceles-triangle', uno: 'BasicShapes.isosceles-triangle'},
-			{img: 'basicshapes_right-triangle', uno: 'BasicShapes.right-triangle'},
-			{img: 'basicshapes_trapezoid', uno: 'BasicShapes.trapezoid'},
-			{img: 'basicshapes_diamond', uno: 'BasicShapes.diamond'},
-			{img: 'basicshapes_parallelogram', uno: 'BasicShapes.parallelogram'},
+			{img: 'basicshapes_circle-pie', uno: 'BasicShapes.circle-pie', text: _UNO('.uno:BasicShapes.circle-pie')},
+			{img: 'basicshapes_isosceles-triangle', uno: 'BasicShapes.isosceles-triangle', text: _UNO('.uno:BasicShapes.isosceles-triangle')},
+			{img: 'basicshapes_right-triangle', uno: 'BasicShapes.right-triangle', text: _UNO('.uno:BasicShapes.right-triangle')},
+			{img: 'basicshapes_trapezoid', uno: 'BasicShapes.trapezoid', text: _UNO('.uno:BasicShapes.trapezoid')},
+			{img: 'basicshapes_diamond', uno: 'BasicShapes.diamond', text: _UNO('.uno:BasicShapes.diamond')},
+			{img: 'basicshapes_parallelogram', uno: 'BasicShapes.parallelogram', text: _UNO('.uno:BasicShapes.parallelogram')},
 
-			{img: 'basicshapes_pentagon', uno: 'BasicShapes.pentagon'},
-			{img: 'basicshapes_hexagon', uno: 'BasicShapes.hexagon'},
-			{img: 'basicshapes_octagon', uno: 'BasicShapes.octagon'},
-			{img: 'basicshapes_cross', uno: 'BasicShapes.cross'},
-			{img: 'basicshapes_ring', uno: 'BasicShapes.ring'},
-			{img: 'basicshapes_block-arc', uno: 'BasicShapes.block-arc'},
+			{img: 'basicshapes_pentagon', uno: 'BasicShapes.pentagon', text: _UNO('.uno:BasicShapes.pentagon')},
+			{img: 'basicshapes_hexagon', uno: 'BasicShapes.hexagon', text: _UNO('.uno:BasicShapes.hexagon')},
+			{img: 'basicshapes_octagon', uno: 'BasicShapes.octagon', text: _UNO('.uno:BasicShapes.octagon')},
+			{img: 'basicshapes_cross', uno: 'BasicShapes.cross', text: _UNO('.uno:BasicShapes.cross')},
+			{img: 'basicshapes_ring', uno: 'BasicShapes.ring', text: _UNO('.uno:BasicShapes.ring')},
+			{img: 'basicshapes_block-arc', uno: 'BasicShapes.block-arc', text: _UNO('.uno:BasicShapes.block-arc')},
 
-			{img: 'basicshapes_can', uno: 'BasicShapes.can'},
-			{img: 'basicshapes_cube', uno: 'BasicShapes.cube'},
-			{img: 'basicshapes_paper', uno: 'BasicShapes.paper'},
-			{img: 'basicshapes_frame', uno: 'BasicShapes.frame'}
+			{img: 'basicshapes_can', uno: 'BasicShapes.can', text: _UNO('.uno:BasicShapes.can')},
+			{img: 'basicshapes_cube', uno: 'BasicShapes.cube', text: _UNO('.uno:BasicShapes.cube')},
+			{img: 'basicshapes_paper', uno: 'BasicShapes.paper', text: _UNO('.uno:BasicShapes.paper')},
+			{img: 'basicshapes_frame', uno: 'BasicShapes.frame', text: _UNO('.uno:BasicShapes.frame')}
 		],
 
 		'Symbol Shapes':  [
-			{img: 'symbolshapes', uno: 'SymbolShapes.smiley'},
-			{img: 'symbolshapes_sun', uno: 'SymbolShapes.sun'},
-			{img: 'symbolshapes_moon', uno: 'SymbolShapes.moon'},
-			{img: 'symbolshapes_lightning', uno: 'SymbolShapes.lightning'},
-			{img: 'symbolshapes_heart', uno: 'SymbolShapes.heart'},
-			{img: 'symbolshapes_flower', uno: 'SymbolShapes.flower'},
+			{img: 'symbolshapes', uno: 'SymbolShapes.smiley', text: _UNO('.uno:SymbolShapes.smiley')},
+			{img: 'symbolshapes_sun', uno: 'SymbolShapes.sun', text: _UNO('.uno:SymbolShapes.sun')},
+			{img: 'symbolshapes_moon', uno: 'SymbolShapes.moon', text: _UNO('.uno:SymbolShapes.moon')},
+			{img: 'symbolshapes_lightning', uno: 'SymbolShapes.lightning', text: _UNO('.uno:SymbolShapes.lightning')},
+			{img: 'symbolshapes_heart', uno: 'SymbolShapes.heart', text: _UNO('.uno:SymbolShapes.heart')},
+			{img: 'symbolshapes_flower', uno: 'SymbolShapes.flower', text: _UNO('.uno:SymbolShapes.flower')},
 
-			{img: 'symbolshapes_cloud', uno: 'SymbolShapes.cloud'},
-			{img: 'symbolshapes_forbidden', uno: 'SymbolShapes.forbidden'},
-			{img: 'symbolshapes_puzzle', uno: 'SymbolShapes.puzzle'},
-			{img: 'symbolshapes_bracket-pair', uno: 'SymbolShapes.bracket-pair'},
-			{img: 'symbolshapes_left-bracket', uno: 'SymbolShapes.left-bracket'},
-			{img: 'symbolshapes_right-bracket', uno: 'SymbolShapes.right-bracket'},
+			{img: 'symbolshapes_cloud', uno: 'SymbolShapes.cloud', text: _UNO('.uno:SymbolShapes.cloud')},
+			{img: 'symbolshapes_forbidden', uno: 'SymbolShapes.forbidden', text: _UNO('.uno:SymbolShapes.forbidden')},
+			{img: 'symbolshapes_puzzle', uno: 'SymbolShapes.puzzle', text: _UNO('.uno:SymbolShapes.puzzle')},
+			{img: 'symbolshapes_bracket-pair', uno: 'SymbolShapes.bracket-pair', text: _UNO('.uno:SymbolShapes.bracket-pair')},
+			{img: 'symbolshapes_left-bracket', uno: 'SymbolShapes.left-bracket', text: _UNO('.uno:SymbolShapes.left-bracket')},
+			{img: 'symbolshapes_right-bracket', uno: 'SymbolShapes.right-bracket', text: _UNO('.uno:SymbolShapes.right-bracket')},
 
-			{img: 'symbolshapes_brace-pair', uno: 'SymbolShapes.brace-pair'},
-			{img: 'symbolshapes_left-brace', uno: 'SymbolShapes.left-brace'},
-			{img: 'symbolshapes_right-brace', uno: 'SymbolShapes.right-brace'},
-			{img: 'symbolshapes_quad-bevel', uno: 'SymbolShapes.quad-bevel'},
-			{img: 'symbolshapes_octagon-bevel', uno: 'SymbolShapes.octagon-bevel'},
-			{img: 'symbolshapes_diamond-bevel', uno: 'SymbolShapes.diamond-bevel'}
+			{img: 'symbolshapes_brace-pair', uno: 'SymbolShapes.brace-pair', text: _UNO('.uno:SymbolShapes.brace-pair')},
+			{img: 'symbolshapes_left-brace', uno: 'SymbolShapes.left-brace', text: _UNO('.uno:SymbolShapes.left-brace')},
+			{img: 'symbolshapes_right-brace', uno: 'SymbolShapes.right-brace', text: _UNO('.uno:SymbolShapes.right-brace')},
+			{img: 'symbolshapes_quad-bevel', uno: 'SymbolShapes.quad-bevel', text: _UNO('.uno:SymbolShapes.quad-bevel')},
+			{img: 'symbolshapes_octagon-bevel', uno: 'SymbolShapes.octagon-bevel', text: _UNO('.uno:SymbolShapes.octagon-bevel')},
+			{img: 'symbolshapes_diamond-bevel', uno: 'SymbolShapes.diamond-bevel', text: _UNO('.uno:SymbolShapes.diamond-bevel')}
 		],
 
 		'Block Arrows': [
-			{img: 'arrowshapes_left-arrow', uno: 'ArrowShapes.left-arrow'},
-			{img: 'arrowshapes_right-arrow', uno: 'ArrowShapes.right-arrow'},
-			{img: 'arrowshapes_up-arrow', uno: 'ArrowShapes.up-arrow'},
-			{img: 'arrowshapes_down-arrow', uno: 'ArrowShapes.down-arrow'},
-			{img: 'arrowshapes_left-right-arrow', uno: 'ArrowShapes.left-right-arrow'},
-			{img: 'arrowshapes_up-down-arrow', uno: 'ArrowShapes.up-down-arrow'},
+			{img: 'arrowshapes_left-arrow', uno: 'ArrowShapes.left-arrow', text: _UNO('.uno:ArrowShapes.left-arrow')},
+			{img: 'arrowshapes_right-arrow', uno: 'ArrowShapes.right-arrow', text: _UNO('.uno:ArrowShapes.right-arrow')},
+			{img: 'arrowshapes_up-arrow', uno: 'ArrowShapes.up-arrow', text: _UNO('.uno:ArrowShapes.up-arrow')},
+			{img: 'arrowshapes_down-arrow', uno: 'ArrowShapes.down-arrow', text: _UNO('.uno:ArrowShapes.down-arrow')},
+			{img: 'arrowshapes_left-right-arrow', uno: 'ArrowShapes.left-right-arrow', text: _UNO('.uno:ArrowShapes.left-right-arrow')},
+			{img: 'arrowshapes_up-down-arrow', uno: 'ArrowShapes.up-down-arrow', text: _UNO('.uno:ArrowShapes.up-down-arrow')},
 
-			{img: 'arrowshapes_up-right-arrow', uno: 'ArrowShapes.up-right-arrow'},
-			{img: 'arrowshapes_up-right-down-arrow', uno: 'ArrowShapes.up-right-down-arrow'},
-			{img: 'arrowshapes_quad-arrow', uno: 'ArrowShapes.quad-arrow'},
-			{img: 'arrowshapes_corner-right-arrow', uno: 'ArrowShapes.corner-right-arrow'},
-			{img: 'arrowshapes_split-arrow', uno: 'ArrowShapes.split-arrow'},
-			{img: 'arrowshapes_striped-right-arrow', uno: 'ArrowShapes.striped-right-arrow'},
+			{img: 'arrowshapes_up-right-arrow', uno: 'ArrowShapes.up-right-arrow', text: _UNO('.uno:ArrowShapes.up-right-arrow')},
+			{img: 'arrowshapes_up-right-down-arrow', uno: 'ArrowShapes.up-right-down-arrow', text: _UNO('.uno:ArrowShapes.up-right-down-arrow')},
+			{img: 'arrowshapes_quad-arrow', uno: 'ArrowShapes.quad-arrow', text: _UNO('.uno:ArrowShapes.quad-arrow')},
+			{img: 'arrowshapes_corner-right-arrow', uno: 'ArrowShapes.corner-right-arrow', text: _UNO('.uno:ArrowShapes.corner-right-arrow')},
+			{img: 'arrowshapes_split-arrow', uno: 'ArrowShapes.split-arrow', text: _UNO('.uno:ArrowShapes.split-arrow')},
+			{img: 'arrowshapes_striped-right-arrow', uno: 'ArrowShapes.striped-right-arrow', text: _UNO('.uno:ArrowShapes.striped-right-arrow')},
 
-			{img: 'arrowshapes_notched-right-arrow', uno: 'ArrowShapes.notched-right-arrow'},
-			{img: 'arrowshapes_pentagon-right', uno: 'ArrowShapes.pentagon-right'},
-			{img: 'arrowshapes_chevron', uno: 'ArrowShapes.chevron'},
-			{img: 'arrowshapes_right-arrow-callout', uno: 'ArrowShapes.right-arrow-callout'},
-			{img: 'arrowshapes_left-arrow-callout', uno: 'ArrowShapes.left-arrow-callout'},
-			{img: 'arrowshapes_up-arrow-callout', uno: 'ArrowShapes.up-arrow-callout'},
+			{img: 'arrowshapes_notched-right-arrow', uno: 'ArrowShapes.notched-right-arrow', text: _UNO('.uno:ArrowShapes.notched-right-arrow')},
+			{img: 'arrowshapes_pentagon-right', uno: 'ArrowShapes.pentagon-right', text: _UNO('.uno:ArrowShapes.pentagon-right')},
+			{img: 'arrowshapes_chevron', uno: 'ArrowShapes.chevron', text: _UNO('.uno:ArrowShapes.chevron')},
+			{img: 'arrowshapes_right-arrow-callout', uno: 'ArrowShapes.right-arrow-callout', text: _UNO('.uno:ArrowShapes.right-arrow-callout')},
+			{img: 'arrowshapes_left-arrow-callout', uno: 'ArrowShapes.left-arrow-callout', text: _UNO('.uno:ArrowShapes.left-arrow-callout')},
+			{img: 'arrowshapes_up-arrow-callout', uno: 'ArrowShapes.up-arrow-callout', text: _UNO('.uno:ArrowShapes.up-arrow-callout')},
 
-			{img: 'arrowshapes_down-arrow-callout', uno: 'ArrowShapes.down-arrow-callout'},
-			{img: 'arrowshapes_left-right-arrow-callout', uno: 'ArrowShapes.left-right-arrow-callout'},
-			{img: 'arrowshapes_up-down-arrow-callout', uno: 'ArrowShapes.up-down-arrow-callout'},
-			{img: 'arrowshapes_up-right-arrow-callout', uno: 'ArrowShapes.up-right-arrow-callout'},
-			{img: 'arrowshapes_quad-arrow-callout', uno: 'ArrowShapes.quad-arrow-callout'},
-			{img: 'arrowshapes_circular-arrow', uno: 'ArrowShapes.circular-arrow'},
+			{img: 'arrowshapes_down-arrow-callout', uno: 'ArrowShapes.down-arrow-callout', text: _UNO('.uno:ArrowShapes.down-arrow-callout')},
+			{img: 'arrowshapes_left-right-arrow-callout', uno: 'ArrowShapes.left-right-arrow-callout', text: _UNO('.uno:ArrowShapes.left-right-arrow-callout')},
+			{img: 'arrowshapes_up-down-arrow-callout', uno: 'ArrowShapes.up-down-arrow-callout', text: _UNO('.uno:ArrowShapes.up-down-arrow-callout')},
+			{img: 'arrowshapes_up-right-arrow-callout', uno: 'ArrowShapes.up-right-arrow-callout', text: _UNO('.uno:ArrowShapes.up-right-arrow-callout')},
+			{img: 'arrowshapes_quad-arrow-callout', uno: 'ArrowShapes.quad-arrow-callout', text: _UNO('.uno:ArrowShapes.quad-arrow-callout')},
+			{img: 'arrowshapes_circular-arrow', uno: 'ArrowShapes.circular-arrow', text: _UNO('.uno:ArrowShapes.circular-arrow')},
 
-			{img: 'arrowshapes_split-round-arrow', uno: 'ArrowShapes.split-round-arrow'},
-			{img: 'arrowshapes_s-sharped-arrow', uno: 'ArrowShapes.s-sharped-arrow'}
+			{img: 'arrowshapes_split-round-arrow', uno: 'ArrowShapes.split-round-arrow', text: _UNO('.uno:ArrowShapes.split-round-arrow')},
+			{img: 'arrowshapes_s-sharped-arrow', uno: 'ArrowShapes.s-sharped-arrow', text: _UNO('.uno:ArrowShapes.s-sharped-arrow')}
 		],
 
 		'Stars and Banners': [
-			{img: 'starshapes_bang', uno: 'StarShapes.bang'},
-			{img: 'starshapes_star4', uno: 'StarShapes.star4'},
-			{img: 'starshapes_star5', uno: 'StarShapes.star5'},
-			{img: 'starshapes_star6', uno: 'StarShapes.star6'},
-			{img: 'starshapes_star8', uno: 'StarShapes.star8'},
-			{img: 'starshapes_star12', uno: 'StarShapes.star12'},
+			{img: 'starshapes_bang', uno: 'StarShapes.bang', text: _UNO('.uno:StarShapes.bang')},
+			{img: 'starshapes_star4', uno: 'StarShapes.star4', text: _UNO('.uno:StarShapes.star4')},
+			{img: 'starshapes_star5', uno: 'StarShapes.star5', text: _UNO('.uno:StarShapes.star5')},
+			{img: 'starshapes_star6', uno: 'StarShapes.star6', text: _UNO('.uno:StarShapes.star6')},
+			{img: 'starshapes_star8', uno: 'StarShapes.star8', text: _UNO('.uno:StarShapes.star8')},
+			{img: 'starshapes_star12', uno: 'StarShapes.star12', text: _UNO('.uno:StarShapes.star12')},
 
-			{img: 'starshapes_star24', uno: 'StarShapes.star24'},
-			{img: 'starshapes_concave-star6', uno: 'StarShapes.concave-star6'},
-			{img: 'starshapes_vertical-scroll', uno: 'StarShapes.vertical-scroll'},
-			{img: 'starshapes_horizontal-scroll', uno: 'StarShapes.horizontal-scroll'},
-			{img: 'starshapes_signet', uno: 'StarShapes.signet'},
-			{img: 'starshapes_doorplate', uno: 'StarShapes.doorplate'}
+			{img: 'starshapes_star24', uno: 'StarShapes.star24', text: _UNO('.uno:StarShapes.star24')},
+			{img: 'starshapes_concave-star6', uno: 'StarShapes.concave-star6', text: _UNO('.uno:StarShapes.concave-star6')},
+			{img: 'starshapes_vertical-scroll', uno: 'StarShapes.vertical-scroll', text: _UNO('.uno:StarShapes.vertical-scroll')},
+			{img: 'starshapes_horizontal-scroll', uno: 'StarShapes.horizontal-scroll', text: _UNO('.uno:StarShapes.horizontal-scroll')},
+			{img: 'starshapes_signet', uno: 'StarShapes.signet', text: _UNO('.uno:StarShapes.signet')},
+			{img: 'starshapes_doorplate', uno: 'StarShapes.doorplate', text: _UNO('.uno:StarShapes.doorplate')}
 		],
 
 		'Callouts': [
-			{img: 'calloutshapes_rectangular-callout', uno: 'CalloutShapes.rectangular-callout'},
-			{img: 'calloutshapes_round-rectangular-callout', uno: 'CalloutShapes.round-rectangular-callout'},
-			{img: 'calloutshapes_round-callout', uno: 'CalloutShapes.round-callout'},
-			{img: 'calloutshapes_cloud-callout', uno: 'CalloutShapes.cloud-callout'},
-			{img: 'calloutshapes_line-callout-1', uno: 'CalloutShapes.line-callout-1'},
-			{img: 'calloutshapes_line-callout-2', uno: 'CalloutShapes.line-callout-2'},
-			{img: 'calloutshapes_line-callout-3', uno: 'CalloutShapes.line-callout-3'}
+			{img: 'calloutshapes_rectangular-callout', uno: 'CalloutShapes.rectangular-callout', text: _UNO('.uno:CalloutShapes.rectangular-callout')},
+			{img: 'calloutshapes_round-rectangular-callout',uno: 'CalloutShapes.round-rectangular-callout', text: _UNO('.uno:CalloutShapes.round-rectangular-callout')},
+			{img: 'calloutshapes_round-callout', uno: 'CalloutShapes.round-callout', text: _UNO('.uno:CalloutShapes.round-callout')},
+			{img: 'calloutshapes_cloud-callout', uno: 'CalloutShapes.cloud-callout', text: _UNO('.uno:CalloutShapes.cloud-callout')},
+			{img: 'calloutshapes_line-callout-1', uno: 'CalloutShapes.line-callout-1', text: _UNO('.uno:CalloutShapes.line-callout-1')},
+			{img: 'calloutshapes_line-callout-2', uno: 'CalloutShapes.line-callout-2', text: _UNO('.uno:CalloutShapes.line-callout-2')},
+			{img: 'calloutshapes_line-callout-3', uno: 'CalloutShapes.line-callout-3', text: _UNO('.uno:CalloutShapes.line-callout-3')}
 		],
 
 		'Flowchart': [
-			{img: 'flowchartshapes_flowchart-process', uno: 'FlowchartShapes.flowchart-process'},
-			{img: 'flowchartshapes_flowchart-alternate-process', uno: 'FlowchartShapes.flowchart-alternate-process'},
-			{img: 'flowchartshapes_flowchart-decision', uno: 'FlowchartShapes.flowchart-decision'},
-			{img: 'flowchartshapes_flowchart-data', uno: 'FlowchartShapes.flowchart-data'},
-			{img: 'flowchartshapes_flowchart-predefined-process', uno: 'FlowchartShapes.flowchart-predefined-process'},
-			{img: 'flowchartshapes_flowchart-internal-storage', uno: 'FlowchartShapes.flowchart-internal-storage'},
+			{img: 'flowchartshapes_flowchart-process', uno: 'FlowchartShapes.flowchart-process', text: _UNO('.uno:FlowChartShapes.flowchart-process')},
+			{img: 'flowchartshapes_flowchart-alternate-process', uno: 'FlowchartShapes.flowchart-alternate-process', text: _UNO('.uno:FlowChartShapes.flowchart-alternate-process')},
+			{img: 'flowchartshapes_flowchart-decision', uno: 'FlowchartShapes.flowchart-decision', text: _UNO('.uno:FlowChartShapes.flowchart-decision')},
+			{img: 'flowchartshapes_flowchart-data', uno: 'FlowchartShapes.flowchart-data', text: _UNO('.uno:FlowChartShapes.flowchart-data')},
+			{img: 'flowchartshapes_flowchart-predefined-process', uno: 'FlowchartShapes.flowchart-predefined-process', text: _UNO('.uno:FlowChartShapes.flowchart-predefined-process')},
+			{img: 'flowchartshapes_flowchart-internal-storage', uno: 'FlowchartShapes.flowchart-internal-storage', text: _UNO('.uno:FlowChartShapes.flowchart-internal-storage')},
 
-			{img: 'flowchartshapes_flowchart-document', uno: 'FlowchartShapes.flowchart-document'},
-			{img: 'flowchartshapes_flowchart-multidocument', uno: 'FlowchartShapes.flowchart-multidocument'},
-			{img: 'flowchartshapes_flowchart-terminator', uno: 'FlowchartShapes.flowchart-terminator'},
-			{img: 'flowchartshapes_flowchart-preparation', uno: 'FlowchartShapes.flowchart-preparation'},
-			{img: 'flowchartshapes_flowchart-manual-input', uno: 'FlowchartShapes.flowchart-manual-input'},
-			{img: 'flowchartshapes_flowchart-manual-operation', uno: 'FlowchartShapes.flowchart-manual-operation'},
+			{img: 'flowchartshapes_flowchart-document', uno: 'FlowchartShapes.flowchart-document', text: _UNO('.uno:FlowChartShapes.flowchart-document')},
+			{img: 'flowchartshapes_flowchart-multidocument', uno: 'FlowchartShapes.flowchart-multidocument', text: _UNO('.uno:FlowChartShapes.flowchart-multidocument')},
+			{img: 'flowchartshapes_flowchart-terminator', uno: 'FlowchartShapes.flowchart-terminator', text: _UNO('.uno:FlowChartShapes.flowchart-terminator')},
+			{img: 'flowchartshapes_flowchart-preparation', uno: 'FlowchartShapes.flowchart-preparation', text: _UNO('.uno:FlowChartShapes.flowchart-preparation')},
+			{img: 'flowchartshapes_flowchart-manual-input', uno: 'FlowchartShapes.flowchart-manual-input', text: _UNO('.uno:FlowChartShapes.flowchart-manual-input')},
+			{img: 'flowchartshapes_flowchart-manual-operation', uno: 'FlowchartShapes.flowchart-manual-operation', text: _UNO('.uno:FlowChartShapes.flowchart-manual-operation')},
 
-			{img: 'flowchartshapes_flowchart-connector', uno: 'FlowchartShapes.flowchart-connector'},
-			{img: 'flowchartshapes_flowchart-off-page-connector', uno: 'FlowchartShapes.flowchart-off-page-connector'},
-			{img: 'flowchartshapes_flowchart-card', uno: 'FlowchartShapes.flowchart-card'},
-			{img: 'flowchartshapes_flowchart-punched-tape', uno: 'FlowchartShapes.flowchart-punched-tape'},
-			{img: 'flowchartshapes_flowchart-summing-junction', uno: 'FlowchartShapes.flowchart-summing-junction'},
-			{img: 'flowchartshapes_flowchart-or', uno: 'FlowchartShapes.flowchart-or'},
+			{img: 'flowchartshapes_flowchart-connector', uno: 'FlowchartShapes.flowchart-connector', text: _UNO('.uno:FlowChartShapes.flowchart-connector')},
+			{img: 'flowchartshapes_flowchart-off-page-connector', uno: 'FlowchartShapes.flowchart-off-page-connector', text: _UNO('.uno:FlowChartShapes.flowchart-off-page-connector')},
+			{img: 'flowchartshapes_flowchart-card', uno: 'FlowchartShapes.flowchart-card', text: _UNO('.uno:FlowChartShapes.flowchart-card')},
+			{img: 'flowchartshapes_flowchart-punched-tape', uno: 'FlowchartShapes.flowchart-punched-tape', text: _UNO('.uno:FlowChartShapes.flowchart-punched-tape')},
+			{img: 'flowchartshapes_flowchart-summing-junction', uno: 'FlowchartShapes.flowchart-summing-junction', text: _UNO('.uno:FlowChartShapes.flowchart-summing-junction')},
+			{img: 'flowchartshapes_flowchart-or', uno: 'FlowchartShapes.flowchart-or', text: _UNO('.uno:FlowChartShapes.flowchart-or')},
 
-			{img: 'flowchartshapes_flowchart-collate', uno: 'FlowchartShapes.flowchart-collate'},
-			{img: 'flowchartshapes_flowchart-sort', uno: 'FlowchartShapes.flowchart-sort'},
-			{img: 'flowchartshapes_flowchart-extract', uno: 'FlowchartShapes.flowchart-extract'},
-			{img: 'flowchartshapes_flowchart-merge', uno: 'FlowchartShapes.flowchart-merge'},
-			{img: 'flowchartshapes_flowchart-stored-data', uno: 'FlowchartShapes.flowchart-stored-data'},
-			{img: 'flowchartshapes_flowchart-delay', uno: 'FlowchartShapes.flowchart-delay'},
+			{img: 'flowchartshapes_flowchart-collate', uno: 'FlowchartShapes.flowchart-collate', text: _UNO('.uno:FlowChartShapes.flowchart-collate')},
+			{img: 'flowchartshapes_flowchart-sort', uno: 'FlowchartShapes.flowchart-sort', text: _UNO('.uno:FlowChartShapes.flowchart-sort')},
+			{img: 'flowchartshapes_flowchart-extract', uno: 'FlowchartShapes.flowchart-extract', text: _UNO('.uno:FlowChartShapes.flowchart-extract')},
+			{img: 'flowchartshapes_flowchart-merge', uno: 'FlowchartShapes.flowchart-merge', text: _UNO('.uno:FlowChartShapes.flowchart-merge')},
+			{img: 'flowchartshapes_flowchart-stored-data', uno: 'FlowchartShapes.flowchart-stored-data', text: _UNO('.uno:FlowChartShapes.flowchart-stored-data')},
+			{img: 'flowchartshapes_flowchart-delay', uno: 'FlowchartShapes.flowchart-delay', text: _UNO('.uno:FlowChartShapes.flowchart-delay')},
 
-			{img: 'flowchartshapes_flowchart-sequential-access', uno: 'FlowchartShapes.flowchart-sequential-access'},
-			{img: 'flowchartshapes_flowchart-magnetic-disk', uno: 'FlowchartShapes.flowchart-magnetic-disk'},
-			{img: 'flowchartshapes_flowchart-direct-access-storage', uno: 'FlowchartShapes.flowchart-direct-access-storage'},
-			{img: 'flowchartshapes_flowchart-display', uno: 'FlowchartShapes.flowchart-display'}
+			{img: 'flowchartshapes_flowchart-sequential-access', uno: 'FlowchartShapes.flowchart-sequential-access', text: _UNO('.uno:FlowChartShapes.flowchart-sequential-access')},
+			{img: 'flowchartshapes_flowchart-magnetic-disk', uno: 'FlowchartShapes.flowchart-magnetic-disk', text: _UNO('.uno:FlowChartShapes.flowchart-magnetic-disk')},
+			{img: 'flowchartshapes_flowchart-direct-access-storage', uno: 'FlowchartShapes.flowchart-direct-access-storage', text: _UNO('.uno:FlowChartShapes.flowchart-direct-access-storage')},
+			{img: 'flowchartshapes_flowchart-display', uno: 'FlowchartShapes.flowchart-display', text: _UNO('.uno:FlowChartShapes.flowchart-display')}
 		]
 	},
 	'insertconnectors': {
 		'Connectors': [
-			{img: 'connectors_connector', uno: 'Connector'},
-			{img: 'connectors_connectorarrows', uno: 'ConnectorArrows'},
-			{img: 'connectors_connectorarrowend', uno: 'ConnectorArrowEnd'},
-			{img: 'connectors_connectorlinearrowend', uno: 'ConnectorLineArrowEnd'},
-			{img: 'connectors_connectorcurvearrowend', uno: 'ConnectorCurveArrowEnd'},
-			{img: 'connectors_connectorlinesarrowend', uno: 'ConnectorLinesArrowEnd'},
-			{img: 'connectors_connectorline', uno: 'ConnectorLine'},
-			{img: 'connectors_connectorcurve', uno: 'ConnectorCurve'},
-			{img: 'connectors_connectorlines', uno: 'ConnectorLines'},
-			{img: 'connectors_connectorlinearrows', uno: 'ConnectorLineArrows'},
-			{img: 'connectors_connectorcurvearrows', uno: 'ConnectorCurvearrows'}
+			{img: 'connectors_connector', uno: 'Connector', text: _UNO('.uno:Connector', 'presentation')},
+			{img: 'connectors_connectorarrows', uno: 'ConnectorArrows', text: _UNO('.uno:ConnectorArrows', 'presentation')},
+			{img: 'connectors_connectorarrowend', uno: 'ConnectorArrowEnd', text: _UNO('.uno:ConnectorArrowEnd', 'presentation')},
+			{img: 'connectors_connectorlinearrowend', uno: 'ConnectorLineArrowEnd', text: _UNO('.uno:ConnectorLineArrowEnd', 'presentation')},
+			{img: 'connectors_connectorcurvearrowend', uno: 'ConnectorCurveArrowEnd', text: _UNO('.uno:ConnectorCurveArrowEnd', 'presentation')},
+			{img: 'connectors_connectorlinesarrowend', uno: 'ConnectorLinesArrowEnd', text: _UNO('.uno:ConnectorLinesArrowEnd', 'presentation')},
+			{img: 'connectors_connectorline', uno: 'ConnectorLine', text: _UNO('.uno:ConnectorLine', 'presentation')},
+			{img: 'connectors_connectorcurve', uno: 'ConnectorCurve', text: _UNO('.uno:ConnectorCurve', 'presentation')},
+			{img: 'connectors_connectorlines', uno: 'ConnectorLines', text: _UNO('.uno:ConnectorLines', 'presentation')},
+			{img: 'connectors_connectorlinearrows', uno: 'ConnectorLineArrows', text: _UNO('.uno:ConnectorLineArrows', 'presentation')},
+			{img: 'connectors_connectorcurvearrows', uno: 'ConnectorCurvearrows', text: _UNO('.uno:ConnectorCurveArrows', 'presentation')}
 		]
 	}
 };
 
 function createShapesPanel(shapeType) {
-	var $grid = $('<div/>').addClass('insertshape-grid');
+	const wrapper = document.createElement('div');
+	wrapper.className = 'ui-grid-cell';
+	wrapper.id = 'insertshape-wrapper';
+
+	const grid = document.createElement('div');
+	grid.className = 'insertshape-grid insertshapes';
+
 	var collection = shapes[shapeType];
 
 	for (var s in collection) {
-		var $rowHeader = $('<div/>').addClass('row-header cool-font').append(_(s));
-		$grid.append($rowHeader);
-		var $row = $('<div/>').addClass('row');
-		$grid.append($row);
-		for (var idx = 0; idx < collection[s].length; ++idx) {
-			var shape = collection[s][idx];
-			var $col = $('<div/>').addClass('col w2ui-icon').addClass(shape.img);
-			$col.data('uno', shape.uno);
-			$row.append($col);
+		const rowHeader = document.createElement('div');
+		rowHeader.className = 'row-header cool-font';
+		rowHeader.textContent = _(s);
+		grid.appendChild(rowHeader);
+
+		const row = document.createElement('div');
+		row.className = 'row';
+		grid.appendChild(row);
+
+		for (let idx = 0; idx < collection[s].length; ++idx) {
+			const shape = collection[s][idx];
+
+			const col = document.createElement('div');
+			col.className = 'col w2ui-icon ' + shape.img;
+			col.dataset.uno = shape.uno;
+			row.appendChild(col);
 		}
 	}
 
-	$grid.on({
-		click: function(e) {
-			map.sendUnoCommand('.uno:' + $(e.target).data().uno);
-			map._docLayer._closeMobileWizard();
-		}
-	});
+	grid.onclick = function(e) {
+		map.sendUnoCommand('.uno:' + e.target.dataset.uno);
+		map._docLayer._closeMobileWizard();
+	};
 
-	return $grid.get(0);
+	wrapper.appendChild(grid);
+
+	return wrapper;
 }
 
 var onShapeClickFunction = function(e) {
-	app.map.sendUnoCommand('.uno:' + $(e.target).data().uno);
+	let name = $(e.target).data().uno;
+	if (!name)
+		return;
+	app.map.sendUnoCommand('.uno:' + name);
 	closePopup();
 	e.stopPropagation();
 };
@@ -469,41 +582,48 @@ var onShapeKeyDownFunction = function(event) {
 		closePopup();
 		app.map.focus();
 	}
-	event.stopPropagation();
 };
 
-function insertShapes(shapeType, $grid = $('.insertshape-grid')) {
+function insertShapes(shapeType, grid = document.getElementsByClassName('insertshape-grid')[0], width) {
 
-	var width = 10;
-	$grid.addClass(shapeType);
+	grid.classList.add(shapeType);
 
 	if (window.mode.isDesktop() || window.mode.isTablet())
-		$grid.css('margin-botttom', '0px');
+		grid.style.marginBottom = '0px';
 
-	if ($grid.children().length > 0)
+	if (grid.firstChild)
 		return;
 
 	var collection = shapes[shapeType];
 
-	for (var s in collection) {
-		var $rowHeader = $('<div/>').addClass('row-header cool-font').append(_(s));
-		$grid.append($rowHeader);
+	for (let s in collection) {
+		const rowHeader = document.createElement('div');
+		rowHeader.className = 'row-header cool-font';
+		rowHeader.textContent = _(s);
+		grid.appendChild(rowHeader);
 
 		var rows = Math.ceil(collection[s].length / width);
 		var idx = 0;
-		for (var r = 0; r < rows; r++) {
-			var $row = $('<div/>').addClass('row');
-			$grid.append($row);
-			for (var c = 0; c < width; c++) {
+		const row = document.createElement('div');
+		row.className = 'row';
+		grid.appendChild(row);
+		for (let r = 0; r < rows; r++) {
+
+			for (let c = 0; c < width; c++) {
 				if (idx >= collection[s].length) {
 					break;
 				}
-				var shape = collection[s][idx++];
-				var col = document.createElement('div');
+
+				const shape = collection[s][idx++];
+				const col = document.createElement('div');
+
 				col.className = 'col w2ui-icon ' + shape.img;
 				col.dataset.uno = shape.uno;
+				col.setAttribute('data-cooltip', shape.text);
+				window.L.control.attachTooltipEventListener(col, map);
 				col.tabIndex = 0;
-				$row.append(col);
+				col.setAttribute('index', r + ':' + c);
+				row.appendChild(col);
 			}
 
 			if (idx >= collection[s].length)
@@ -512,39 +632,68 @@ function insertShapes(shapeType, $grid = $('.insertshape-grid')) {
 	}
 }
 
-function getShapesPopupHtml(closeCallback) {
+function getShapesPopupElements(closeCallback) {
 	lastClosePopupCallback = closeCallback;
-	var grid = $('<div><div class="insertshape-grid" onclick="onShapeClickFunction(event)" \
-		onkeyup="onShapeKeyUpFunction(event)" onkeydown="onShapeKeyDownFunction(event)"></div></div>');
 
-	insertShapes('insertshapes', grid.children('.insertshape-grid'));
+	const grid = document.createElement('div');
+	grid.className = 'insertshape-grid';
+	grid.onclick = onShapeClickFunction;
+	grid.onkeyup = onShapeKeyUpFunction;
+	grid.onkeydown = onShapeKeyDownFunction;
 
-	var wrapper = $('<div><div id="insertshape-wrapper">\
-		<div id="insertshape-popup" tabIndex=0 class="insertshape-pop ui-widget ui-corner-all">\
-		' + grid.html() + ' \
-		</div></div></div>');
+	const container = document.createElement('div');
+	container.appendChild(grid);
 
-	return wrapper.html();
+	insertShapes('insertshapes', container.children[0], 10);
+
+	const wrapperContainer = document.createElement('div');
+
+	const wrapper = document.createElement('div');
+	wrapper.id = 'insertshape-wrapper';
+
+	wrapperContainer.appendChild(wrapper);
+
+	const popUp = document.createElement('div');
+	popUp.id = 'insertshape-popup';
+	popUp.className = 'insertshape-pop ui-widget ui-corner-all';
+
+	wrapperContainer.appendChild(popUp);
+
+	popUp.appendChild(grid);
+
+	return wrapperContainer;
 }
 
-function getConnectorsPopupHtml(closeCallback) {
+function getConnectorsPopupElements(closeCallback) {
 	lastClosePopupCallback = closeCallback;
-	var grid = $('<div><div class="insertshape-grid" onclick="onShapeClickFunction(event)" \
-		onkeyup="onShapeKeyUpFunction(event)" onkeydown="onShapeKeyDownFunction(event)"></div></div>');
 
-	insertShapes('insertconnectors', grid.children('.insertshape-grid'));
+	const gridContainer = document.createElement('div');
 
-	var wrapper = $('<div><div id="insertshape-wrapper">\
-		<div id="insertshape-popup" tabIndex=0 class="insertshape-pop ui-widget ui-corner-all">\
-		' + grid.html() + ' \
-		</div></div></div>');
+	const grid = document.createElement('div');
+	grid.className = 'insertshape-grid';
+	grid.onclick = onShapeClickFunction;
+	grid.onkeyup = onShapeKeyUpFunction;
+	grid.onkeydown = onShapeKeyDownFunction;
 
-	return wrapper.html();
-}
+	gridContainer.appendChild(grid);
 
-function getColorPickerHTML(id) {
-	return '<div id="' + id +'-wrapper' + '">\
-			</div>';
+	insertShapes('insertconnectors', gridContainer.children[0], 2);
+
+
+	const wrapperContainer = document.createElement('div');
+	const wrapper = document.createElement('div');
+
+	wrapper.id = 'insertshape-wrapper';
+
+	const popUp = document.createElement('div');
+	popUp.id = 'insertshape-popup';
+	popUp.className = 'insertshape-pop ui-widget ui-corner-all';
+
+	wrapperContainer.appendChild(wrapper);
+	wrapperContainer.appendChild(popUp);
+	popUp.appendChild(grid);
+
+	return wrapperContainer;
 }
 
 function getColorPickerData(type) {
@@ -577,13 +726,6 @@ function getColorPickerData(type) {
 		vertical: 'true'
 	};
 	return data;
-}
-
-function setupSearchInput() {
-	$('#search-input').off('input', onSearchInput).on('input', onSearchInput);
-	$('#search-input').off('keydown', onSearchKeyDown).on('keydown', onSearchKeyDown);
-	$('#search-input').off('focus', onSearchFocus).on('focus', onSearchFocus);
-	$('#search-input').off('blur', onSearchBlur).on('blur', onSearchBlur);
 }
 
 function unoCmdToToolbarId(commandname)
@@ -640,68 +782,12 @@ function unoCmdToToolbarId(commandname)
 	return id;
 }
 
-function updateSearchButtons() {
-	var toolbar = window.mode.isMobile() ? app.map.mobileSearchBar: app.map.statusBar;
-	if (!toolbar) {
-		console.debug('Cannot find search bar');
-		return;
-	}
-
-	// conditionally disabling until, we find a solution for tdf#108577
-	if (L.DomUtil.get('search-input').value === '') {
-		toolbar.enableItem('searchprev', false);
-		toolbar.enableItem('searchnext', false);
-		toolbar.showItem('cancelsearch', false);
-	} else {
-		toolbar.enableItem('searchprev', true);
-		toolbar.enableItem('searchnext', true);
-		toolbar.showItem('cancelsearch', true);
-	}
-}
-
-function onSearchInput() {
-	updateSearchButtons();
-	if (map.getDocType() === 'text') {
-		// perform the immediate search in Writer
-		map.search(L.DomUtil.get('search-input').value, false, '', 0, true /* expand search */);
-	}
-}
-
-function onSearchKeyDown(e) {
-	var entry = L.DomUtil.get('search-input');
-	if ((e.keyCode === 71 && e.ctrlKey) || e.keyCode === 114 || e.keyCode === 13) {
-		if (e.shiftKey) {
-			map.search(entry.value, true);
-		} else {
-			map.search(entry.value);
-		}
-		e.preventDefault();
-	} else if (e.ctrlKey && e.keyCode === 70) {
-		entry.focus();
-		entry.select();
-		e.originalEvent.preventDefault();
-	} else if (e.keyCode === 27) {
-		map.cancelSearch();
-	}
-}
-
-function onSearchFocus() {
-	// Start searching.
-	map.fire('searchstart');
-
-	updateSearchButtons();
-}
-
-function onSearchBlur() {
-	map._onGotFocus();
-}
-
-function onInsertFile() {
-	var insertGraphic = L.DomUtil.get('insertgraphic');
+function onInsertGraphic() {
+	var insertGraphic = window.L.DomUtil.get('insertgraphic');
 	if ('files' in insertGraphic) {
 		for (var i = 0; i < insertGraphic.files.length; i++) {
 			var file = insertGraphic.files[i];
-			map.insertFile(file);
+			map.insertGraphic(file);
 		}
 	}
 
@@ -711,8 +797,23 @@ function onInsertFile() {
 	return false;
 }
 
+function onInsertMultimedia() {
+	var insertMultimedia = window.L.DomUtil.get('insertmultimedia');
+	if ('files' in insertMultimedia) {
+		for (var i = 0; i < insertMultimedia.files.length; i++) {
+			var file = insertMultimedia.files[i];
+			map.insertMultimedia(file);
+		}
+	}
+
+	// Set the value to null everytime so that onchange event is triggered,
+	// even if the same file is selected
+	insertMultimedia.value = null;
+	return false;
+}
+
 function onInsertBackground() {
-	var selectBackground = L.DomUtil.get('selectbackground');
+	var selectBackground = window.L.DomUtil.get('selectbackground');
 	if ('files' in selectBackground) {
 		for (var i = 0; i < selectBackground.files.length; i++) {
 			var file = selectBackground.files[i];
@@ -728,7 +829,7 @@ function onInsertBackground() {
 
 function onWopiProps(e) {
 	if (e.DisableCopy) {
-		$('input#addressInput-input').bind('copy', function(evt) {
+		$('#addressInput input').bind('copy', function(evt) {
 			evt.preventDefault();
 		});
 	}
@@ -748,7 +849,6 @@ function processStateChangedCommand(commandName, state) {
 		$('.styles-select').val(state).trigger('change');
 	}
 	else if (commandName === '.uno:FontColor' || commandName === '.uno:Color') {
-		if (!toolbar) return;
 		// confusingly, the .uno: command is named differently in Writer, Calc and Impress
 		color = parseInt(state);
 		if (color === -1) {
@@ -758,16 +858,13 @@ function processStateChangedCommand(commandName, state) {
 			color = color.toString(16);
 			color = '#' + Array(7 - color.length).join('0') + color;
 		}
-		// $('#fontcolor table.w2ui-button .selected-color-classic').css('background-color', color);
-		// $('#fontcolor .w2ui-tb-caption').css('display', 'none');
 
-		div = L.DomUtil.get('fontcolorindicator');
+		div = window.L.DomUtil.get('fontcolorindicator');
 		if (div) {
-			L.DomUtil.setStyle(div, 'background', color);
+			window.L.DomUtil.setStyle(div, 'background', color);
 		}
 	}
 	else if (commandName === '.uno:BackgroundColor' || commandName === '.uno:CharBackColor') {
-		if (!toolbar) return;
 		// confusingly, the .uno: command is named differently in Writer, Calc and Impress
 		color = parseInt(state);
 		if (color === -1) {
@@ -777,25 +874,19 @@ function processStateChangedCommand(commandName, state) {
 			color = color.toString(16);
 			color = '#' + Array(7 - color.length).join('0') + color;
 		}
-		//writer
-		// $('#tb_editbar_item_backcolor table.w2ui-button .selected-color-classic').css('background-color', color);
-		// $('#tb_editbar_item_backcolor .w2ui-tb-caption').css('display', 'none');
 
-		// //calc?
-		// $('#tb_editbar_item_backgroundcolor table.w2ui-button .selected-color-classic').css('background-color', color);
-		// $('#tb_editbar_item_backgroundcolor .w2ui-tb-caption').css('display', 'none');
-
-		div = L.DomUtil.get('backcolorindicator');
+		div = window.L.DomUtil.get('backcolorindicator');
 		if (div) {
-			L.DomUtil.setStyle(div, 'background', color);
+			window.L.DomUtil.setStyle(div, 'background', color);
 		}
 	}
 	else if (commandName === '.uno:ModifiedStatus') {
-		if (document.getElementById('save')) {
-			if (state === 'true')
-				document.getElementById('save').classList.add('savemodified');
+		const saveIcon = document.querySelector('[id^="save"]');
+		if (saveIcon) {
+			if (state === 'true' && map.saveState)
+				map.saveState.showModifiedStatus();
 			else
-				document.getElementById('save').classList.remove('savemodified');
+				saveIcon.classList.remove('savemodified');
 		}
 		state = ''; // stop processing below
 	}
@@ -846,60 +937,6 @@ function onCommandStateChanged(e) {
 	processStateChangedCommand(e.commandName, e.state);
 }
 
-function onUpdateParts(e) {
-	$('#document-container').addClass(e.docType + '-doctype');
-	if (e.docType === 'text') {
-		var current = e.currentPage;
-		var count = e.pages;
-	}
-	else {
-		current = e.selectedPart;
-		count = e.parts;
-	}
-
-	// TODO
-	var toolbar = null;
-	if (!toolbar) {
-		return;
-	}
-
-	if (!window.mode.isMobile()) {
-		if (e.docType === 'presentation') {
-			// TODO
-			//toolbar.set('prev', {hint: _('Previous slide')});
-			//toolbar.set('next', {hint: _('Next slide')});
-		}
-		else {
-			toolbar.showItem('presentation', false);
-			toolbar.showItem('insertpage', false);
-			toolbar.showItem('duplicatepage', false);
-			toolbar.showItem('deletepage', false);
-		}
-	}
-
-	if (app.file.fileBasedView) {
-		toolbar.enableItem('prev', true);
-		toolbar.enableItem('next', true);
-		return;
-	}
-
-	if (e.docType !== 'spreadsheet') {
-		if (current === 0) {
-			toolbar.enableItem('prev', false);
-		}
-		else {
-			toolbar.enableItem('prev', true);
-		}
-
-		if (current === count - 1) {
-			toolbar.enableItem('next', false);
-		}
-		else {
-			toolbar.enableItem('next', true);
-		}
-	}
-}
-
 function onCommandResult(e) {
 	var commandName = e.commandName;
 
@@ -946,7 +983,7 @@ function onCommandResult(e) {
 	} else if (commandName === '.uno:OpenHyperlink') {
 		// allow to process other incoming messages first
 		setTimeout(function () {
-			map._docLayer.scrollToPos(new app.definitions.simplePoint(app.file.textCursor.rectangle.x1, app.file.textCursor.rectangle.y1));
+			map._docLayer.scrollToPos(new cool.SimplePoint(app.file.textCursor.rectangle.x1, app.file.textCursor.rectangle.y1));
 		}, 0);
 	}
 }
@@ -955,7 +992,7 @@ function onUpdatePermission(e) {
 	var toolbar = window.mode.isMobile() ? app.map.mobileBottomBar : app.map.topToolbar;
 	if (toolbar) {
 		// always enabled items
-		var enabledButtons = ['closemobile', 'undo', 'redo', 'hamburger-tablet'];
+		var enabledButtons = ['closemobile', 'undo', 'redo', 'fold'];
 
 		// copy the first array
 		var items = toolbar.getToolItems(app.map.getDocType()).slice();
@@ -963,7 +1000,7 @@ function onUpdatePermission(e) {
 			var found = enabledButtons.filter(function(id) { return id === items[idx].id; });
 			var alwaysEnable = found.length !== 0;
 
-			if (e.perm === 'edit') {
+			if (e.detail.perm === 'edit') {
 				var unoCmd = map.getDocType() === 'spreadsheet' ? items[idx].unosheet : getUNOCommand(items[idx].uno);
 				var keepDisabled = map['stateChangeHandler'].getItemValue(unoCmd) === 'disabled';
 				if (!keepDisabled || alwaysEnable)
@@ -977,7 +1014,10 @@ function onUpdatePermission(e) {
 			}
 		}
 
-		if (e.perm === 'edit') {
+		if (window.mode.isDesktop())
+			return;
+
+		if (e.detail.perm === 'edit') {
 			$('#toolbar-mobile-back').removeClass('editmode-off');
 			$('#toolbar-mobile-back').addClass('editmode-on');
 			toolbar.updateItem({id: 'closemobile', type: 'customtoolitem', w2icon: 'editmode'});
@@ -1008,21 +1048,34 @@ global.editorUpdate = editorUpdate;
 
 $(document).ready(function() {
 	// Attach insert file action
-	$('#insertgraphic').on('change', onInsertFile);
-	$('#selectbackground').on('change', onInsertBackground);
+	// Update supported media mime type insertion
+	const supportedGraphicMime = app.LOUtil.graphicMimeFilter.join(",");
+	const supportedMediaMime = app.LOUtil.mediaMimeFilter.join(",");
+
+	const insertgraphic = window.L.DomUtil.get('insertgraphic');
+	if (insertgraphic) {
+		insertgraphic.accept = supportedGraphicMime;
+		insertgraphic.addEventListener('change', onInsertGraphic);
+	}
+
+	const insertmultimedia = window.L.DomUtil.get('insertmultimedia');
+	if (insertmultimedia) {
+		insertmultimedia.accept = supportedMediaMime;
+		insertmultimedia.addEventListener('change', onInsertMultimedia);
+	}
+
+	const selectbackground = window.L.DomUtil.get('selectbackground');
+	if (selectbackground) {
+		selectbackground.accept = supportedGraphicMime;
+		selectbackground.addEventListener('change', onInsertBackground);
+	}
 });
 
 function setupToolbar(e) {
 	map = e;
 
-	map.on('focussearch', function () {
-		var entry = L.DomUtil.get('search-input');
-		entry.focus();
-		entry.select();
-	});
-
 	map.on('search', function (e) {
-		var searchInput = L.DomUtil.get('search-input');
+		var searchInput = window.L.DomUtil.get('search-input');
 		var toolbar = window.mode.isMobile() ? app.map.mobileSearchBar: app.map.statusBar;
 		if (!toolbar) {
 			console.debug('Cannot find search bar');
@@ -1031,13 +1084,20 @@ function setupToolbar(e) {
 		if (e.count === 0) {
 			toolbar.enableItem('searchprev', false);
 			toolbar.enableItem('searchnext', false);
-			toolbar.showItem('cancelsearch', false);
-			L.DomUtil.addClass(searchInput, 'search-not-found');
+			if (window.mode.isMobile()) {
+				toolbar.enableItem('cancelsearch', false);
+			} else {
+				toolbar.showItem('cancelsearch', false);
+			}
+			window.L.DomUtil.addClass(searchInput, 'search-not-found');
 			$('#findthis').addClass('search-not-found');
-			map.resetSelection();
+			const searchbox = document.getElementById('searchbox');
+			if(searchbox && !searchbox.hasAttribute('aria-live'))
+				searchbox.setAttribute('aria-live', 'polite');
+			app.searchService.resetSelection();
 			setTimeout(function () {
 				$('#findthis').removeClass('search-not-found');
-				L.DomUtil.removeClass(searchInput, 'search-not-found');
+				window.L.DomUtil.removeClass(searchInput, 'search-not-found');
 			}, 800);
 		}
 	});
@@ -1048,56 +1108,54 @@ function setupToolbar(e) {
 				// Coordinates contains a list of numbers, 0-1 top-left of the cell with the hyperlink
 				// 2-3 size of the cell, 4-5 number of th cell, 6-7 are the position of the click
 				var strTwips = e.coordinates.match(/\d+/g);
-				app.definitions.urlPopUpSection.closeURLPopUp();
 				var linkPosition;
 				if (strTwips.length > 7) {
-					linkPosition = new app.definitions.simplePoint(parseInt(strTwips[6]), parseInt(strTwips[7]));
+					linkPosition = new cool.SimplePoint(parseInt(strTwips[6]), parseInt(strTwips[7]));
 				}
-				app.definitions.urlPopUpSection.showURLPopUP(e.url, new app.definitions.simplePoint(parseInt(strTwips[6]), parseInt(strTwips[1])), linkPosition);
+				URLPopUpSection.showURLPopUP(e.url, new cool.SimplePoint(parseInt(strTwips[6]), parseInt(strTwips[1])), linkPosition);
 			} else {
 				map.fire('warn', {url: e.url, map: map, cmd: 'openlink'});
 			}
 		}
 	});
 
-	map.on('updatepermission', onUpdatePermission);
+	app.events.on('updatepermission', onUpdatePermission);
 	map.on('wopiprops', onWopiProps);
 	map.on('commandresult', onCommandResult);
-	map.on('updateparts pagenumberchanged', onUpdateParts);
 
-	if (map.options.wopi && L.Params.closeButtonEnabled && !window.mode.isMobile()) {
-		$('#closebuttonwrapper').css('display', 'block');
-		$('#closebutton').prop('title', _('Close document'));
-		map.uiManager.enableTooltip($('#closebutton'));
-	} else if (!L.Params.closeButtonEnabled) {
+	if (map.options.wopi && window.L.Params.closeButtonEnabled && !window.mode.isMobile()) {
+		$('#closebuttonwrapper').css('display', 'flex');
+		var button = window.L.DomUtil.get('closebutton');
+		if (button) {
+			const closeButtonText = _('Close document');
+			button.setAttribute('aria-label', closeButtonText);
+			button.setAttribute('data-cooltip', closeButtonText);
+			window.L.control.attachTooltipEventListener(button, map);
+		}
+	} else if (!window.L.Params.closeButtonEnabled) {
 		$('#closebuttonwrapper').hide();
 		$('#closebuttonwrapperseparator').hide();
-	} else if (L.Params.closeButtonEnabled && !window.mode.isMobile()) {
-		$('#closebuttonwrapper').css('display', 'block');
+	} else if (window.L.Params.closeButtonEnabled && !window.mode.isMobile()) {
+		$('#closebuttonwrapper').css('display', 'flex');
 	}
 
-	$('#closebutton').click(onClose);
+	$('#closebutton').click(function () {
+		let dispatcher = global.app.dispatcher;
+		if (!dispatcher)
+			dispatcher = new app.definitions['dispatcher']('global');
+
+		dispatcher.dispatch('closeapp');
+	});
 }
 
-global.onClose = onClose;
 global.setupToolbar = setupToolbar;
-global.insertTable = insertTable;
-global.getInsertTablePopupHtml = getInsertTablePopupHtml;
-global.sendInsertTableFunction = sendInsertTableFunction;
-global.highlightTableFunction = highlightTableFunction;
-global.getShapesPopupHtml = getShapesPopupHtml;
-global.getConnectorsPopupHtml = getConnectorsPopupHtml;
-global.onShapeClickFunction = onShapeClickFunction;
-global.onShapeKeyUpFunction = onShapeKeyUpFunction;
-global.onShapeKeyDownFunction = onShapeKeyDownFunction;
+global.getInsertTablePopupElements = getInsertTablePopupElements;
+global.getShapesPopupElements = getShapesPopupElements;
+global.getConnectorsPopupElements = getConnectorsPopupElements;
 global.createShapesPanel = createShapesPanel;
-global.onUpdatePermission = onUpdatePermission;
-global.setupSearchInput = setupSearchInput;
 global.getUNOCommand = getUNOCommand;
 global.unoCmdToToolbarId = unoCmdToToolbarId;
 global.onCommandStateChanged = onCommandStateChanged;
 global.processStateChangedCommand = processStateChangedCommand;
-global.getColorPickerHTML = getColorPickerHTML;
-global.onUpdateParts = onUpdateParts;
 global.getColorPickerData = getColorPickerData;
 }(window));

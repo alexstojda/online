@@ -28,10 +28,15 @@
 #import "MobileApp.hpp"
 #import "SigUtil.hpp"
 #import "Util.hpp"
+#import "Clipboard.hpp"
+#import "CoolURLSchemeHandler.h"
 
 #import "DocumentViewController.h"
 
-@interface DocumentViewController() <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UIScrollViewDelegate, UIDocumentPickerDelegate, UIFontPickerViewControllerDelegate> {
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <Poco/MemoryStream.h>
+
+@interface DocumentViewController() <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKScriptMessageHandlerWithReply, UIScrollViewDelegate, UIDocumentPickerDelegate, UIFontPickerViewControllerDelegate> {
     int closeNotificationPipeForForwardingThread[2];
     NSURL *downloadAsTmpURL;
 }
@@ -87,9 +92,14 @@ static IMP standardImpOfInputAccessoryView = nil;
     [userContentController addScriptMessageHandler:self name:@"debug"];
     [userContentController addScriptMessageHandler:self name:@"lok"];
     [userContentController addScriptMessageHandler:self name:@"error"];
+    [userContentController addScriptMessageHandlerWithReply:self contentWorld:[WKContentWorld pageWorld] name:@"clipboard"];
 
     configuration.userContentController = userContentController;
-
+    
+    CoolURLSchemeHandler * schemeHandler = [[CoolURLSchemeHandler alloc] initWithDocument:self.document];
+    [configuration setURLSchemeHandler:schemeHandler forURLScheme:@"cool"];
+    self.schemeHandler = (__bridge void*)schemeHandler;
+    
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
     self.webView.allowsLinkPreview = NO;
@@ -289,6 +299,205 @@ static IMP standardImpOfInputAccessoryView = nil;
     LOG_ERR("WebContent process terminated! Is closing the document enough?");
 }
 
+// This is the same method as Java_org_libreoffice_androidlib_LOActivity_getClipboardContent, with minimal editing to work with objective C
+- (bool)getClipboardContent:(out NSMutableDictionary *)content {
+    const char** mimeTypes = nullptr;
+    size_t outCount = 0;
+    char  **outMimeTypes = nullptr;
+    size_t *outSizes = nullptr;
+    char  **outStreams = nullptr;
+    bool bResult = false;
+
+    if (DocumentData::get(self.document->appDocId).loKitDocument->getClipboard(mimeTypes,
+                                                     &outCount, &outMimeTypes,
+                                                     &outSizes, &outStreams))
+    {
+        // return early
+        if (outCount == 0)
+            return bResult;
+
+        for (size_t i = 0; i < outCount; ++i)
+        {
+            NSString * identifier = [NSString stringWithUTF8String:outMimeTypes[i]];
+
+            // For interop with other apps, if this mime-type is known we can export it
+            UTType * uti = [UTType typeWithMIMEType:identifier];
+            if (uti != nil && !uti.dynamic) {
+                if ([uti conformsToType:UTTypePlainText]) {
+                    [content setValue:outStreams[i] == NULL ? @"" : [NSString stringWithUTF8String:outStreams[i]] forKey:uti.identifier];
+                } else if (uti != nil && [uti conformsToType:UTTypeImage]) {
+                    [content setValue:[UIImage imageWithData:[NSData dataWithBytes:outStreams[i] length:outSizes[i]]] forKey:uti.identifier];
+                } else {
+                    [content setValue:[NSData dataWithBytes:outStreams[i] length:outSizes[i]] forKey:uti.identifier];
+                }
+            }
+            
+            // But to preserve the data we need, we'll always also export the raw, unaltered bytes
+            [content setValue:[NSData dataWithBytes:outStreams[i] length:outSizes[i]] forKey:identifier];
+        }
+        bResult = true;
+    }
+    else
+        LOG_DBG("failed to fetch mime-types");
+
+    const char* mimeTypesHTML[] = { "text/plain;charset=utf-8", "text/html", nullptr };
+
+    if (DocumentData::get(self.document->appDocId).loKitDocument->getClipboard(mimeTypesHTML,
+                                                     &outCount, &outMimeTypes,
+                                                     &outSizes, &outStreams))
+    {
+        // return early
+        if (outCount == 0)
+            return bResult;
+
+        for (size_t i = 0; i < outCount; ++i)
+        {
+            NSString * identifier = [NSString stringWithUTF8String:outMimeTypes[i]];
+
+            // For interop with other apps, if this mime-type is known we can export it
+            UTType * uti = [UTType typeWithMIMEType:identifier];
+            if (uti != nil && !uti.dynamic) {
+                if ([uti conformsToType:UTTypePlainText]) {
+                    [content setValue:outStreams[i] == NULL ? @"" : [NSString stringWithUTF8String:outStreams[i]] forKey:uti.identifier];
+                } else if (uti != nil && [uti conformsToType:UTTypeImage]) {
+                    [content setValue:[UIImage imageWithData:[NSData dataWithBytes:outStreams[i] length:outSizes[i]]] forKey:uti.identifier];
+                } else {
+                    [content setValue:[NSData dataWithBytes:outStreams[i] length:outSizes[i]] forKey:uti.identifier];
+                }
+            }
+            
+            // But to preserve the data we need, we'll always also export the raw, unaltered bytes
+            [content setValue:[NSData dataWithBytes:outStreams[i] length:outSizes[i]] forKey:identifier];
+        }
+        bResult = true;
+    }
+    else
+        LOG_DBG("failed to fetch mime-types");
+
+    return bResult;
+}
+
+- (void)setClipboardContent:(UIPasteboard *)pasteboard {
+    NSMutableDictionary * pasteboardItems = [NSMutableDictionary new];
+    
+    if (pasteboard.numberOfItems != 0) {
+        for (NSString * identifier in pasteboard.items[0])
+        {
+            UTType * uti = [UTType typeWithIdentifier:identifier];
+            NSString * mime = identifier;
+            
+            if (uti != nil) {
+                mime = uti.preferredMIMEType;
+            }
+            
+            if (mime == nil) {
+                LOG_WRN("UTI " << [identifier UTF8String] << " did not have associated mime type when deserializing clipboard, skipping...");
+                continue;
+            }
+            
+            NSData * value = [pasteboard dataForPasteboardType:identifier];
+            
+            if (uti != nil && [pasteboardItems objectForKey:mime] != nil) {
+                // We export both mime and UTI keys, don't overwrite the mime-type ones with the UTI ones
+                continue;
+            }
+            
+            if (value != nil) {
+                [pasteboardItems setObject:value forKey:mime];
+            }
+        }
+    }
+    
+    const char * pInMimeTypes[pasteboardItems.count];
+    size_t pInSizes[pasteboardItems.count];
+    const char * pInStreams[pasteboardItems.count];
+    
+    size_t i = 0;
+    
+    for (NSString * mime in pasteboardItems) {
+        pInMimeTypes[i] = [mime UTF8String];
+        pInStreams[i] = (const char*)[pasteboardItems[mime] bytes];
+        pInSizes[i] = [pasteboardItems[mime] length];
+        i++;
+    }
+    
+    DocumentData::get(self.document->appDocId).loKitDocument->setClipboard(pasteboardItems.count, pInMimeTypes, pInSizes, pInStreams);
+}
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message replyHandler:(nonnull void (^)(id _Nullable, NSString * _Nullable))replyHandler {
+
+    if ([message.name isEqualToString:@"clipboard"]) {
+        if ([message.body isEqualToString:@"read"]) {
+            UIPasteboard * pasteboard = [UIPasteboard generalPasteboard];
+            
+            [self setClipboardContent:pasteboard];
+            
+            replyHandler(@"(internal)", nil);
+        } else if ([message.body isEqualToString:@"write"]) {
+            NSMutableDictionary * pasteboardItem = [NSMutableDictionary dictionaryWithCapacity:2];
+            bool success = [self getClipboardContent:pasteboardItem];
+            
+            if (!success) {
+                replyHandler(nil, @"Failed to get clipboard contents...");
+                return;
+            }
+            
+            UIPasteboard * pasteboard = [UIPasteboard generalPasteboard];
+
+            [pasteboard setItems:[NSArray arrayWithObject:pasteboardItem]];
+            
+            replyHandler(nil, nil);
+        } else if ([message.body hasPrefix:@"sendToInternal "]) {
+            ClipboardData data;
+            NSString * content = [message.body substringFromIndex:[@"sendToInternal " length]];
+            std::vector<char> html;
+            
+            size_t nInCount;
+            
+            if ([content hasPrefix:@"<!DOCTYPE html>"]) {
+                // Content is just HTML
+                const char * _Nullable content_cstr = [content cStringUsingEncoding:NSUTF8StringEncoding];
+                html = std::vector(content_cstr, content_cstr + [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+                nInCount = 1;
+            } else {
+                Poco::MemoryInputStream stream([content cStringUsingEncoding:NSUTF8StringEncoding], [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+                data.read(stream);
+                nInCount = data.size();
+            }
+            
+            std::vector<size_t> pInSizes(nInCount);
+            std::vector<const char*> pInMimeTypes(nInCount);
+            std::vector<const char*> pInStreams(nInCount);
+            
+            if (html.empty()) {
+                for (size_t i = 0; i < nInCount; ++i) {
+                    pInSizes[i] = data._content[i].length();
+                    pInStreams[i] = data._content[i].c_str();
+                    pInMimeTypes[i] = data._mimeTypes[i].c_str();
+                }
+            } else {
+                pInSizes[0] = html.size();
+                pInStreams[0] = html.data();
+                pInMimeTypes[0] = "text/html";
+            }
+            
+            if (!DocumentData::get(self.document->appDocId).loKitDocument->setClipboard(nInCount, pInMimeTypes.data(), pInSizes.data(),
+                                                                                        pInStreams.data())) {
+                LOG_ERR("set clipboard returned failure");
+                replyHandler(nil, @"set clipboard returned failure");
+            } else {
+                LOG_TRC("set clipboard succeeded");
+                replyHandler(nil, nil);
+            }
+        } else {
+            replyHandler(nil, [NSString stringWithFormat:@"Invalid clipboard action %@", message.body]);
+        }
+    } else {
+        LOG_ERR("Unrecognized kind of message received from WebView: " << [message.name UTF8String] << ":" << [message.body UTF8String]);
+        replyHandler(nil, [NSString stringWithFormat:@"Message of type %@ does not exist or is not replyable", message.name]);
+    }
+}
+
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     int rc;
     struct pollfd p;
@@ -395,61 +604,6 @@ static IMP standardImpOfInputAccessoryView = nil;
 
             [self bye];
             return;
-        } else if ([message.body isEqualToString:@"SLIDESHOW"]) {
-
-            // Create the SVG for the slideshow.
-
-            self.slideshowFile = FileUtil::createRandomTmpDir() + "/slideshow.svg";
-            self.slideshowURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:self.slideshowFile.c_str()] isDirectory:NO];
-
-            DocumentData::get(self.document->appDocId).loKitDocument->saveAs([[self.slideshowURL absoluteString] UTF8String], "svg", nullptr);
-
-            // Add a new full-screen WebView displaying the slideshow.
-
-            WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-            WKUserContentController *userContentController = [[WKUserContentController alloc] init];
-
-            [userContentController addScriptMessageHandler:self name:@"lok"];
-
-            configuration.userContentController = userContentController;
-
-            self.slideshowWebView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
-
-            [self.slideshowWebView becomeFirstResponder];
-
-            self.slideshowWebView.contentMode = UIViewContentModeScaleAspectFit;
-            self.slideshowWebView.translatesAutoresizingMaskIntoConstraints = NO;
-            self.slideshowWebView.navigationDelegate = self;
-            self.slideshowWebView.UIDelegate = self;
-
-            self.webView.hidden = true;
-
-            [self.view addSubview:self.slideshowWebView];
-            [self.view bringSubviewToFront:self.slideshowWebView];
-
-
-            WKWebView *slideshowWebViewP = self.slideshowWebView;
-            NSDictionary *views = NSDictionaryOfVariableBindings(slideshowWebViewP);
-            [self.view addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-0-[slideshowWebViewP(>=0)]-0-|"
-                                                                              options:0
-                                                                              metrics:nil
-                                                                                views:views]];
-            [self.view addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|-0-[slideshowWebViewP(>=0)]-0-|"
-                                                                              options:0
-                                                                              metrics:nil
-                                                                                views:views]];
-            [self.slideshowWebView loadRequest:[NSURLRequest requestWithURL:self.slideshowURL]];
-
-            return;
-        } else if ([message.body isEqualToString:@"EXITSLIDESHOW"]) {
-
-            std::remove(self.slideshowFile.c_str());
-
-            [self.slideshowWebView removeFromSuperview];
-            self.slideshowWebView = nil;
-            self.webView.hidden = false;
-
-            return;
         } else if ([message.body isEqualToString:@"PRINT"]) {
 
             // Create the PDF to print.
@@ -507,7 +661,7 @@ static IMP standardImpOfInputAccessoryView = nil;
             }
         } else if ([message.body isEqualToString:@"FONTPICKER"]) {
             UIFontPickerViewControllerConfiguration *configuration = [[UIFontPickerViewControllerConfiguration alloc] init];
-            configuration.includeFaces = YES;
+            configuration.includeFaces = NO;
             UIFontPickerViewController *picker = [[UIFontPickerViewController alloc] initWithConfiguration:configuration];
             picker.delegate = self;
             [self presentViewController:picker
@@ -566,10 +720,7 @@ static IMP standardImpOfInputAccessoryView = nil;
         }
 
         const char *buf = [message.body UTF8String];
-        p.fd = self.document->fakeClientFd;
-        p.events = POLLOUT;
-        fakeSocketPoll(&p, 1, -1);
-        fakeSocketWrite(self.document->fakeClientFd, buf, strlen(buf));
+        fakeSocketWriteQueue(self.document->fakeClientFd, buf, strlen(buf));
     } else {
         LOG_ERR("Unrecognized kind of message received from WebView: " << [message.name UTF8String] << ":" << [message.body UTF8String]);
     }

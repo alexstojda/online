@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -28,6 +29,11 @@ struct StringToken
         : _index(index),
         _length(length)
     {
+    }
+
+    bool operator==(const StringToken& rhs) const
+    {
+        return _index == rhs._index && _length == rhs._length;
     }
 };
 
@@ -81,7 +87,7 @@ public:
 
     // call func on each token until func returns true or we run out of tokens
     template <class UnaryFunction>
-    static void tokenize_foreach(UnaryFunction& func, const char* data, const std::size_t size, const char delimiter = ' ')
+    static void tokenize_foreach(UnaryFunction&& func, const char* data, const std::size_t size, const char delimiter = ' ')
     {
         if (size == 0 || data == nullptr || *data == '\0')
             return;
@@ -123,24 +129,21 @@ public:
     }
 
     /// Tokenize single-char delimited values until we hit new-line or the end.
-    static StringVector tokenize(const std::string& s, const char delimiter = ' ')
+    static StringVector tokenize(std::string s, const char delimiter = ' ')
     {
         if (s.empty())
             return StringVector();
 
         std::vector<StringToken> tokens;
         tokenize(s.data(), s.size(), delimiter, tokens);
-        return StringVector(s, std::move(tokens));
+        return StringVector(std::move(s), std::move(tokens));
     }
 
     /// Tokenize by the delimiter string.
-    static StringVector tokenize(const std::string& s, const char* delimiter, int len = -1)
+    static StringVector tokenize(std::string s, const std::string_view delimiter)
     {
-        if (s.empty() || len == 0 || delimiter == nullptr || *delimiter == '\0')
+        if (s.empty() || delimiter.empty())
             return StringVector();
-
-        if (len < 0)
-            len = std::strlen(delimiter);
 
         std::size_t start = 0;
         std::size_t end = s.find(delimiter, start);
@@ -149,27 +152,16 @@ public:
         tokens.reserve(16);
 
         tokens.emplace_back(start, end - start);
-        start = end + len;
+        start = end + delimiter.size();
 
         while (end != std::string::npos)
         {
             end = s.find(delimiter, start);
             tokens.emplace_back(start, end - start);
-            start = end + len;
+            start = end + delimiter.size();
         }
 
-        return StringVector(s, std::move(tokens));
-    }
-
-    template <std::size_t N>
-    static StringVector tokenize(const std::string& s, const char (&delimiter)[N])
-    {
-        return tokenize(s, delimiter, N - 1);
-    }
-
-    static StringVector tokenize(const std::string& s, const std::string& delimiter)
-    {
-        return tokenize(s, delimiter.data(), delimiter.size());
+        return StringVector(std::move(s), std::move(tokens));
     }
 
     /** Tokenize based on any of the characters in 'delimiters'.
@@ -177,19 +169,7 @@ public:
         Ie. when there is '\n\r' in there, any of them means a delimiter.
         In addition, trim the values so there are no leading or trailing spaces.
     */
-    static StringVector tokenizeAnyOf(const std::string& s, const char* delimiters,
-                                      const std::size_t delimitersLength);
-
-    template <std::size_t N>
-    static StringVector tokenizeAnyOf(const std::string& s, const char (&delimiters)[N])
-    {
-        return tokenizeAnyOf(s, delimiters, N - 1); // Exclude the null terminator.
-    }
-
-    static StringVector tokenizeAnyOf(const std::string& s, const char* delimiters)
-    {
-        return tokenizeAnyOf(s, delimiters, std::strlen(delimiters));
-    }
+    static StringVector tokenizeAnyOf(std::string s, const std::string_view delimiters);
 
     /// Unlike std::vector, gives an empty string if index is unexpected.
     std::string operator[](std::size_t index) const
@@ -220,7 +200,7 @@ public:
         return _tokens.erase(it);
     }
 
-    void push_back(const std::string& string)
+    void push_back(const std::string_view string)
     {
         _tokens.emplace_back(_string.size(), string.size());
         _string += string;
@@ -229,30 +209,53 @@ public:
     /// Gets the underlying string of a single token.
     std::string getParam(const StringToken& token) const
     {
+        assert(token._index < _string.size() && "Index is out of range");
         return _string.substr(token._index, token._length);
     }
 
-    /// Concats tokens starting from begin, using separator as separator.
-    template <typename T> inline std::string cat(const T& separator, std::size_t offset) const
+    /// Concats tokens starting from firstOffset, using separator as separator.
+    /// An optional lastOffset can be used to decide the last entry, inclusive.
+    template <typename T>
+    inline std::string cat(const T& separator, std::size_t firstOffset,
+                           std::size_t lastOffset = std::string::npos) const
     {
-        std::string ret;
-
-        if (offset >= _tokens.size())
+        if (firstOffset >= _tokens.size() || firstOffset > lastOffset)
         {
-            return ret;
+            return std::string();
         }
 
+        assert(!_tokens.empty() && "Unexpected empty tokens");
+
+        std::string ret;
         ret.reserve(_string.size() * 2);
-        auto it = _tokens.begin() + offset;
-        ret = getParam(*it);
-        for (++it; it != _tokens.end(); ++it)
+
+        std::size_t i = firstOffset;
+        const std::size_t end = std::min<std::size_t>(lastOffset, _tokens.size() - 1);
+        ret = getParam(_tokens[i]);
+        for (++i; i <= end; ++i)
         {
             // Avoid temporary strings, append separately.
             ret += separator;
-            ret += getParam(*it);
+            assert(i < _tokens.size() && "Index is out of range");
+            ret += getParam(_tokens[i]);
         }
 
         return ret;
+    }
+
+    /// Returns a copy of the original string starting at token 'startOffset'
+    /// until the 'lastOffset', the given, inclusive. Otherwise, to the end.
+    std::string substrFromToken(std::size_t firstOffset,
+                                std::size_t lastOffset = std::string::npos) const
+    {
+        if (firstOffset >= _tokens.size() || firstOffset > lastOffset)
+            return std::string();
+
+        const std::size_t end = lastOffset < _tokens.size()
+                                    ? _tokens[lastOffset]._index + _tokens[lastOffset]._length -
+                                          _tokens[firstOffset]._index
+                                    : std::string::npos;
+        return _string.substr(_tokens[firstOffset]._index, end);
     }
 
     /// Compares the nth token with string.
@@ -264,7 +267,7 @@ public:
         }
 
         const StringToken& token = _tokens[index];
-        return _string.compare(token._index, token._length, string) == 0;
+        return std::string_view(_string.data() + token._index, token._length) == string;
     }
 
     /// Compares the nth token with string.
@@ -276,7 +279,10 @@ public:
         }
 
         const StringToken& token = _tokens[index];
-        return _string.compare(token._index, token._length, string, N - 1) == 0;
+        constexpr auto len = N - 1; // we don't want to compare the '\0'
+        return token._length == len &&
+               std::string_view(_string.data() + token._index, token._length) ==
+                   std::string_view(string, len);
     }
 
     // Checks if the token text at index starts with the given string

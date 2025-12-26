@@ -8,10 +8,10 @@ function showSearchBar() {
 
 	cy.cGet('#showsearchbar').click();
 	cy.cGet('input#search-input').should('be.visible');
-	cy.cGet('#bold').should('not.be.visible');
+	cy.cGet('.unoBold').should('not.be.visible');
 	cy.cGet('#searchprev').should('have.attr', 'disabled');
 	cy.cGet('#searchnext').should('have.attr', 'disabled');
-	cy.cGet('#cancelsearch').should('not.be.visible');
+	cy.cGet('#cancelsearch').should('have.attr', 'disabled');
 
 	cy.log('<< showSearchBar - end');
 }
@@ -25,9 +25,10 @@ function typeIntoSearchField(text) {
 
 	cy.cGet('input#search-input').clear().type(text);
 	cy.cGet('input#search-input').should('have.prop', 'value', text);
-	cy.cGet('#searchprev').should('not.have.attr', 'disabled');
-	cy.cGet('#searchnext').should('not.have.attr', 'disabled');
-	cy.cGet('#cancelsearch').should('be.visible');
+
+	cy.cGet('#searchprev').should('not.be.disabled');
+	cy.cGet('#searchnext').should('not.be.disabled');
+	cy.cGet('#cancelsearch').should('not.be.disabled');
 
 	cy.log('<< typeIntoSearchField - end');
 }
@@ -36,7 +37,10 @@ function typeIntoSearchField(text) {
 function searchNext() {
 	cy.log('>> searchNext - start');
 
+	cy.wait(1000);
+	cy.cGet('#searchnext').should('not.have.attr', 'disabled');
 	cy.cGet('#searchnext').click();
+	cy.wait(2500); // TODO: test search result arrived
 
 	cy.log('<< searchNext - end');
 }
@@ -45,7 +49,10 @@ function searchNext() {
 function searchPrev() {
 	cy.log('>> searchPrev - start');
 
+	cy.wait(1000);
+	cy.cGet('#searchprev').should('not.have.attr', 'disabled');
 	cy.cGet('#searchprev').click();
+	cy.wait(2500); // TODO: test search result arrived
 
 	cy.log('<< searchPrev - end');
 }
@@ -59,7 +66,7 @@ function cancelSearch() {
 	cy.cGet('input#search-input').should('have.prop', 'value', '');
 	cy.cGet('#searchprev').should('have.attr', 'disabled');
 	cy.cGet('#searchnext').should('have.attr', 'disabled');
-	cy.cGet('#cancelsearch').should('not.be.visible');
+	cy.cGet('#cancelsearch').should('have.attr', 'disabled');
 
 	cy.log('<< cancelSearch - end');
 }
@@ -70,7 +77,7 @@ function closeSearchBar() {
 
 	cy.cGet('#hidesearchbar').click();
 	cy.cGet('input#search-input').should('not.be.visible');
-	cy.cGet('#bold').should('be.visible');
+	cy.cGet('.unoBold').should('be.visible');
 
 	cy.log('<< closeSearchBar - end');
 }

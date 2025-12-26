@@ -16,7 +16,6 @@
 #include <Poco/Path.h>
 #include <Poco/URI.h>
 #include "ClientSession.hpp"
-#include "COOLWSD.hpp"
 #include "DocumentBroker.hpp"
 #include "FileUtil.hpp"
 #include "Util.hpp"
@@ -25,7 +24,10 @@
 #include <common/Common.hpp>
 #include <common/StringVector.hpp>
 #include <common/Log.hpp>
+
+#include <exception>
 #include <mutex>
+#include <stdexcept>
 
 namespace
 {
@@ -46,31 +48,73 @@ std::size_t Quarantine::MaxVersions;
 
 Quarantine::Quarantine(DocumentBroker& docBroker, const std::string& docName)
     : _docKey(docBroker.getDocKey())
-    , _docName(Util::encodeURIComponent(docName, std::string(",/?:@&=+$#") + Delimiter))
+    , _docName(Uri::encode(docName, std::string(",/?:@&=+$#") + Delimiter))
     , _quarantinedFilename(Delimiter + std::to_string(docBroker.getPid()) + Delimiter + _docName)
 {
-    LOG_DBG("Quarantine ctor for [" << _docKey << "], filename: [" << _quarantinedFilename << ']');
+    std::string anonymizedFilename = _quarantinedFilename;
+    Util::replaceAllSubStr(anonymizedFilename, _docName, COOLWSD::anonymizeUsername(_docName));
+    LOG_DBG("Quarantine ctor for [" << _docKey << "], filename: [" << anonymizedFilename << ']');
 }
 
 void Quarantine::initialize(const std::string& path)
 {
-    if (!COOLWSD::getConfigValue<bool>("quarantine_files[@enable]", false) ||
+    if (!ConfigUtil::getConfigValue<bool>("quarantine_files[@enable]", false) ||
         !QuarantinePath.empty())
     {
         return;
     }
 
-    MaxSizeBytes = COOLWSD::getConfigValue<std::size_t>("quarantine_files.limit_dir_size_mb", 250) *
-                   1024 * 1024;
-    MaxAgeSecs = COOLWSD::getConfigValue<std::size_t>("quarantine_files.expiry_min", 3000) * 60;
+    MaxSizeBytes =
+        ConfigUtil::getConfigValue<std::size_t>("quarantine_files.limit_dir_size_mb", 250) * 1024 *
+        1024;
+    MaxAgeSecs = ConfigUtil::getConfigValue<std::size_t>("quarantine_files.expiry_min", 3000) * 60;
     MaxVersions = std::max(
-        COOLWSD::getConfigValue<std::size_t>("quarantine_files.max_versions_to_maintain", 5), 1UL);
+        ConfigUtil::getConfigValue<std::size_t>("quarantine_files.max_versions_to_maintain", 5),
+        1UL);
     LOG_INF("Initializing Quarantine at [" << path << "] with Max Size: " << MaxSizeBytes
                                            << " bytes, Max Age: " << MaxAgeSecs
                                            << " seconds, Max Versions: " << MaxVersions);
 
     // Make sure the quarantine directories exists, or we throw if we can't create it.
-    Poco::File(path).createDirectories();
+    try
+    {
+        Poco::File(path).createDirectories();
+    }
+    catch (const std::exception& exc)
+    {
+        LOG_FTL("Quarantine directory [" << path
+                                         << "] is invalid or we have no permission to create it");
+        throw;
+    }
+
+    // Make sure we can write into the quarantine directory.
+    {
+        const std::string testFile = "quarantine.test";
+        const Poco::Path target(path, testFile);
+        const std::string testPath = target.toString();
+
+        FileUtil::removeFile(testPath); // Make sure there are no left-overs.
+
+        try
+        {
+            Poco::File file(target);
+            file.createFile();
+            if (!FileUtil::Stat(testPath).exists())
+            {
+                throw std::runtime_error("Cannot write to quarantine directory [" + path +
+                                         "] as it is read-only");
+            }
+        }
+        catch (const std::exception& exc)
+        {
+            LOG_FTL("Quarantine directory [" << path
+                                             << "] is read-only. Please ensure that the coolwsd "
+                                                "process account has write permissions to it");
+            throw;
+        }
+
+        FileUtil::removeFile(testPath); // Make sure there are no left-overs.
+    }
 
     // This function should ever be called once, but for consistency, take the lock.
     std::lock_guard<std::mutex> lock(Mutex);
@@ -316,6 +360,22 @@ void Quarantine::deleteOldQuarantineVersions(const std::string& docKey, std::siz
 
 bool Quarantine::quarantineFile(const std::string& docPath)
 {
+    try
+    {
+        return quarantineFile(_docKey, docPath, _quarantinedFilename);
+    }
+    catch (const std::exception& exc)
+    {
+        LOG_WRN("Failed to quarantine [" << docPath << "] for docKey [" << _docKey
+                                         << "]: " << exc.what());
+    }
+
+    return false;
+}
+
+bool Quarantine::quarantineFile(const std::string& docKey, const std::string& docPath,
+                                const std::string& quarantinedFilename)
+{
     if (!isEnabled())
         return false;
 
@@ -326,9 +386,9 @@ bool Quarantine::quarantineFile(const std::string& docPath)
         return false;
     }
 
-    Entry entry(QuarantinePath, _docKey, getSecondsSinceEpoch(), _quarantinedFilename,
+    Entry entry(QuarantinePath, docKey, getSecondsSinceEpoch(), quarantinedFilename,
                 sourceStat.size());
-    Poco::File(Poco::Path(QuarantinePath, _docKey)).createDirectories();
+    Poco::File(Poco::Path(QuarantinePath, docKey)).createDirectories();
 
     const std::string linkedFilePath = entry.fullPath();
     LOG_TRC("Quarantining [" << docPath << "] to [" << linkedFilePath << ']');
@@ -336,18 +396,18 @@ bool Quarantine::quarantineFile(const std::string& docPath)
     std::lock_guard<std::mutex> lock(Mutex);
 
     // Check if we have a duplicate or a new version.
-    auto& fileList = QuarantineMap[_docKey];
+    auto& fileList = QuarantineMap[docKey];
     if (!fileList.empty())
     {
-        const auto& lastFile = fileList[fileList.size() - 1];
-        FileUtil::Stat lastFileStat(lastFile.fullPath());
+        const std::string lastFile = fileList[fileList.size() - 1].fullPath();
+        FileUtil::Stat lastFileStat(lastFile);
 
-        if (lastFileStat.isIdenticalTo(sourceStat))
+        if (FileUtil::Stat::isIdenticalTo(lastFileStat, lastFile, sourceStat, docPath))
         {
-            LOG_WRN("Quarantining of file ["
+            LOG_INF("Quarantining of file ["
                     << docPath << "] to [" << linkedFilePath
                     << "] is skipped because this file version is already quarantined as ["
-                    << lastFile.fullPath() << ']');
+                    << lastFile << ']');
             return false;
         }
     }
@@ -448,7 +508,7 @@ Quarantine::Entry::Entry(const std::string& root, const std::string& docKey,
 
     _secondsSinceEpoch = secondsSinceEpoch;
 
-    _pid = getpid();
+    _pid = Util::getProcessId();
 
     _filename = filename;
 

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include "StateEnum.hpp"
+#include <map>
 #include <memory>
 #include <net/Socket.hpp>
 
@@ -20,16 +22,14 @@
  *
  * we use a trivial framing: [T(ext)|B(inary)]<hex-serial->\n<hex-length>\n<content>\n
  */
-class ProxyProtocolHandler : public ProtocolHandlerInterface
+class ProxyProtocolHandler final : public ProtocolHandlerInterface
 {
 public:
     ProxyProtocolHandler() :
-        _inSerial(0),
-        _outSerial(0)
+        _inSerial(1),
+        _outSerial(1)
     {
     }
-
-    virtual ~ProxyProtocolHandler() { }
 
     /// Will be called exactly once by setHandler
     void onConnect(const std::shared_ptr<StreamSocket>& /* socket */) override {}
@@ -40,10 +40,6 @@ public:
     int getPollEvents(std::chrono::steady_clock::time_point /* now */,
                       int64_t &/* timeoutMaxMs */) override;
 
-    void checkTimeout(std::chrono::steady_clock::time_point /* now */) override
-    {
-    }
-
     void performWrites(std::size_t capacity) override;
 
     void onDisconnect() override
@@ -51,21 +47,32 @@ public:
         // connections & sockets come and go a lot.
     }
 
-public:
+    STATE_ENUM(
+        ParseStatus,
+        AGAIN,         // we need to wait for more data to arrive
+        COMPLETE,      // we got a complete stream, and we're done
+        PROTOCOL_ERROR // the stream is mangled - terminate ...
+    );
+
     /// Clear all external references
     void dispose() override { _msgHandler.reset(); }
 
-    int sendTextMessage(const char *msg, const size_t len, bool flush = false) const override;
-    int sendBinaryMessage(const char *data, const size_t len, bool flush = false) const override;
+    int sendTextMessage(const char* msg, size_t len, bool flush = false) const override;
+    int sendBinaryMessage(const char* data, size_t len, bool flush = false) const override;
     void shutdown(bool goingAway = false, const std::string &statusMessage = "") override;
     void getIOStats(uint64_t &sent, uint64_t &recv) override;
     // don't duplicate ourselves for every socket
-    void dumpState(std::ostream&) const override {}
+    void dumpState(std::ostream&, const std::string&) const override {}
     // instead do it centrally.
     void dumpProxyState(std::ostream& os);
-    bool parseEmitIncoming(const std::shared_ptr<StreamSocket> &socket);
 
-    void handleRequest(bool isWaiting, const std::shared_ptr<Socket> &socket);
+    // Non-destructive message parsing
+    ParseStatus parseEmitIncoming(const std::shared_ptr<StreamSocket>& socket);
+    bool hasCompleteMessage(const Buffer& in);
+    void processBufferedMessages();
+
+    void handleRequest(const std::shared_ptr<StreamSocket> &socket);
+    void sendAndClose(const std::shared_ptr<StreamSocket> &socket);
 
     /// tell our handler we've received a close.
     void notifyDisconnected();
@@ -74,7 +81,7 @@ private:
     std::shared_ptr<StreamSocket> popOutSocket();
     /// can we find anything to send back if we try ?
     bool slurpHasMessages(std::size_t capacity);
-    int sendMessage(const char *msg, const size_t len, bool text, bool flush);
+    int sendMessage(const char* msg, size_t len, bool text, bool flush);
     bool flushQueueTo(const std::shared_ptr<StreamSocket> &socket);
 
     struct Message : public std::vector<char>
@@ -92,6 +99,21 @@ private:
             insert(end(), terminator, terminator + 1);
         }
     };
+
+    struct BufferedMessage
+    {
+        uint64_t serial;
+        std::vector<char> data;
+
+        BufferedMessage(uint64_t s, const std::vector<char>& d)
+            : serial(s)
+            , data(d)
+        {
+        }
+    };
+
+    std::map<uint64_t, std::unique_ptr<BufferedMessage>> _serialQueue;
+
     /// queue things when we have no socket to hand.
     std::vector<std::shared_ptr<Message>> _writeQueue;
     std::vector<std::weak_ptr<StreamSocket>> _outSockets;

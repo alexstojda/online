@@ -18,21 +18,30 @@
 #include <wopi/WopiProxy.hpp>
 #endif // !MOBILEAPP
 
+#include <cstdint>
 #include <string>
 #include <memory>
+
+enum class CheckStatus : char;
 
 /// Handles incoming connections and dispatches to the appropriate handler.
 class ClientRequestDispatcher final : public SimpleSocketHandler
 {
 public:
-    ClientRequestDispatcher() {}
-
     static void InitStaticFileContentCache()
     {
         StaticFileContentCache["discovery.xml"] = getDiscoveryXML();
     }
 
-    typedef std::function<void(bool)> AsyncFn;
+    using AsyncFn = std::function<void(bool)>;
+
+    /// Uninitialize static data.
+    static void uninitialize()
+    {
+        StaticFileContentCache.clear();
+
+        RequestVettingStations.clear();
+    }
 
 private:
     /// Set the socket associated with this ResponseClient.
@@ -53,29 +62,45 @@ private:
     /// Does this address feature in the allowed hosts list.
     static bool allowPostFrom(const std::string& address);
 
-    static bool allowConvertTo(const std::string& address, const Poco::Net::HTTPRequest& request, AsyncFn asyncCb);
+    static bool allowConvertTo(const std::string& address, const Poco::Net::HTTPRequest& request,
+                               bool capabilityQuery, AsyncFn asyncCb);
 
-    void handleRootRequest(const RequestDetails& requestDetails,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    bool handleRootRequest(const RequestDetails& requestDetails,
                            const std::shared_ptr<StreamSocket>& socket);
 
-    static void handleFaviconRequest(const RequestDetails& requestDetails,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    static bool handleFaviconRequest(const RequestDetails& requestDetails,
                                      const std::shared_ptr<StreamSocket>& socket);
 
-    void handleWopiDiscoveryRequest(const RequestDetails& requestDetails,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    bool handleWopiDiscoveryRequest(const RequestDetails& requestDetails,
                                     const std::shared_ptr<StreamSocket>& socket);
 
-    void handleCapabilitiesRequest(const Poco::Net::HTTPRequest& request,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    bool handleCapabilitiesRequest(const Poco::Net::HTTPRequest& request,
                                    const std::shared_ptr<StreamSocket>& socket);
 
-    static void handleClipboardRequest(const Poco::Net::HTTPRequest& request,
-                                       Poco::MemoryInputStream& message,
+    bool handleWopiAccessCheckRequest(const Poco::Net::HTTPRequest& request,
+                                      const std::string& text,
+                                      const std::shared_ptr<StreamSocket>& socket);
+
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    static bool handleClipboardRequest(const Poco::Net::HTTPRequest& request,
+                                       std::istream& message,
                                        SocketDisposition& disposition,
                                        const std::shared_ptr<StreamSocket>& socket);
 
-    static void handleRobotsTxtRequest(const Poco::Net::HTTPRequest& request,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    static bool handleSignatureRequest(const Poco::Net::HTTPRequest& request,
                                        const std::shared_ptr<StreamSocket>& socket);
 
-    static void handleMediaRequest(const Poco::Net::HTTPRequest& request,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    static bool handleRobotsTxtRequest(const Poco::Net::HTTPRequest& request,
+                                       const std::shared_ptr<StreamSocket>& socket);
+
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    static bool handleMediaRequest(const Poco::Net::HTTPRequest& request,
                                    SocketDisposition& /*disposition*/,
                                    const std::shared_ptr<StreamSocket>& socket);
 
@@ -83,18 +108,47 @@ private:
 
     static bool isSpreadsheet(const std::string& fileName);
 
-    void handlePostRequest(const RequestDetails& requestDetails,
-                           const Poco::Net::HTTPRequest& request, Poco::MemoryInputStream& message,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    bool handlePostRequest(const RequestDetails& requestDetails,
+                           const Poco::Net::HTTPRequest& request, std::istream& message,
                            SocketDisposition& disposition,
                            const std::shared_ptr<StreamSocket>& socket);
 
-    void handleClientProxyRequest(const Poco::Net::HTTPRequest& request,
+    bool handleClientProxyRequest(const Poco::Net::HTTPRequest& request,
                                   const RequestDetails& requestDetails,
-                                  Poco::MemoryInputStream& message, SocketDisposition& disposition);
+                                  std::istream& message, SocketDisposition& disposition);
 
+    void sendResult(const std::shared_ptr<StreamSocket>& socket, CheckStatus result);
+
+    enum class MessageResult : std::uint8_t
+    {
+        ServedAsync,
+        ServedSync,
+        Ignore
+    };
+
+    MessageResult handleMessage(Poco::Net::HTTPRequest& request,
+                                std::istream& message,
+                                SocketDisposition& disposition,
+                                const std::shared_ptr<StreamSocket>& socket,
+                                ssize_t headerSize);
+
+    void finishedMessage(const Poco::Net::HTTPRequest& request,
+                         const std::shared_ptr<StreamSocket>& socket,
+                         bool servedSync, size_t preInBufferSz);
+
+    void handleFullMessage(Poco::Net::HTTPRequest& request,
+                           std::istream& message,
+                           SocketDisposition& disposition,
+                           const std::shared_ptr<StreamSocket>& socket,
+                           ssize_t headerSize,
+                           ssize_t contentSize,
+                           bool eraseMessageFromSocket,
+                           std::chrono::steady_clock::time_point now);
 #endif // !MOBILEAPP
 
-    void handleClientWsUpgrade(const Poco::Net::HTTPRequest& request,
+    /// @return true if request has been handled synchronously and response sent, otherwise false
+    bool handleClientWsUpgrade(const Poco::Net::HTTPRequest& request,
                                const RequestDetails& requestDetails, SocketDisposition& disposition,
                                const std::shared_ptr<StreamSocket>& socket,
                                unsigned mobileAppDocId = 0);
@@ -105,10 +159,27 @@ private:
     /// Process the discovery.xml file and return as string.
     static std::string getDiscoveryXML();
 
+    /// Keeps RVS instances in check.
+    void CleanupRequestVettingStations();
+
+    void onDisconnect() override
+    {
+        LOG_TRC("ClientRequestDispatcher " << _id << " disconnected");
+        std::shared_ptr<StreamSocket> socket = _socket.lock();
+        if (socket)
+        {
+            socket->asyncShutdown(); // Flag for shutdown for housekeeping in SocketPoll.
+            socket->shutdownConnection(); // Immediately disconnect.
+        }
+    }
+
 private:
     // The socket that owns us (we can't own it).
     std::weak_ptr<StreamSocket> _socket;
     std::string _id;
+
+    // Used for StreamSocket::parseHeader, net::Defaults::HTTPTimeout acting as max delay
+    std::chrono::steady_clock::time_point _lastSeenHTTPHeader;
 
 #if !MOBILEAPP
     /// WASM document request handler. Used only when WASM is enabled.
@@ -119,11 +190,40 @@ private:
     /// WS is created and as long as it is connected.
     std::shared_ptr<RequestVettingStation> _rvs;
 
+    /// scratch dir that POSTs are streamed to
+    std::unique_ptr<FileUtil::OwnedFile> _postFileDir;
+    std::fstream _postStream;
+#if !MOBILEAPP
+    std::streamsize _postContentPending = 0;
+#endif // !MOBILEAPP
+
+    /// The minimum number of RVS instances in flight to trigger cleanup.
+    static constexpr std::size_t RvsLowWatermark = 1 * 1024;
+
+    /// The absolute maximum number of RVS instances in flight.
+    /// Note: exceeding this means we will not do parallel CheckFileInfo, ahead of loading.
+    static constexpr std::size_t RvsHighWatermark = (10 * RvsLowWatermark) - 1;
+
+    /// Any RVS instance, in RequestVettingStations, older than this will be purged.
+    static constexpr std::chrono::seconds RvsMaxAge = std::chrono::seconds(60);
+
+    /// The expected size of RVS to trigger the next cleanup.
+    /// This is to avoid excessive cleanup attempts.
+    static std::size_t NextRvsCleanupSize;
+
     /// External requests are first vetted before allocating DocBroker and Kit process.
     /// This is a map of the request URI to the RequestVettingStation for vetting.
+    /// This is a temporary storage until we get the WS upgrade. If we don't, we purge.
+    /// Note: this is accessed exclusively from websrv_poll, through
+    /// handleIncomingMessage and handleClientWsUpgrade. Do *not* access in the ctor/dtor!
     static std::unordered_map<std::string, std::shared_ptr<RequestVettingStation>>
         RequestVettingStations;
 
     /// Cache for static files, to avoid reading and processing from disk.
     static std::map<std::string, std::string> StaticFileContentCache;
+
+    /// The next unique connection-ID.
+    static std::atomic<uint64_t> NextConnectionId;
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

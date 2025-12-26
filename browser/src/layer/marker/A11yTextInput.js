@@ -1,6 +1,15 @@
 /* -*- js-indent-level: 8; fill-column: 100 -*- */
 /*
- * L.A11yTextInput is the hidden textarea, which handles text input events
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+/*
+ * window.L.A11yTextInput is the hidden textarea, which handles text input events
  *
  * This is made significantly more difficult than expected by such a
  * mess of browser, and mobile IME quirks that it is not possible to
@@ -10,9 +19,9 @@
 
 /* global app _ */
 
-L.A11yTextInput = L.TextInput.extend({
+window.L.A11yTextInput = window.L.TextInput.extend({
 	initialize: function() {
-		L.TextInput.prototype.initialize.call(this);
+		window.L.TextInput.prototype.initialize.call(this);
 
 		this._className = 'A11yTextInput';
 
@@ -110,7 +119,7 @@ L.A11yTextInput = L.TextInput.extend({
 
 	_setSelectionFlag: function(flag) {
 		this._hasSelection = flag;
-		if (L.Browser.cypressTest)
+		if (window.L.Browser.cypressTest)
 			this._textArea.isSelectionNull = !flag;
 	},
 
@@ -226,30 +235,29 @@ L.A11yTextInput = L.TextInput.extend({
 			eventDescription += _('Out of table') + '. ';
 		}
 		for (i = 0; i < inList.length; i++) {
-			eventDescription += _('Table with') + ' ' + inList[i].rowCount + ' ' + _('rows') + ' '
-				+ _('and') + ' ' + inList[i].colCount + ' ' + _('columns') + '. ';
+			eventDescription += _('Table with {0} rows and {1} columns').replace('{0}', inList[i].rowCount).replace('{1}', inList[i].colCount) + '. ';
 		}
 		if (this._lastRowIndex !== row || this._lastRowSpan !== rowSpan) {
 			this._lastRowIndex = row;
-			eventDescription += _('Row') + ' ' + row;
-			if (this._lastRowSpan !== rowSpan) {
-				if (rowSpan > 1) {
-					eventDescription += ' ' + _('through') + ' ' + (row + rowSpan - 1) ;
-				}
-				this._lastRowSpan = rowSpan;
+			if (this._lastRowSpan !== rowSpan && rowSpan > 1) {
+				eventDescription += _('Row {0} through {1}').replace('{0}', row).replace('{1}', row + rowSpan - 1);
+			}
+			else {
+				eventDescription += _('Row {0}').replace('{0}', row);
 			}
 			eventDescription += '. ';
+			this._lastRowSpan = rowSpan;
 		}
 		if (this._lastColIndex !== col || this._lastColSpan !== colSpan) {
 			this._lastColIndex = col;
-			eventDescription += _('Column') + ' ' + col;
-			if (this._lastColSpan !== colSpan) {
-				if (colSpan > 1) {
-					eventDescription += ' ' + _('through') + ' ' + (col + colSpan - 1);
-				}
-				this._lastColSpan = colSpan;
+			if (this._lastColSpan !== colSpan && colSpan > 1) {
+				eventDescription += _('Column {0} through {1}').replace('{0}', col).replace('{1}', col + colSpan - 1);
+			}
+			else {
+				eventDescription += _('Column {0}').replace('{0}', col);
 			}
 			eventDescription += '. ';
+			this._lastColSpan = colSpan;
 		}
 		this._setDescription(eventDescription);
 
@@ -293,18 +301,18 @@ L.A11yTextInput = L.TextInput.extend({
 		var eventDescription = '';
 		if (action === 'create' || action === 'add') {
 			this._hasAnySelection = true;
-			eventDescription =  name + ' ' + _('selected') + '. ';
+			eventDescription =  _('{0} selected').replace('{0}', name) + '. ';
 			if (typeof textContent === 'string' && textContent.length > 0) {
 				eventDescription += (cell ? '' : _('Has text: ')) + textContent;
 			}
 		}
 		else if (action === 'remove') {
 			this._hasAnySelection = false;
-			eventDescription = name + ' ' + _('unselected');
+			eventDescription = _('{0} unselected').replace('{0}', name);
 		}
 		else if (action === 'delete') {
 			this._hasAnySelection = false;
-			eventDescription = name + ' ' + _('deleted');
+			eventDescription = _('{0} deleted').replace('{0}', name);
 		}
 		this._setDescription(eventDescription);
 		if (action !== 'create' && action !== 'add') {
@@ -345,7 +353,7 @@ L.A11yTextInput = L.TextInput.extend({
 
 		// Firefox is not able to delete the <img> post space. Since no 'input' event is generated,
 		// we need to handle a <delete> at the end of the paragraph, here.
-		if (L.Browser.gecko && (!this._hasSelection || this._isLastSelectionEmpty()) &&
+		if (window.L.Browser.gecko && (!this._hasSelection || this._isLastSelectionEmpty()) &&
 			this._getLastCursorPosition() === this.getPlainTextContent().length &&
 			this._deleteHint === 'delete') {
 			if (this._map._debug.logKeyboardEvents) {
@@ -571,7 +579,8 @@ L.A11yTextInput = L.TextInput.extend({
 		this._finishFormulabarEditing(content, matchTo);
 
 		// special handling for mentions
-		this._handleMentionInput(ev, removeBefore);
+		if (this._map.getDocType() === 'text')
+			this._map.mention.handleMentionInput(ev);
 
 		this._statusLog('_onInput ]');
 	},
@@ -616,5 +625,5 @@ L.A11yTextInput = L.TextInput.extend({
 });
 
 L.a11yTextInput = function() {
-	return new L.A11yTextInput();
+	return new window.L.A11yTextInput();
 };

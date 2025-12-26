@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -11,93 +12,102 @@
 /*
  */
 
-/* global _UNO app UNOModifier */
+/* global _UNO app */
 
 declare var _UNO: any;
-declare var UNOModifier: any;
 
 namespace cool {
 
 export class RowHeader extends cool.Header {
-	name: string = L.CSections.RowHeader.name;
-	anchor:Array<Array<string>> = [[L.CSections.CornerHeader.name, 'bottom', 'top'], [L.CSections.RowGroup.name, 'right', 'left']];
+	anchor: Array<Array<string>> = [[app.CSections.CornerHeader.name, 'bottom', 'top'], [app.CSections.RowGroup.name, 'right', 'left']];
 	position: number[] = [0, 0]; // This section's myTopLeft is placed according to corner header and row group sections.
 	size: number[] = [48 * app.dpiScale, 0]; // No initial height is necessary.
 	expand: string[] = ['top', 'bottom']; // Expand vertically.
-	processingOrder: number = L.CSections.RowHeader.processingOrder;
-	drawingOrder: number = L.CSections.RowHeader.drawingOrder;
-	zIndex: number = L.CSections.RowHeader.zIndex;
+	processingOrder: number = app.CSections.RowHeader.processingOrder;
+	drawingOrder: number = app.CSections.RowHeader.drawingOrder;
+	zIndex: number = app.CSections.RowHeader.zIndex;
 	cursor: string = 'row-resize';
 
 	_current: number;
-	_resizeHandleSize: number;
 	_selection: SelectionRange;
 
 	constructor(cursor?: string) {
-		super();
+		super(app.CSections.RowHeader.name);
 
 		if (cursor)
 			this.cursor = cursor;
 	}
 
 	onInitialize(): void {
-		this._map = L.Map.THIS;
+		this._map = window.L.Map.THIS;
 		this._isColumn = false;
 		this._current = -1;
-		this._resizeHandleSize = 15 * app.dpiScale;
+		this.resizeHandleSize = 15 * app.dpiScale;
 		this._selection = {start: -1, end: -1};
 		this._mouseOverEntry = null;
 		this._lastMouseOverIndex = undefined;
 		this._hitResizeArea = false;
 		this.sectionProperties.docLayer = this._map._docLayer;
 
-		this._selectionBackgroundGradient = [ '#3465A4', '#729FCF', '#004586' ];
-
-		this._map.on('move zoomchanged sheetgeometrychanged splitposchanged', this._updateCanvas, this);
-		this._map.on('darkmodechanged', this._reInitRowColumnHeaderStylesAfterModeChange, this);
-
-		this._initHeaderEntryStyles('spreadsheet-header-row');
-		this._initHeaderEntryHoverStyles('spreadsheet-header-row-hover');
-		this._initHeaderEntrySelectedStyles('spreadsheet-header-row-selected');
-		this._initHeaderEntryResizeStyles('spreadsheet-header-row-resize');
+		super.onInitialize();
 
 		this._menuItem = {
 			'.uno:InsertRowsBefore': {
-				name: _UNO('.uno:InsertRowsBefore', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:InsertRowsBefore', 'spreadsheet', true), 'InsertRowsBefore'),
+				isHtmlName: true,
 				callback: (this._insertRowAbove).bind(this)
 			},
 			'.uno:InsertRowsAfter': {
-				name: _UNO('.uno:InsertRowsAfter', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:InsertRowsAfter', 'spreadsheet', true), 'InsertRowsAfter'),
+				isHtmlName: true,
 				callback: (this._insertRowBelow).bind(this)
 			},
 			'.uno:DeleteRows': {
-				name: _UNO('.uno:DeleteRows', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:DeleteRows', 'spreadsheet', true), 'DeleteRows'),
+				isHtmlName: true,
 				callback: (this._deleteSelectedRow).bind(this)
 			},
 			'.uno:RowHeight': {
-				name: _UNO('.uno:RowHeight', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:RowHeight', 'spreadsheet', true), 'RowHeight'),
+				isHtmlName: true,
 				callback: (this._rowHeight).bind(this)
 			},
 			'.uno:SetOptimalRowHeight': {
-				name: _UNO('.uno:SetOptimalRowHeight', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:SetOptimalRowHeight', 'spreadsheet', true), 'SetOptimalRowHeight'),
+				isHtmlName: true,
 				callback: (this._optimalHeight).bind(this)
 			},
 			'.uno:HideRow': {
-				name: _UNO('.uno:HideRow', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:HideRow', 'spreadsheet', true), 'HideRow'),
+				isHtmlName: true,
 				callback: (this._hideRow).bind(this)
 			},
 			'.uno:ShowRow': {
-				name: _UNO('.uno:ShowRow', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:ShowRow', 'spreadsheet', true), 'ShowRow'),
+				isHtmlName: true,
 				callback: (this._showRow).bind(this)
 			},
 			'.uno:FreezePanes': {
-				name: _UNO('.uno:FreezePanes', 'spreadsheet', true),
+				name: app.IconUtil.createMenuItemLink(_UNO('.uno:FreezePanes', 'spreadsheet', true), 'FreezePanes'),
+				isHtmlName: true,
 				callback: (this._freezePanes).bind(this)
 			}
 		};
 
-		this._menuData = L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(this._menuItem, true, '');
+		this._menuData = window.L.Control.JSDialogBuilder.getMenuStructureForMobileWizard(this._menuItem, true, '');
 		this._headerInfo = new cool.HeaderInfo(this._map, false /* isCol */);
+	}
+
+	isMouseOverResizeArea(start: number, end:number, position: number, entryIsCurrent: boolean) : boolean {
+		let resizeAreaStart = Math.max(start, end - this.borderResizeHandle * app.dpiScale);
+		if (entryIsCurrent || (window as any).mode.isMobile()) {
+			if (this.resizeHandleSize > (end - start) / 4) {
+				resizeAreaStart = end - ((end - start) / 4);
+			} else {
+				resizeAreaStart =  end - this.resizeHandleSize;
+			}
+		}
+		return position > resizeAreaStart;
 	}
 
 	drawHeaderEntry (entry: HeaderEntryData): void {
@@ -127,19 +137,19 @@ export class RowHeader extends cool.Header {
 		this.context.fillRect(0, startY, this.size[0], entry.size);
 
 		// draw resize handle
-		const handleSize = this._resizeHandleSize;
+		const handleSize = this.resizeHandleSize;
 		if (entry.isCurrent && entry.size > 2 * handleSize && !this.inResize()) {
 			const center = startY + entry.size - handleSize / 2;
 			const x = 2 * app.dpiScale;
 			const w = this.size[0] - 4 * app.dpiScale;
 			const size = 2 * app.dpiScale;
-			const offset = 1 *app.dpiScale;
+			const offsetOnePixel = 1 * app.dpiScale;
 
 			this.context.fillStyle = '#BBBBBB';
 			this.context.beginPath();
-			this.context.fillRect(x + 2 * app.dpiScale, center - size - offset, w - 4 * app.dpiScale, size);
+			this.context.fillRect(x + 2 * app.dpiScale, center - size - offsetOnePixel, w - 4 * app.dpiScale, size);
 			this.context.beginPath();
-			this.context.fillRect(x + 2 * app.dpiScale, center + offset, w - 4 * app.dpiScale, size);
+			this.context.fillRect(x + 2 * app.dpiScale, center + offsetOnePixel, w - 4 * app.dpiScale, size);
 		}
 
 		// draw text content
@@ -151,7 +161,7 @@ export class RowHeader extends cool.Header {
 
 		// draw row borders.
 		this.context.strokeStyle = this._borderColor;
-		var offset = this.getLineOffset();
+		const offset = this.getLineOffset();
 		this.context.lineWidth = this.getLineWidth();
 		this.context.strokeRect(offset, startY - offset, this.size[0], entry.size);
 	}
@@ -177,27 +187,21 @@ export class RowHeader extends cool.Header {
 		return {left: left, right: right, top: top, bottom: bottom};
 	}
 
-	onDraw(): void {
-		this._headerInfo.forEachElement(function(elemData: HeaderEntryData): boolean {
-			this.drawHeaderEntry(elemData);
-			return false; // continue till last.
-		}.bind(this));
-
-		this.drawResizeLineIfNeeded();
-	}
-
-	onClick (point: number[], e: MouseEvent): void {
+	onClick (point: cool.SimplePoint, e: MouseEvent): void {
 		if (!this._mouseOverEntry)
+			return;
+
+		if (this._hitResizeArea)
 			return;
 
 		const row = this._mouseOverEntry.index;
 
 		let modifier = 0;
 		if (e.shiftKey) {
-			modifier += UNOModifier.SHIFT;
+			modifier += app.UNOModifier.SHIFT;
 		}
 		if (e.ctrlKey) {
-			modifier += UNOModifier.CTRL;
+			modifier += app.UNOModifier.CTRL;
 		}
 
 		this._selectRow(row, modifier);
@@ -260,18 +264,6 @@ export class RowHeader extends cool.Header {
 
 	setOptimalHeightAuto(): void {
 		if (this._mouseOverEntry) {
-			const row = this._mouseOverEntry.index;
-			const command = {
-				Row: {
-					type: 'long',
-					value: row
-				},
-				Modifier: {
-					type: 'unsigned short',
-					value: 0
-				}
-			};
-
 			const extra = {
 				aExtraHeight: {
 					type: 'unsigned short',
@@ -279,7 +271,6 @@ export class RowHeader extends cool.Header {
 				}
 			};
 
-			this._map.sendUnoCommand('.uno:SelectRow', command);
 			this._map.sendUnoCommand('.uno:SetOptimalRowHeight', extra);
 		}
 	}

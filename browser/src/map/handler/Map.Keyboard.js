@@ -1,21 +1,21 @@
 /* -*- js-indent-level: 8 -*- */
 /*
- * L.Map.Keyboard is handling keyboard interaction with the map, enabled by default.
+ * window.L.Map.Keyboard is handling keyboard interaction with the map, enabled by default.
  *
  * It handles keyboard interactions which are NOT text input, including those which
  * don't require edit permissions (e.g. page scroll). Text input is handled
  * at TextInput.
  */
 
-/* global app UNOKey UNOModifier */
+/* global app UNOKey TileManager */
 
-L.Map.mergeOptions({
+window.L.Map.mergeOptions({
 	keyboard: true,
 	keyboardPanOffset: 20,
 	keyboardZoomOffset: 1
 });
 
-L.Map.Keyboard = L.Handler.extend({
+window.L.Map.Keyboard = window.L.Handler.extend({
 
 	keymap: {
 		8   : UNOKey.BACKSPACE,
@@ -76,7 +76,7 @@ L.Map.Keyboard = L.Handler.extend({
 		90  : UNOKey.Z,
 		91  : null, // left window key	: UNKOWN
 		92  : null, // right window key	: UNKOWN
-		93  : null, // select key	: UNKOWN
+		93	: UNOKey.CONTEXTMENU,
 		96  : UNOKey.NUM0,
 		97  : UNOKey.NUM1,
 		98  : UNOKey.NUM2,
@@ -137,9 +137,11 @@ L.Map.Keyboard = L.Handler.extend({
 		39  : true, // right arrow
 		40  : true, // down arrow
 		45  : true, // insert
+		93  : true, // context menu
 		113 : true  // f2
 	},
 
+	// See https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/keyCode for list of keycodes
 	keyCodes: {
 
 		pageUp:   33,
@@ -205,7 +207,7 @@ L.Map.Keyboard = L.Handler.extend({
 		Z:        90,
 		LEFTWINDOWKEY :    [91,91], // left window key	: UNKOWN  and also for MAC
 		RIGHTWINDOWKEY:    [92,93], // right window key	: UNKOWN  and also for MAC
-		SELECTKEY:         93, // select key	: UNKOWN
+		CONTEXTMENU:       93, // context menu
 		// NUM0:     96,
 		// NUM1:     97,
 		// NUM2:     98,
@@ -275,6 +277,7 @@ L.Map.Keyboard = L.Handler.extend({
 		46:    true,  // DELETE
 		91:    true,  // LEFTWINDOWKEY
 		92:    true,  // RIGHTWINDOWKEY
+		93:    true,  // CONTEXTMENU
 		112:    true,  //F1
 		113:    true,  //F2
 		114:    true,  //F3
@@ -308,17 +311,19 @@ L.Map.Keyboard = L.Handler.extend({
 			container.tabIndex = '0';
 		}
 
-		L.DomEvent.on(this._map.getContainer(), 'keydown keyup keypress', this._onKeyDown, this);
-		L.DomEvent.on(window.document, 'keydown', this._globalKeyEvent, this);
+		window.L.DomEvent.on(this._map.getContainer(), 'keydown keyup keypress', this._onKeyDown, this);
+		window.L.DomEvent.on(window.document, 'keydown', this._globalKeyEvent, this);
+		window.document.addEventListener('keyup', this._globalKeyUp.bind(this), true);
 	},
 
 	removeHooks: function () {
-		L.DomEvent.off(this._map.getContainer(), 'keydown keyup keypress', this._onKeyDown, this);
-		L.DomEvent.off(window.document, 'keydown', this._globalKeyEvent, this);
+		window.L.DomEvent.off(this._map.getContainer(), 'keydown keyup keypress', this._onKeyDown, this);
+		window.L.DomEvent.off(window.document, 'keydown', this._globalKeyEvent, this);
+		window.document.removeEventListener('keyup', this._globalKeyUp.bind(this));
 	},
 
 	_ignoreKeyEvent: function(ev) {
-		var shift = ev.shiftKey ? UNOModifier.SHIFT : 0;
+		var shift = ev.shiftKey ? app.UNOModifier.SHIFT : 0;
 		if (shift && (ev.keyCode === this.keyCodes.INSERT || ev.keyCode === this.keyCodes.DELETE)) {
 			// don't handle shift+insert, shift+delete
 			// These are converted to 'cut', 'paste' events which are
@@ -371,7 +376,7 @@ L.Map.Keyboard = L.Handler.extend({
 	// printable characters. Those are handled by TextInput.js.
 	_onKeyDown: function (ev) {
 		if (this._map.uiManager.isUIBlocked()
-			|| ((this._map._docLayer._docType === 'presentation' || this._map._docLayer._docType === 'drawing') && this._map._docLayer._preview.partsFocused === true)
+			|| (this._map._docLayer && (this._map._docLayer._docType === 'presentation' || this._map._docLayer._docType === 'drawing') && this._map._docLayer._preview.partsFocused === true)
 		)
 			return;
 
@@ -397,6 +402,18 @@ L.Map.Keyboard = L.Handler.extend({
 		if (this._map.uiManager.isUIBlocked())
 			return;
 
+		if (app.UI.notebookbarAccessibility) {
+			app.UI.notebookbarAccessibility.onDocumentKeyDown(ev);
+		}
+
+		if (ev.shortCutActivated === true) {
+			window.app.console.log('Shortcut for: ' + ev.code + ' already handled');
+			return;
+		}
+
+		if (window.KeyboardShortcuts.processEvent(app.UI.language.fromURL, ev)) {
+			return;
+		}
 		if (this._map.jsdialog
 			&& (this._map.jsdialog.hasDialogOpened() || this._map.jsdialog.hasSnackbarOpened() || this._map.jsdialog.hasDropdownOpened())
 			&& this._map.jsdialog.handleKeyEvent(ev)) {
@@ -404,7 +421,6 @@ L.Map.Keyboard = L.Handler.extend({
 			return;
 		}
 		else if (this._map._docLayer && (this._map._docLayer._docType === 'presentation' || this._map._docLayer._docType === 'drawing') && this._map._docLayer._preview.partsFocused === true) {
-
 			if (!this.modifier && (ev.keyCode === this.keyCodes.DOWN || ev.keyCode === this.keyCodes.UP ||
 				               ev.keyCode === this.keyCodes.RIGHT || ev.keyCode === this.keyCodes.LEFT ||
 				               ev.keyCode === this.keyCodes.PAGEDOWN || ev.keyCode === this.keyCodes.PAGEUP ||
@@ -416,25 +432,44 @@ L.Map.Keyboard = L.Handler.extend({
 				if (!deletePart) {
 					var partToSelect = (ev.keyCode === this.keyCodes.UP || ev.keyCode === this.keyCodes.LEFT ||
 						            ev.keyCode === this.keyCodes.PAGEUP) ? 'prev' : 'next';
+
+					this._map.deselectAll();
 					this._map.setPart(partToSelect);
 					if (app.file.fileBasedView)
 						this._map._docLayer._checkSelectedPart();
 				}
-				else if (this._map.isEditMode() && !app.file.fileBasedView) {
+				else if (this._map.isEditMode() && !app.file.fileBasedView &&
+						this._map.jsdialog &&
+						!this._map.jsdialog.hasDialogOpened()
+				) {
 					this._map.deletePage(this._map._docLayer._selectedPart);
 				}
 				ev.preventDefault();
-				return;
 			}
-			else if (ev.ctrlKey) {
-				if (!ev.altKey && ev.keyCode === this.keyCodes.HOME)
-					this._map.setPart(0);
-				else if (!ev.altKey && ev.keyCode === this.keyCodes.END)
-					this._map.setPart(this._map._docLayer._parts - 1);
+			else if (ev.ctrlKey && !ev.altKey && ev.keyCode === this.keyCodes.HOME)
+				app.map.setPart(0);
+			else if (ev.ctrlKey && !ev.altKey && ev.keyCode === this.keyCodes.END)
+				app.map.setPart(app.map._docLayer._parts - 1);
+			else if (ev.ctrlKey && !ev.altKey && this.keyCodes.C.includes(ev.keyCode)) {
+				app.map._clip.clearSelection();
+				app.map._clip.setTextSelectionType('slide');
 			}
-			else {
+			else if (!ev.ctrlKey) {
 				this._map._docLayer._preview.partsFocused = false;
+				app.map._clip.clearSelection();
+				app.map.focus();
 			}
+		}
+	},
+
+	_globalKeyUp: function (ev) {
+		if (this._map.uiManager.isUIBlocked()) {
+			return;
+		}
+
+		if (app.UI.notebookbarAccessibility &&
+		    app.UI.notebookbarAccessibility.accessibilityInputElement !== document.activeElement) {
+			app.UI.notebookbarAccessibility.onDocumentKeyUp(ev);
 		}
 	},
 
@@ -452,24 +487,27 @@ L.Map.Keyboard = L.Handler.extend({
 			return;
 		}
 
-		// if any key is pressed, we stop the following other users
-		this._map.userList.followUser(this._map._docLayer._viewId);
-
-		if (window.KeyboardShortcuts.processEvent(app.UI.language.fromURL, ev)) {
-			ev.preventDefault();
-			return;
-		}
+		if (ev.code === 'NumpadDecimal') this._map.numPadDecimalPressed = true;
+		else this._map.numPadDecimalPressed = false;
 
 		var docLayer = this._map._docLayer;
+
+		// if any key is pressed, we stop the following other users
+		if (docLayer) this._map.userList.followUser(docLayer._viewId, false);
+
+		if (window.KeyboardShortcuts.processEvent(app.UI.language.fromURL, ev)) {
+			ev.shortCutActivated = true;
+			return;
+		}
 		if (!keyEventFn && docLayer && docLayer.postKeyboardEvent) {
 			// default is to post keyboard events on the document
-			keyEventFn = L.bind(docLayer.postKeyboardEvent, docLayer);
+			keyEventFn = window.L.bind(docLayer.postKeyboardEvent, docLayer);
 		}
 
 		this.modifier = 0;
-		var shift = ev.shiftKey ? UNOModifier.SHIFT : 0;
-		var ctrl = (ev.ctrlKey || ev.metaKey) ? UNOModifier.CTRL : 0;
-		var alt = ev.altKey ? UNOModifier.ALT : 0;
+		var shift = ev.shiftKey ? app.UNOModifier.SHIFT : 0;
+		var ctrl = (ev.ctrlKey || ev.metaKey) ? app.UNOModifier.CTRL : 0;
+		var alt = ev.altKey ? app.UNOModifier.ALT : 0;
 		var location = ev.location;
 		this.modifier = shift | ctrl | alt;
 
@@ -509,7 +547,7 @@ L.Map.Keyboard = L.Handler.extend({
 		var DEFAULT =0;
 		//var MAC=1; use this when you encounter a MAC value
 
-		if ((this.modifier == UNOModifier.ALT || this.modifier == UNOModifier.SHIFT + UNOModifier.ALT) &&
+		if ((this.modifier == app.UNOModifier.ALT || this.modifier == app.UNOModifier.SHIFT + app.UNOModifier.ALT) &&
 		    keyCode >= this.keyCodes.NUM0[DEFAULT]) {
 			// Presumably a Mac or iOS client accessing a "special character". Just ignore the alt modifier.
 			// But don't ignore it for Alt + non-printing keys.
@@ -537,7 +575,7 @@ L.Map.Keyboard = L.Handler.extend({
 		}
 
 		if (this._map.isEditMode()) {
-			docLayer._resetPreFetching();
+			TileManager.resetPreFetching();
 
 			if (this._ignoreKeyEvent(ev)) {
 				// key ignored
@@ -606,11 +644,11 @@ L.Map.Keyboard = L.Handler.extend({
 			}
 		}
 
-		L.DomEvent.stopPropagation(ev);
+		window.L.DomEvent.stopPropagation(ev);
 	},
 
 	_isCtrlKey: function (e) {
-		if (window.ThisIsTheiOSApp || L.Browser.mac)
+		if (window.ThisIsTheiOSApp || window.L.Browser.mac)
 			return e.metaKey;
 		else
 			return e.ctrlKey;
@@ -632,6 +670,11 @@ L.Map.Keyboard = L.Handler.extend({
 		if (e.type !== 'keydown' && e.keyCode !== this.keyCodes.C[DEFAULT] && e.keyCode !== this.keyCodes.V[DEFAULT] && e.keyCode !== this.keyCodes.X[DEFAULT] &&
 		/* Safari */ e.keyCode !== this.keyCodes.C[MAC] && e.keyCode !== this.keyCodes.V[MAC] && e.keyCode !== this.keyCodes.X[MAC]) {
 			e.preventDefault();
+			return true;
+		}
+
+		// Control + INSERT
+		if (this._isCtrlKey(e) && e.keyCode === this.keyCodes.INSERT) {
 			return true;
 		}
 
@@ -692,7 +735,16 @@ L.Map.Keyboard = L.Handler.extend({
 		}
 
 		if (this._isCtrlKey(e) && !e.shiftKey && e.keyCode === this.keyCodes.K) {
-			this._map.showHyperlinkDialog();
+			this._map.sendUnoCommand('.uno:HyperlinkDialog');
+			e.preventDefault();
+			return true;
+		}
+
+		if (
+			(this._isCtrlKey(e) && e.keyCode === this.keyCodes.Y) ||
+			(this._isCtrlKey(e) && e.shiftKey && e.keyCode === this.keyCodes.Z)
+		) {
+			app.socket.sendMessage('uno .uno:Redo');
 			e.preventDefault();
 			return true;
 		}
@@ -703,37 +755,11 @@ L.Map.Keyboard = L.Handler.extend({
 			return true;
 		}
 
-		if (this._isCtrlKey(e) && e.keyCode === this.keyCodes.Y) {
-			app.socket.sendMessage('uno .uno:Redo');
-			e.preventDefault();
-			return true;
-		}
-
-		if (this._isCtrlKey(e) && !e.shiftKey && !e.altKey && e.keyCode === this.keyCodes.F) {
-			if (app.UI.language.fromURL === 'de' && this._map.getDocType() === 'text') {
-				this._map.sendUnoCommand('.uno:Navigator');
-			}
-			else {
-				if (!this._map.uiManager.isStatusBarVisible()) {
-					this._map.uiManager.showStatusBar();
-				}
-				this._map.fire('focussearch');
-			}
-
-			e.preventDefault();
-			return true;
-		}
-
-		if (this._isCtrlKey(e) && !e.shiftKey && e.altKey && e.keyCode === this.keyCodes.S && app.UI.language.fromURL === 'de' && this._map.getDocType() === 'text') {
-			this._map.fire('focussearch');
-			e.preventDefault();
-			return true;
-		}
-
 		if (e.altKey || e.shiftKey) {
 
 			// need to handle Ctrl + Alt + C separately for Firefox
-			if (this.keyCodes.C.includes(e.keyCode) && e.altKey) {
+			// Adding also CTRL + Alt + R combination for Safari users. R_MOD1_MOD2 combination is empty on the core side. So this should be safe.
+			if ((this.keyCodes.C.includes(e.keyCode) || e.keyCode === this.keyCodes.R) && e.altKey) {
 				this._map.insertComment();
 				return true;
 			}
@@ -821,24 +847,14 @@ L.Map.Keyboard = L.Handler.extend({
 		case this.keyCodes.LEFTWINDOWKEY[MAC]: // Left Cmd (Safari)
 		case this.keyCodes.RIGHTWINDOWKEY[MAC]: // Right Cmd (Safari)
 			// we prepare for a copy or cut event
-			this._map.focus();
+			// slide operations are handled differently avoid changing focus
+			var slidePreviewFocused = this._map._docLayer._preview && this._map._docLayer._preview.partsFocused;
+			if (!slidePreviewFocused)
+				this._map.focus();
 			// Not sure if the commented code is still used, so I didn't remove it.
 			// Anyhow, by when editable area is populated with the focused paragraph
 			// we can't select its content or on next editing the content is overwritten.
 			// this._map._textInput.select();
-			return true;
-		case this.keyCodes.P: // p
-			this._map.print();
-			return true;
-		case this.keyCodes.S: // s
-			// Save only when not read-only and when HideSaveOption is false.
-			if (!this._map.isReadOnlyMode() && !this._map['wopi'].HideSaveOption) {
-				this._map.fire('postMessage', {msgId: 'UI_Save', args: { source: 'keyboard' }});
-				if (!this._map._disableDefaultAction['UI_Save']) {
-					this._map.save(false /* An explicit save should terminate cell edit */,
-					               false /* An explicit save should save it again */);
-				}
-			}
 			return true;
 		case this.keyCodes.V[DEFAULT]: // v
 		case this.keyCodes.V[MAC]: // v (Safari) needs a separate mapping in keyCodes

@@ -9,11 +9,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 /*
- * L.Control.DocumentNameInput
+ * window.L.Control.DocumentNameInput
  */
 
 /* global $ _ */
-L.Control.DocumentNameInput = L.Control.extend({
+window.L.Control.DocumentNameInput = window.L.Control.extend({
 
 	onAdd: function (map) {
 		this.map = map;
@@ -55,12 +55,14 @@ L.Control.DocumentNameInput = L.Control.extend({
 		this.map._onGotFocus();
 	},
 
-	documentNameCancel: function() {
+	documentNameCancel: function(blur) {
 		if (this._renaming)
 			return;
 
 		$('#document-name-input').val(this.map['wopi'].BreadcrumbDocName);
-		this.map._onGotFocus();
+		if (blur !== true) {
+			this.map._onGotFocus();
+		}
 	},
 
 	disableDocumentNameInput : function() {
@@ -74,7 +76,7 @@ L.Control.DocumentNameInput = L.Control.extend({
 		$('#document-name-input').addClass('editable');
 		$('#document-name-input').off('keypress', this.onDocumentNameKeyPress).on('keypress', this.onDocumentNameKeyPress.bind(this));
 		$('#document-name-input').off('focus', this.onDocumentNameFocus).on('focus', this.onDocumentNameFocus.bind(this));
-		$('#document-name-input').off('blur', this.documentNameCancel).on('blur', this.documentNameCancel.bind(this));
+		$('#document-name-input').off('blur', this.documentNameCancel).on('blur', this.documentNameCancel.bind(this, true));
 	},
 
 	onDocumentNameKeyPress: function(e) {
@@ -147,7 +149,9 @@ L.Control.DocumentNameInput = L.Control.extend({
 		if (e.BaseFileName !== null) {
 			// set the document name into the name field
 			$('#document-name-input').val(e.BreadcrumbDocName !== undefined ? e.BreadcrumbDocName : e.BaseFileName);
-			this.map.uiManager.enableTooltip($('#document-name-input'));
+			var input = window.L.DomUtil.get('document-name-input');
+			input.setAttribute('data-cooltip', input.value);
+			window.L.control.attachTooltipEventListener(input, this.map);
 		}
 		if (!e.UserCanNotWriteRelative && !this.map.isReadOnlyMode()) {
 			// Save As allowed
@@ -191,6 +195,6 @@ L.Control.DocumentNameInput = L.Control.extend({
 
 });
 
-L.control.documentNameInput = function () {
-	return new L.Control.DocumentNameInput();
+window.L.control.documentNameInput = function () {
+	return new window.L.Control.DocumentNameInput();
 };

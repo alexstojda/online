@@ -96,13 +96,17 @@ var AdminSocketSettings = AdminSocketBase.extend({
 			else {
 				$('#coolwsd-version').text(coolwsdVersionObj.Version);
 			}
-			$('#coolwsd-buildconfig').html(coolwsdVersionObj.BuildConfig);
+			let buildConfig = coolwsdVersionObj.BuildConfig;
+			if (coolwsdVersionObj.PocoVersion !== undefined) {
+				buildConfig += ' (poco version: ' + coolwsdVersionObj.PocoVersion + ')';
+			}
+			$('#coolwsd-buildconfig').html(buildConfig);
 		}
 		else if (textMsg.startsWith('lokitversion ')) {
 			var lokitVersionObj = JSON.parse(textMsg.substring(textMsg.indexOf('{')));
-			h = lokitVersionObj.BuildId.substring(0, 7);
+			h = lokitVersionObj.BuildId.substring(0, 10);
 			if (parseInt(h,16).toString(16) === h.toLowerCase().replace(/^0+/, '')) {
-				h = '<a target="_blank" href="https://hub.libreoffice.org/git-core/' + h + '">' + h + '</a>';
+				h = '<a target="_blank" href="https://git.libreoffice.org/core/+log/' + lokitVersionObj.BuildId + '/">' + h + '</a>';
 			}
 			$('#lokit-version').html(lokitVersionObj.ProductName + ' ' +
 			                         lokitVersionObj.ProductVersion + lokitVersionObj.ProductExtension +

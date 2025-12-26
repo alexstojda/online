@@ -26,29 +26,32 @@ class UnitWOPITemplate : public WopiTestServer
 
     bool _savedTemplate;
 
+    std::string _templateFile;
+
 public:
-    UnitWOPITemplate()
-        : WopiTestServer("UnitWOPITemplate")
+    UnitWOPITemplate(std::string templateFile)
+        : WopiTestServer("UnitWOPITemplate_" + templateFile)
         , _phase(Phase::LoadTemplate)
         , _savedTemplate(false)
+        , _templateFile(templateFile)
     {
     }
 
     virtual bool handleHttpRequest(const Poco::Net::HTTPRequest& request,
-                                   Poco::MemoryInputStream& /*message*/,
-                                   std::shared_ptr<StreamSocket>& socket) override
+                                   std::istream& /*message*/,
+                                   const std::shared_ptr<StreamSocket>& socket) override
     {
         const Poco::URI uriReq(request.getURI());
-        LOG_TST("FakeWOPIHost: " << request.getMethod() << " request: " << uriReq.toString());
+        TST_LOG("FakeWOPIHost: " << request.getMethod() << " request: " << uriReq.toString());
 
         // CheckFileInfo
         if (request.getMethod() == "GET" && uriReq.getPath() == "/wopi/files/10")
         {
-            LOG_TST("FakeWOPIHost: Handling CheckFileInfo: " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling CheckFileInfo: " << uriReq.getPath());
 
             Poco::JSON::Object::Ptr fileInfo = getDefaultCheckFileInfoPayload(uriReq);
             fileInfo->set("BaseFileName", "test.odt");
-            fileInfo->set("TemplateSource", helpers::getTestServerURI() + "/test.ott");
+            fileInfo->set("TemplateSource", helpers::getTestServerURI() + "/" + _templateFile);
 
             std::ostringstream jsonStream;
             fileInfo->stringify(jsonStream);
@@ -60,11 +63,11 @@ public:
 
             return true;
         }
-        else if ((request.getMethod() == "OPTIONS" || request.getMethod() == "HEAD"
-                  || request.getMethod() == "PROPFIND")
-                 && uriReq.getPath() == "/test.ott")
+        else if ((request.getMethod() == "OPTIONS" || request.getMethod() == "HEAD" ||
+                  request.getMethod() == "PROPFIND") &&
+                 uriReq.getPath() == "/" + _templateFile)
         {
-            LOG_TST("FakeWOPIHost: Handling " << request.getMethod() << " on " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling " << request.getMethod() << " on " << uriReq.getPath());
 
             http::Response httpResponse(http::StatusCode::OK);
             httpResponse.set("Allow", "GET");
@@ -73,26 +76,26 @@ public:
             return true;
         }
         // Get the template
-        else if (request.getMethod() == "GET" && uriReq.getPath() == "/test.ott")
+        else if (request.getMethod() == "GET" && uriReq.getPath() == "/" + _templateFile)
         {
-            LOG_TST("FakeWOPIHost: Handling template GetFile: " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling template GetFile: " << uriReq.getPath());
 
             http::Response response(http::StatusCode::OK);
-            HttpHelper::sendFileAndShutdown(socket, TDOC "/test.ott", response);
+            HttpHelper::sendFileAndShutdown(socket, TDOC "/" + _templateFile, response);
 
             return true;
         }
         // Save template
         else if (request.getMethod() == "POST" && uriReq.getPath() == "/wopi/files/10/contents")
         {
-            LOG_TST("FakeWOPIHost: Handling PutFile: " << uriReq.getPath());
+            TST_LOG("FakeWOPIHost: Handling PutFile: " << uriReq.getPath());
 
             if (!_savedTemplate)
             {
                 // First, we expect to get a PutFile right after loading.
                 LOK_ASSERT_EQUAL(static_cast<int>(Phase::SaveDoc), static_cast<int>(_phase));
                 _savedTemplate = true;
-                LOG_TST("SaveDoc => CloseDoc");
+                TST_LOG("SaveDoc => CloseDoc");
                 TRANSITION_STATE(_phase, Phase::CloseDoc);
             }
             else
@@ -114,7 +117,7 @@ public:
             return true;
         }
 
-        LOG_TST("FakeWOPIHost: unknown request "
+        TST_LOG("FakeWOPIHost: unknown request "
                 << request.getMethod() << " request: " << uriReq.toString() << ". Defaulting.");
         return false;
     }
@@ -126,7 +129,7 @@ public:
         {
             case Phase::LoadTemplate:
             {
-                LOG_TST("LoadTemplate => SaveDoc");
+                TST_LOG("LoadTemplate => SaveDoc");
                 TRANSITION_STATE(_phase, Phase::SaveDoc);
 
                 initWebsocket("/wopi/files/10?access_token=anything");
@@ -136,7 +139,7 @@ public:
             }
             case Phase::CloseDoc:
             {
-                LOG_TST("CloseDoc => Polling");
+                TST_LOG("CloseDoc => Polling");
                 TRANSITION_STATE(_phase, Phase::Polling);
                 WSD_CMD("closedocument");
                 break;
@@ -154,9 +157,10 @@ public:
     }
 };
 
-UnitBase *unit_create_wsd(void)
+UnitBase** unit_create_wsd_multi(void)
 {
-    return new UnitWOPITemplate();
+    return new UnitBase*[3]{ new UnitWOPITemplate("test.ott"), new UnitWOPITemplate("test.dotx"),
+                             nullptr };
 }
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

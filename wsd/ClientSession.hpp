@@ -16,11 +16,17 @@
 #include "SenderQueue.hpp"
 #include "ServerURL.hpp"
 #include "DocumentBroker.hpp"
+
+#include <Poco/JSON/Object.h>
+#include <Poco/SharedPtr.h>
 #include <Poco/URI.h>
+
 #include <Rectangle.hpp>
 #include <deque>
 #include <utility>
 #include "Util.hpp"
+
+#include <optional>
 
 class DocumentBroker;
 
@@ -28,20 +34,18 @@ class DocumentBroker;
 class ClientSession final : public Session
 {
 public:
-    ClientSession(const std::shared_ptr<ProtocolHandlerInterface>& ws,
-                  const std::string& id,
-                  const std::shared_ptr<DocumentBroker>& docBroker,
-                  const Poco::URI& uriPublic,
-                  const bool isReadOnly,
-                  const RequestDetails &requestDetails);
+    ClientSession(const std::shared_ptr<ProtocolHandlerInterface>& ws, const std::string& id,
+                  const std::shared_ptr<DocumentBroker>& docBroker, const Poco::URI& uriPublic,
+                  bool isReadOnly, const RequestDetails& requestDetails,
+                  const AdditionalFilePocoUris& additionalFileUrisPublic = {});
     void construct();
     virtual ~ClientSession();
 
-    void setReadOnly(bool bValue = true) override;
+    void setReadOnly(bool value = true) override;
 
-    void sendFileMode(const bool readOnly, const bool editComments);
+    void sendFileMode(bool readOnly, bool editComments, bool manageRedlines);
 
-    void setLockFailed(const std::string& sReason);
+    void setLockFailed(const std::string& reason);
 
     STATE_ENUM(SessionState,
                DETACHED, // initial
@@ -69,6 +73,11 @@ public:
     /// Handle kit-to-client message.
     bool handleKitToClientMessage(const std::shared_ptr<Message>& payload);
 
+    std::optional<bool>
+    handleOpenDocKitToClientMessage(const std::shared_ptr<Message>& payload,
+                                    const std::shared_ptr<DocumentBroker>& docBroker,
+                                    const std::shared_ptr<StreamSocket>& saveAsSocket);
+
     /// Integer id of the view in the kit process, or -1 if unknown
     int getKitViewId() const { return _kitViewId; }
 
@@ -88,8 +97,6 @@ public:
 
         return false;
     }
-
-    ClientDeltaTracker _tracker;
 
     void resetTileSeq(const TileDesc &desc)
     {
@@ -156,6 +163,7 @@ public:
     void setSaveAsSocket(const std::shared_ptr<StreamSocket>& socket)
     {
         _saveAsSocket = socket;
+        _isConvertTo = static_cast<bool>(socket);
     }
 
     std::shared_ptr<DocumentBroker> getDocumentBroker() const { return _docBroker.lock(); }
@@ -168,6 +176,8 @@ public:
     /// the URI of the initial request.
     const Poco::URI& getPublicUri() const { return _uriPublic; }
 
+    const AdditionalFilePocoUris& getAdditionalFilePublicUri() const { return _additionalFileUrisPublic; }
+
     /// The access token of this session.
     const Authorization& getAuthorization() const { return _auth; }
 
@@ -178,7 +188,7 @@ public:
     }
 
     /// Set WOPI fileinfo object
-    void setWopiFileInfo(std::unique_ptr<WopiStorage::WOPIFileInfo>& wopiFileInfo) { _wopiFileInfo = std::move(wopiFileInfo); }
+    void setWopiFileInfo(std::unique_ptr<WopiStorage::WOPIFileInfo> wopiFileInfo) { _wopiFileInfo = std::move(wopiFileInfo); }
 
     /// Get requested tiles waiting for sending to the client
     std::deque<TileDesc>& getRequestedTiles() { return _requestedTiles; }
@@ -187,7 +197,7 @@ public:
     void addTileOnFly(TileWireId wireId);
     size_t getTilesOnFlyCount() const { return _tilesOnFly.size(); }
     size_t getTilesOnFlyUpperLimit() const;
-    void removeOutdatedTilesOnFly(const std::chrono::steady_clock::time_point &now);
+    void removeOutdatedTilesOnFly(std::chrono::steady_clock::time_point now);
     void onTileProcessed(TileWireId wireId);
 
     Util::Rectangle getVisibleArea() const { return _clientVisibleArea; }
@@ -195,7 +205,8 @@ public:
     Util::Rectangle getNormalizedVisibleArea() const;
 
     /// The client's visible area can be divided into a maximum of 4 panes.
-    enum SplitPaneName {
+    enum SplitPaneName : std::uint8_t
+    {
         TOPLEFT_PANE,
         TOPRIGHT_PANE,
         BOTTOMLEFT_PANE,
@@ -203,10 +214,10 @@ public:
     };
 
     /// Returns true if the given split-pane is currently valid.
-    bool isSplitPane(const SplitPaneName) const;
+    bool isSplitPane(SplitPaneName) const;
 
     /// Returns the normalized visible area of a given split-pane.
-    Util::Rectangle getNormalizedVisiblePaneArea(const SplitPaneName) const;
+    Util::Rectangle getNormalizedVisiblePaneArea(SplitPaneName) const;
 
     int getTileWidthInTwips() const { return _tileWidthTwips; }
     int getTileHeightInTwips() const { return _tileHeightTwips; }
@@ -235,7 +246,7 @@ public:
     void handleClipboardRequest(DocumentBroker::ClipboardRequest     type,
                                 const std::shared_ptr<StreamSocket> &socket,
                                 const std::string                   &tag,
-                                const std::shared_ptr<std::string>  &data);
+                                const std::string                   &clipFile);
 
     /// Create URI for transient clipboard content.
     std::string getClipboardURI(bool encode = true);
@@ -245,13 +256,14 @@ public:
 
     /// Adds and/or modified the copied payload before sending on to the client.
     void postProcessCopyPayload(const std::shared_ptr<Message>& payload);
+    bool postProcessCopyPayload(std::istream&, std::ostream&);
 
     /// Removes the <meta name="origin" ...> tag which was added in
     /// ClientSession::postProcessCopyPayload().
-    void preProcessSetClipboardPayload(std::string& payload);
+    bool preProcessSetClipboardPayload(std::istream&, std::ostream&);
 
     /// Returns true if we're expired waiting for a clipboard and should be removed
-    bool staleWaitDisconnect(const std::chrono::steady_clock::time_point &now);
+    bool staleWaitDisconnect(std::chrono::steady_clock::time_point now);
 
     /// Generate and rotate a new clipboard hash, sending it if appropriate
     void rotateClipboardKey(bool notifyClient);
@@ -270,7 +282,46 @@ public:
     /// Process an SVG to replace embedded file:/// media URIs with public http URLs.
     std::string processSVGContent(const std::string& svg);
 
-    int  getCanonicalViewId() { return _canonicalViewId; }
+    CanonicalViewId getCanonicalViewId() const { return _canonicalViewId; }
+
+    bool getSentBrowserSetting() const { return _sentBrowserSetting; }
+
+    void setSentBrowserSetting(const bool sentBrowserSetting)
+    {
+        _sentBrowserSetting = sentBrowserSetting;
+    }
+
+    void setBrowserSettingsJSON(const Poco::SharedPtr<Poco::JSON::Object>& jsonObject)
+    {
+        _browserSettingsJSON = jsonObject;
+    }
+
+    Poco::SharedPtr<Poco::JSON::Object> getBrowserSettingJSON()
+    {
+        return _browserSettingsJSON;
+    }
+
+    void uploadBrowserSettingsToWopiHost();
+
+    void setViewSettingsJSON(const Poco::SharedPtr<Poco::JSON::Object>& jsonObject)
+    {
+        _viewSettingsJSON = jsonObject;
+    }
+
+    Poco::SharedPtr<Poco::JSON::Object> getViewSettingsJSON() const
+    {
+        return _viewSettingsJSON;
+    }
+
+    void uploadViewSettingsToWopiHost();
+
+    /// Override parsedDocOption values we get from browser setting json
+    /// Because when client sends `load url` it doesn't have information about browser setting json
+    void overrideDocOption();
+
+#if !MOBILEAPP
+    void updateBrowserSettingsJSON(const std::string& json);
+#endif
 
 private:
     std::shared_ptr<ClientSession> client_from_this()
@@ -289,6 +340,8 @@ private:
 
     virtual bool _handleInput(const char* buffer, int length) override;
 
+    bool handleSignatureAction(const StringVector& tokens);
+
     bool loadDocument(const char* buffer, int length, const StringVector& tokens,
                       const std::shared_ptr<DocumentBroker>& docBroker);
     bool getStatus(const char* buffer, int length,
@@ -302,6 +355,8 @@ private:
 
     bool sendFontRendering(const char* buffer, int length, const StringVector& tokens,
                            const std::shared_ptr<DocumentBroker>& docBroker);
+    bool handleGetSlideRequest(const StringVector& tokens,
+                               const std::shared_ptr<DocumentBroker>& docBroker);
 
     bool forwardToChild(const std::string& message,
                         const std::shared_ptr<DocumentBroker>& docBroker);
@@ -325,27 +380,51 @@ private:
 
     std::string getIsAdminUserStatus() const;
 
-private:
-    std::weak_ptr<DocumentBroker> _docBroker;
+    /// Abort conversion due to failure.
+    void abortConversion(const std::shared_ptr<DocumentBroker>& docBroker,
+                         const std::shared_ptr<StreamSocket>& saveAsSocket, std::string errorKind);
 
+#if !MOBILEAPP
+
+    /// Handles saveas: and exportas: in handleKitToClientMessage.
+    bool handleSaveAs(const std::shared_ptr<Message>& payload,
+                      const std::shared_ptr<DocumentBroker>& docBroker,
+                      const std::shared_ptr<StreamSocket>& saveAsSocket);
+#endif // !MOBILEAPP
+
+private:
     /// URI with which client made request to us
     const Poco::URI _uriPublic;
+
+    const AdditionalFilePocoUris _additionalFileUrisPublic;
+
+    SenderQueue<std::shared_ptr<Message>> _senderQueue;
+
+    /// Requested tiles are stored in this list, before we can send them to the client
+    std::deque<TileDesc> _requestedTiles;
+
+    /// How to find our service from the client.
+    const ServerURL _serverURL;
 
     /// Authorization data - either access_token or access_header.
     Authorization _auth;
 
-    /// Whether this session is the owner of currently opened document
-    bool _isDocumentOwner;
+    /// Rotating clipboard remote access identifiers - protected by GlobalSessionMapMutex
+    std::string _clipboardKeys[2];
 
-    /// If it is allowed to try to switch from read-only to edit mode,
-    /// because it's read-only just because of transient lock failure.
-    bool _isLockFailed = false;
+    /// Target used for thumbnail rendering
+    std::string _thumbnailTarget;
+
+    /// Secure session id token for proxyprotocol authentication
+    std::string _proxyAccess;
+
+    /// Store last sent payload of form field button, so we can filter out redundant messages.
+    std::string _lastSentFormFielButtonMessage;
+
+    std::weak_ptr<DocumentBroker> _docBroker;
 
     /// The socket to which the converted (saveas) doc is sent.
-    std::shared_ptr<StreamSocket> _saveAsSocket;
-
-    /// The phase of our lifecycle that we're in.
-    SessionState _state;
+    std::weak_ptr<StreamSocket> _saveAsSocket;
 
     /// Time of last state transition
     std::chrono::steady_clock::time_point _lastStateTime;
@@ -353,13 +432,28 @@ private:
     /// Wopi FileInfo object
     std::unique_ptr<WopiStorage::WOPIFileInfo> _wopiFileInfo;
 
-    /// Count of key-strokes
-    uint64_t _keyEvents;
+    /// wire-ids's of the in-flight tiles. Push by sending and pop by tileprocessed message from the client.
+    std::vector<std::pair<TileWireId, std::chrono::steady_clock::time_point>> _tilesOnFly;
 
-    SenderQueue<std::shared_ptr<Message>> _senderQueue;
+    /// Sockets to send binary selection content to
+    std::vector<std::weak_ptr<StreamSocket>> _clipSockets;
+
+    /// Delta tile tracker.
+    ClientDeltaTracker _tracker;
 
     /// Visible area of the client
     Util::Rectangle _clientVisibleArea;
+
+    Poco::SharedPtr<Poco::JSON::Object> _browserSettingsJSON;
+
+    /// Time when loading of view started
+    std::chrono::steady_clock::time_point _viewLoadStart;
+
+    /// Count of key-strokes
+    uint64_t _keyEvents;
+
+    /// Epoch of the client's performance.now() function, as microseconds since Unix epoch
+    uint64_t _performanceCounterEpoch;
 
     /// Split position that defines the current split panes
     int _splitX;
@@ -380,8 +474,21 @@ private:
     /// The integer id of the view in the Kit process
     int _kitViewId;
 
-    /// How to find our service from the client.
-    const ServerURL _serverURL;
+    /// the canonical id unique to the set of rendering properties of this session
+    CanonicalViewId _canonicalViewId;
+
+    // Position used for thumbnail rendering
+    std::pair<int, int> _thumbnailPosition;
+
+    /// The phase of our lifecycle that we're in.
+    SessionState _state;
+
+    /// Whether this session is the owner of currently opened document
+    bool _isDocumentOwner;
+
+    /// If it is allowed to try to switch from read-only to edit mode,
+    /// because it's read-only just because of transient lock failure.
+    bool _isLockFailed = false;
 
     /// Client is using a text document?
     bool _isTextDocument;
@@ -389,44 +496,19 @@ private:
     /// Session used to generate thumbnail
     bool _thumbnailSession;
 
-    /// Target used for thumbnail rendering
-    std::string _thumbnailTarget;
-
-    // Position used for thumbnail rendering
-    std::pair<int, int> _thumbnailPosition;
-
-    /// Rotating clipboard remote access identifiers - protected by GlobalSessionMapMutex
-    std::string _clipboardKeys[2];
-
-    /// wire-ids's of the in-flight tiles. Push by sending and pop by tileprocessed message from the client.
-    std::vector<std::pair<TileWireId, std::chrono::steady_clock::time_point>> _tilesOnFly;
-
-    /// Requested tiles are stored in this list, before we can send them to the client
-    std::deque<TileDesc> _requestedTiles;
-
-    /// Sockets to send binary selection content to
-    std::vector<std::weak_ptr<StreamSocket>> _clipSockets;
-
-    /// Time when loading of view started
-    std::chrono::steady_clock::time_point _viewLoadStart;
-
-    /// Secure session id token for proxyprotocol authentication
-    std::string _proxyAccess;
-
-    /// Store last sent payload of form field button, so we can filter out redundant messages.
-    std::string _lastSentFormFielButtonMessage;
-
-    /// Epoch of the client's performance.now() function, as microseconds since Unix epoch
-    uint64_t _performanceCounterEpoch;
-
     // Saves time from setting/fetching user info multiple times using zotero API
     bool _isZoteroUserInfoSet = false;
 
-    /// the canonical id unique to the set of rendering properties of this session
-    int _canonicalViewId;
-
     /// If server audit was already sent
     bool _sentAudit;
+
+    /// If browser setting was already sent
+    bool _sentBrowserSetting;
+
+    /// If Session is for convert-to
+    bool _isConvertTo;
+
+    Poco::SharedPtr<Poco::JSON::Object> _viewSettingsJSON;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

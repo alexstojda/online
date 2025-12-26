@@ -1,3 +1,12 @@
+#
+# Copyright the Collabora Online contributors.
+#
+# SPDX-License-Identifier: MPL-2.0
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
 bin_PROGRAMS = mobile
 
 include_paths = -I${top_srcdir}/common -I${top_srcdir}/net -I${top_srcdir}/kit -I${top_srcdir}/wsd -I${top_srcdir} ${ZSTD_CFLAGS}
@@ -6,9 +15,6 @@ warning_flags = -Wall -Werror -Wno-parentheses -Wno-sign-compare -Wno-unused-var
 define_flags = -DMOBILEAPP=1
 
 AM_CPPFLAGS = -pthread \
-              -DCOOLWSD_DATADIR='"@COOLWSD_DATADIR@"' \
-              -DCOOLWSD_CONFIGDIR='"@COOLWSD_CONFIGDIR@"' \
-	      -DDEBUG_ABSSRCDIR='"'$(realpath ${top_srcdir})'"' \
               -DTOPSRCDIR='"'$(realpath ${top_srcdir})'"' \
               -DGTKAPP \
               ${define_flags} \
@@ -18,36 +24,49 @@ AM_CPPFLAGS = -pthread \
 
 AM_LDFLAGS = -pthread ${WEBKIT_LIBS} -ldl $(ZSTD_LIBS) ${PNG_LIBS}
 
-common_sources = \
-                 ../common/Authorization.cpp \
-                 ../common/ConfigUtil.cpp \
-                 ../common/FileUtil.cpp \
-                 ../common/Log.cpp \
-                 ../common/Protocol.cpp \
-                 ../common/Session.cpp \
-                 ../common/SigUtil.cpp \
-                 ../common/SpookyV2.cpp \
-                 ../common/StringVector.cpp \
-                 ../common/TraceEvent.cpp \
-                 ../common/Unit.cpp \
-                 ../common/Util.cpp \
-                 ../common/Util-mobile.cpp
+# Android's CMakefile list re-worked:
 
-kit_sources = ../kit/ChildSession.cpp \
-              ../kit/Kit.cpp \
-              ../kit/KitQueue.cpp \
-              ../kit/KitWebSocket.cpp
+cmake_list= \
+            ../common/Authorization.cpp \
+            ../common/ConfigUtil.cpp \
+            ../common/CommandControl.cpp \
+            ../common/Crypto-stub.cpp \
+            ../common/FileUtil.cpp \
+            ../common/FileUtil-unix.cpp \
+            ../common/Log.cpp \
+            ../common/TraceEvent.cpp \
+            ../common/Protocol.cpp \
+            ../common/RegexUtil.cpp \
+            ../common/Simd.cpp \
+            ../common/StringVector.cpp \
+            ../common/Session.cpp \
+            ../common/SigUtil-mobile.cpp \
+            ../common/SpookyV2.cpp \
+            ../common/Unit.cpp \
+            ../common/Unit-mobile.cpp \
+            ../common/Util.cpp \
+            ../common/Util-mobile.cpp \
+            ../common/Util-unix.cpp \
+            ../common/Uri.cpp \
+            ../kit/ChildSession.cpp \
+            ../kit/DeltaSimd.c \
+            ../kit/Kit.cpp \
+            ../kit/KitQueue.cpp \
+            ../kit/LogUI.cpp \
+            ../kit/KitWebSocket.cpp \
+            ../net/HttpRequest.cpp \
+            ../net/FakeSocket.cpp \
+            ../net/Socket.cpp \
+            ../wsd/ClientSession.cpp \
+            ../wsd/DocumentBroker.cpp \
+            ../wsd/COOLWSD.cpp \
+            ../wsd/dumpWsdState.cpp \
+            ../wsd/ClientRequestDispatcher.cpp \
+            ../wsd/RequestDetails.cpp \
+            ../wsd/RequestVettingStation.cpp \
+            ../wsd/SlideCache.cpp \
+            ../wsd/Storage.cpp \
+            ../wsd/TileCache.cpp \
+            ../wsd/coolwsd-fork.cpp
 
-net_sources = ../net/FakeSocket.cpp \
-              ../net/Socket.cpp
-
-wsd_sources = ../wsd/ClientSession.cpp \
-              ../wsd/DocumentBroker.cpp \
-              ../wsd/COOLWSD.cpp \
-              ../wsd/ClientRequestDispatcher.cpp \
-              ../wsd/RequestDetails.cpp \
-              ../wsd/Storage.cpp \
-              ../wsd/TileCache.cpp \
-              ../wsd/coolwsd-fork.cpp
-
-mobile_SOURCES = mobile.cpp $(common_sources) $(kit_sources) $(net_sources) $(wsd_sources)
+mobile_SOURCES = mobile.cpp $(cmake_list)

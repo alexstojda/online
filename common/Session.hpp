@@ -11,52 +11,51 @@
 
 #pragma once
 
-#include <atomic>
-#include <cassert>
-#include <memory>
-#include <map>
-#include <ostream>
-#include <optional>
-#include <type_traits>
+#include <common/Log.hpp>
+#include <net/Socket.hpp>
+#include <wsd/TileDesc.hpp>
 
+#include <Poco/JSON/Object.h>
 #include <Poco/Path.h>
 #include <Poco/Types.h>
 
-#include "Protocol.hpp"
-#include "Log.hpp"
-#include "Message.hpp"
-#include "TileCache.hpp"
-#include "WebSocketHandler.hpp"
+#include <atomic>
+#include <cassert>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <type_traits>
 
 class Session;
 
 template<class T>
 class SessionMap : public std::map<std::string, std::shared_ptr<T> >
 {
-    std::map<std::string, int> _canonicalIds;
+    std::map<std::string, CanonicalViewId> _canonicalIds;
 public:
     SessionMap() {
-        static_assert(std::is_base_of<Session, T>::value, "sessions must have base of Session");
+        static_assert(std::is_base_of_v<Session, T>, "sessions must have base of Session");
     }
 
     /// Generate a unique key for this set of view properties, only used by WSD
-    int createCanonicalId(const std::string &viewProps)
+    CanonicalViewId createCanonicalId(const std::string &viewProps)
     {
         if (viewProps.empty())
-            return 0;
+            return CanonicalViewId::None;
         for (const auto& it : _canonicalIds)
         {
             if (it.first == viewProps)
                 return it.second;
         }
 
-        const std::size_t id = _canonicalIds.size() + 1000;
+        const CanonicalViewId id = static_cast<CanonicalViewId>(_canonicalIds.size() + 1000);
         _canonicalIds[viewProps] = id;
         return id;
     }
 
     /// Lookup one session in the map that matches this canonical view id, only used by Kit
-    std::shared_ptr<T> findByCanonicalId(int id)
+    std::shared_ptr<T> findByCanonicalId(CanonicalViewId id) const
     {
         for (const auto &it : *this) {
             if (it.second->getCanonicalViewId() == id)
@@ -81,6 +80,21 @@ public:
     const std::string& getName() const { return _name; }
     bool isDisconnected() const { return _disconnected; }
 
+    /// Sets the permission to write to storage (for a given document).
+    /// If set to false, will setWritable(false).
+    void setWritePermission(bool write)
+    {
+        _writePermission = write;
+        if (!write)
+        {
+            // Disable writing.
+            setWritable(false);
+        }
+    }
+
+    /// Gets the permission to write to storage (for a given document).
+    bool getWritePermission() const { return _writePermission; }
+
     /// Controls whether writing in the Storage is enabled in this session.
     /// If set to false, will setReadOnly(true) and setAllowChangeComments(false).
     void setWritable(bool writable)
@@ -90,6 +104,7 @@ public:
         {
             setReadOnly(true);
             setAllowChangeComments(false);
+            setAllowManageRedlines(false);
         }
     }
 
@@ -100,19 +115,23 @@ public:
     virtual void setReadOnly(bool readonly) { _isReadOnly = readonly; }
     bool isReadOnly() const { return _isReadOnly; }
 
-    /// Controls whether commenting is enabled in this session
+    /// Controls whether commenting is enabled in this session.
     void setAllowChangeComments(bool allow) { _isAllowChangeComments = allow; }
     bool isAllowChangeComments() const { return _isAllowChangeComments; }
 
-    /// Returns true iff the view is either non-readonly or can change comments.
-    bool isEditable() const { return !isReadOnly() || isAllowChangeComments(); }
+    /// Controls whether redline (change tracking) management is enabled in this session.
+    void setAllowManageRedlines(bool allow) { _isAllowManageRedlines = allow; }
+    bool isAllowManageRedlines() const { return _isAllowManageRedlines; }
+
+    /// Returns true iff the view is either non-readonly or can change comments or manage redlines.
+    bool isEditable() const { return !isReadOnly() || isAllowChangeComments() || isAllowManageRedlines(); }
 
     /// if certification verification was disabled for the wopi server
     bool isDisableVerifyHost() const { return _disableVerifyHost; }
 
     /// overridden to prepend client ids on messages by the Kit
     virtual bool sendBinaryFrame(const char* buffer, int length);
-    virtual bool sendTextFrame(const char* buffer, const int length);
+    virtual bool sendTextFrame(const char* buffer, int length);
 
     /// Get notified that the underlying transports disconnected
     void onDisconnect() override { /* ignore */ }
@@ -130,47 +149,15 @@ public:
     }
 
     /// Sends a WebSocket Text message.
-    int sendMessage(const std::string& msg)
-    {
-        return sendTextFrame(msg.data(), msg.size());
-    }
-
-    // FIXME: remove synonym - and clean from WebSocketHandler too ... (?)
-    bool sendTextFrame(const std::string& text)
+    bool sendTextFrame(const std::string_view text)
     {
         return sendTextFrame(text.data(), text.size());
     }
 
-    template <std::size_t N>
-    bool sendTextFrame(const char (&buffer)[N])
-    {
-        static_assert(N > 0, "Cannot have string literal with size zero");
-        return sendTextFrame(buffer, N - 1);
-    }
-
-    bool sendTextFrame(const char* buffer)
-    {
-        return buffer != nullptr && sendTextFrame(buffer, std::strlen(buffer));
-    }
-
-    template <std::size_t N>
-    bool sendTextFrameAndLogError(const char (&buffer)[N])
-    {
-        static_assert(N > 0, "Cannot have string literal with size zero");
-        LOG_ERR(buffer);
-        return sendTextFrame(buffer, N - 1);
-    }
-
-    bool sendTextFrameAndLogError(const std::string& text)
+    bool sendTextFrameAndLogError(const std::string_view text)
     {
         LOG_ERR(text);
         return sendTextFrame(text.data(), text.size());
-    }
-
-    bool sendTextFrameAndLogError(const char* buffer)
-    {
-        LOG_ERR(buffer);
-        return buffer != nullptr && sendTextFrame(buffer, std::strlen(buffer));
     }
 
     virtual void handleMessage(const std::vector<char> &data) override;
@@ -194,10 +181,16 @@ public:
     void setIsActive(bool active) { _isActive = active; }
 
     /// Returns the inactivity time of the client in milliseconds.
+    double getInactivityMS(const std::chrono::steady_clock::time_point now) const
+    {
+        const auto duration = now - _lastActivityTime;
+        return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    }
+
+    /// Returns the inactivity time of the client in milliseconds.
     double getInactivityMS() const
     {
-        const auto duration = (std::chrono::steady_clock::now() - _lastActivityTime);
-        return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+        return getInactivityMS(std::chrono::steady_clock::now());
     }
 
     void closeFrame() { _isCloseFrame = true; };
@@ -217,6 +210,8 @@ public:
 
     void setUserPrivateInfo(const std::string& userPrivateInfo) { _userPrivateInfo = userPrivateInfo; }
 
+    void setServerPrivateInfo(const std::string& serverPrivateInfo) { _serverPrivateInfo = serverPrivateInfo; }
+
     void setUserName(const std::string& userName) { _userName = userName; }
 
     const std::string& getUserName() const {return _userName; }
@@ -235,7 +230,7 @@ public:
 
     const std::string& getLang() const { return _lang; }
 
-    const std::string& getTimezone() const { return _timezone; }
+    const std::string& getTimezone() const { return _timeZone; }
 
     bool getHaveDocPassword() const { return _haveDocPassword; }
 
@@ -245,11 +240,13 @@ public:
 
     const std::string& getDocPassword() const { return _docPassword; }
 
-    const std::optional<bool> getIsAdminUser() const { return _isAdminUser; }
+    std::optional<bool> getIsAdminUser() const { return _isAdminUser; }
 
     const std::string& getUserExtraInfo() const { return _userExtraInfo; }
 
     const std::string& getUserPrivateInfo() const { return _userPrivateInfo; }
+
+    const std::string& getServerPrivateInfo() const { return _serverPrivateInfo; }
 
     const std::string& getDocURL() const { return  _docURL; }
 
@@ -261,7 +258,15 @@ public:
 
     const std::string& getSpellOnline() const { return _spellOnline; }
 
+    void setSpellOnline(const std::string& val) { _spellOnline = val; }
+
     const std::string& getDarkTheme() const { return _darkTheme; }
+
+    void setDarkTheme(const std::string& val) { _darkTheme = val; }
+
+    const std::string& getDarkBackground() const { return _darkBackground; }
+
+    void setDarkBackground(const std::string& val) { _darkBackground = val; }
 
     const std::string& getBatchMode() const { return _batch; }
 
@@ -269,8 +274,30 @@ public:
 
     const std::string& getMacroSecurityLevel() const { return _macroSecurityLevel; }
 
+    const std::string& getInitialClientVisibleArea() const { return _initialClientVisibleArea; }
+
     bool getAccessibilityState() const { return _accessibilityState; }
 
+    void setAccessibilityState(bool val) { _accessibilityState = val; }
+
+    void disableSpellCheckIfReadOnly();
+
+    const std::string& getDocTemplate() const { return _docTemplate; }
+
+    const std::string& getInFilterOption() const { return _inFilterOptions; }
+
+    std::string getZoteroAPIKey() const { return _zoteroAPIKey; }
+
+    void setZoteroAPIKey(const std::string& val) { _zoteroAPIKey = val; }
+
+    const std::string& getSignatureCertificate() const { return _signatureCertificate; }
+    void setSignatureCertificate(const std::string& cert) { _signatureCertificate = cert; }
+
+    const std::string& getSignatureKey() const { return _signatureKey; }
+    void setSignatureKey(const std::string& key) { _signatureKey = key; }
+
+    const std::string& getSignatureCa() const { return _signatureCa; }
+    void setSignatureCa(const std::string& ca) { _signatureCa = ca; }
 protected:
     Session(const std::shared_ptr<ProtocolHandlerInterface> &handler,
             const std::string& name, const std::string& id, bool readonly);
@@ -278,7 +305,7 @@ protected:
 
     /// Parses the options of the "load" command,
     /// shared between MasterProcessSession::loadDocument() and ChildProcessSession::loadDocument().
-    void parseDocOptions(const StringVector& tokens, int& part, std::string& timestamp, std::string& doctemplate);
+    void parseDocOptions(const StringVector& tokens, int& part, std::string& timestamp);
 
     void updateLastActivityTime()
     {
@@ -287,10 +314,13 @@ protected:
 
     void dumpState(std::ostream& os) override;
 
-    inline void logPrefix(std::ostream& os) const { os << _name << ": "; }
+    void logPrefix(std::ostream& os) const { os << _name << ": "; }
+
+    void setSignToUserPrivateConfig(const std::string& key,
+                                    const Poco::JSON::Object::Ptr& signatureDataObject,
+                                    Poco::JSON::Object::Ptr& userPrivateInfoObject);
 
 private:
-
     void shutdown(bool goingAway = false, const std::string& statusMessage = std::string());
 
     virtual bool _handleInput(const char* buffer, int length) = 0;
@@ -300,27 +330,6 @@ private:
 
     /// A readable name that identifies our peer and ID.
     const std::string _name;
-
-    /// True if we have been disconnected.
-    std::atomic<bool> _disconnected;
-    /// True if the user is active, otherwise false (switched tabs).
-    std::atomic<bool> _isActive;
-
-    /// Time of the last interactive event being received
-    std::chrono::steady_clock::time_point _lastActivityTime;
-
-    // Whether websocket received close frame.  Closing Handshake
-    std::atomic<bool> _isCloseFrame;
-
-    /// Whether the session can write in storage.
-    bool _isWritable;
-
-    /// Whether the session can edit the document.
-    bool _isReadOnly;
-
-    /// Whether the session can add/change comments.
-    /// Must have _isWritable=true, regardless of _isReadOnly.
-    bool _isAllowChangeComments;
 
     /// The actual URL, also in the child, even if the child never accesses that.
     std::string _docURL;
@@ -333,12 +342,6 @@ private:
 
     /// Password provided, if any, to open the document
     std::string _docPassword;
-
-    /// If password is provided or not
-    bool _haveDocPassword;
-
-    /// Whether document is password protected
-    bool _isDocPasswordProtected;
 
     /// Document options: a JSON string, containing options (rendering, also possibly load in the future).
     std::string _docOptions;
@@ -355,26 +358,23 @@ private:
     /// Name of the user to whom the session belongs to, anonymized for logging.
     std::string _userNameAnonym;
 
-    /// If user is admin on the integrator side
-    std::optional<bool> _isAdminUser;
-
     /// Extra info per user, mostly mail, avatar, links, etc.
     std::string _userExtraInfo;
 
     /// Private info per user, not shared with others.
     std::string _userPrivateInfo;
 
+    /// Private info per server, shared with others.
+    std::string _serverPrivateInfo;
+
     /// In case a watermark has to be rendered on each tile.
     std::string _watermarkText;
-
-    /// Opacity in case a watermark has to be rendered on each tile.
-    double _watermarkOpacity;
 
     /// Language for the document based on what the user has in the UI.
     std::string _lang;
 
     /// Timezone of the user.
-    std::string _timezone;
+    std::string _timeZone;
 
     /// The form factor of the device where the client is running: desktop, tablet, mobile.
     std::string _deviceFormFactor;
@@ -384,6 +384,9 @@ private:
 
     /// The start value for Dark Theme whether it is active or not on start.
     std::string _darkTheme;
+    ///
+    /// The start value for Dark Background whether it is active or not on start.
+    std::string _darkBackground;
 
     /// Disable dialogs interactivity.
     std::string _batch;
@@ -394,12 +397,70 @@ private:
     /// Level of Macro security.
     std::string _macroSecurityLevel;
 
+    std::string _initialClientVisibleArea;
+
+    // The url of the template file used to create the document
+    std::string _docTemplate;
+
+    /// Opacity in case a watermark has to be rendered on each tile.
+    double _watermarkOpacity;
+
+    /// Time of the last interactive event being received
+    std::chrono::steady_clock::time_point _lastActivityTime;
+
+    /// If user is admin on the integrator side
+    std::optional<bool> _isAdminUser;
+
+    /// True if we have been disconnected.
+    std::atomic<bool> _disconnected;
+    /// True if the user is active, otherwise false (switched tabs).
+    std::atomic<bool> _isActive;
+    // Whether websocket received close frame.  Closing Handshake
+    std::atomic<bool> _isCloseFrame;
+
+    /// Whether the session has write permission in storage, as received from WOPI or URL parameters.
+    /// This doesn't change once set.
+    bool _writePermission;
+
+    /// Whether the session can write in storage. May be disabled on error (e.g. low storage).
+    /// Note: A read-only document may still be writable (if _isAllowChangeComments or
+    /// _isAllowManageRedlines is true), f.e. PDF.
+    bool _isWritable;
+
+    /// Whether the session can edit the document. Disabled when we fail to lock, for example.
+    bool _isReadOnly;
+
+    /// Whether the session can add/change comments.
+    /// Must have _isWritable=true, regardless of _isReadOnly.
+    bool _isAllowChangeComments;
+
+    /// Whether the session can add/change comments.
+    /// Must have _isWritable=true, regardless of _isReadOnly.
+    bool _isAllowManageRedlines = false;
+
+    /// If password is provided or not
+    bool _haveDocPassword;
+
+    /// Whether document is password protected
+    bool _isDocPasswordProtected;
+
     /// Specifies whether accessibility support is enabled for this session.
     bool _accessibilityState;
 
     /// Specifies whether certification verification for the wopi server
     /// should be disabled in core
     bool _disableVerifyHost;
+
+    /// Used in convert-to apis to specify loading options
+    std::string _inFilterOptions;
+
+    /// Zotero API Key
+    std::string _zoteroAPIKey;
+
+    /// Digital signature certificate, key, and CA
+    std::string _signatureCertificate;
+    std::string _signatureKey;
+    std::string _signatureCa;
 };
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

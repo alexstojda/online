@@ -14,6 +14,7 @@
 #include <config.h>
 
 #include <COOLWSD.hpp>
+#include <common/HexUtil.hpp>
 #include <Exceptions.hpp>
 #include <Log.hpp>
 #include <Unit.hpp>
@@ -26,6 +27,7 @@
 #include <random>
 #include <iostream>
 
+using namespace std::literals;
 using namespace ::helpers;
 
 // Inside the WSD process
@@ -114,8 +116,7 @@ public:
         LOG_TRC("Waiting for test selection:");
         const char response[] = "textselectioncontent:";
         const int responseLen = sizeof(response) - 1;
-        const std::string result
-            = getResponseString(socket, response, testname, std::chrono::seconds(5));
+        const std::string result = getResponseString(socket, response, testname, 5s);
 
         // The result string should contain "textselectioncontent:\n" followed by the UTF-8 bytes
         LOG_TRC("length " << result.length() << " vs. " << (responseLen + 1 + sizeof(correct)));
@@ -123,7 +124,7 @@ public:
             result.length() != responseLen + 1 + sizeof(correct) ||
             memcmp(result.c_str() + responseLen + 1, (const char *)correct, sizeof(correct)))
         {
-            LOK_ASSERT_FAIL("Error: wrong textselectioncontent:\n" + Util::dumpHex(result));
+            LOK_ASSERT_FAIL("Error: wrong textselectioncontent:\n" << HexUtil::dumpHex(result));
             return TestResult::Failed;
         }
 
@@ -132,7 +133,8 @@ public:
 
     TestResult testKitQueueMerging()
     {
-        KitQueue queue;
+        TilePrioritizer dummy;
+        KitQueue queue(dummy);
 
         queue.put("child-foo textinput id=0 text=a");
         queue.put("child-foo textinput id=0 text=b");
@@ -285,11 +287,11 @@ public:
             int chr = 97 + which;
             int key = 512 + which * 2;
 
-            bool bSpace = !(randMt() & 0300); // send a space
+            bool space = !(randMt() & 0300); // send a space
 
             msgs.push_back("key type=input char=" + std::to_string(chr) + " key=0");
             msgs.push_back("key type=up char=0 key=" + std::to_string(key));
-            if (bSpace)
+            if (space)
             {
                 msgs.push_back("key type=input char=32 key=0");
                 msgs.push_back("key type=up char=0 key=1284");
@@ -317,10 +319,10 @@ public:
                             << " tilewidth=7680 tileheight=7680";
                         sendTextFrame(sock, oss.str(), testname);
 
-                        const std::vector<char> tile = getResponseMessage(
-                            sock, "tile:", testname, std::chrono::milliseconds(5));
+                        const std::vector<char> tile =
+                            getResponseMessage(sock, "tile:", testname, 5ms);
 
-                        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                        std::this_thread::sleep_for(25ms);
                     }
                 });
 
@@ -377,8 +379,8 @@ public:
             sendTextFrame(sockets[i], "gettextselection mimetype=text/plain;charset=utf-8", testname);
 
             LOG_TRC("Waiting for test selection:");
-            const std::string result = getResponseString(sockets[i], "textselectioncontent:", testname,
-                                                   std::chrono::seconds(20));
+            const std::string result =
+                getResponseString(sockets[i], "textselectioncontent:", testname, 20s);
             results[i] = result;
 
             char target = 'a'+i;

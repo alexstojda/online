@@ -11,6 +11,10 @@
 
 #include <config.h>
 
+#if MOBILEAPP
+#error "Mobile doesn't need or support WOPI"
+#endif
+
 #include "StorageConnectionManager.hpp"
 
 #include <Common.hpp>
@@ -24,8 +28,6 @@
 #include <common/TraceEvent.hpp>
 #include <NetUtil.hpp>
 #include <CommandControl.hpp>
-
-#if !MOBILEAPP
 
 #include <Auth.hpp>
 #include <HostUtil.hpp>
@@ -45,15 +47,11 @@
 
 #include <cassert>
 
-#endif
-
 #include <Poco/Exception.h>
 #include <Poco/URI.h>
 
-#include <iconv.h>
 #include <string>
 
-bool StorageConnectionManager::FilesystemEnabled;
 bool StorageConnectionManager::SSLAsScheme = true;
 bool StorageConnectionManager::SSLEnabled = false;
 
@@ -76,6 +74,26 @@ std::map<std::string, std::string> GetQueryParams(const Poco::URI& uri)
     return result;
 }
 
+static void addStorageDebugCookie([[maybe_unused]] Poco::Net::HTTPRequest& request)
+{
+#if ENABLE_DEBUG
+    static const char* CoolStorageCookie = std::getenv("COOL_STORAGE_COOKIE");
+    if (CoolStorageCookie != nullptr)
+    {
+        const StringVector cookieTokens =
+            StringVector::tokenize(std::string(CoolStorageCookie), ':');
+        if (cookieTokens.size() == 2)
+        {
+            Poco::Net::NameValueCollection nvcCookies;
+            nvcCookies.add(cookieTokens[0], cookieTokens[1]);
+            request.setCookies(nvcCookies);
+            LOG_TRC("Added storage debug cookie [" << cookieTokens[0] << '=' << cookieTokens[1]
+                                                   << ']');
+        }
+    }
+#endif
+}
+
 void initHttpRequest(Poco::Net::HTTPRequest& request, const Poco::URI& uri,
                      const Authorization& auth)
 {
@@ -83,7 +101,7 @@ void initHttpRequest(Poco::Net::HTTPRequest& request, const Poco::URI& uri,
 
     auth.authorizeRequest(request);
 
-    // addStorageDebugCookie(request);
+    addStorageDebugCookie(request);
 
     // TODO: Avoid repeated parsing.
     std::map<std::string, std::string> params = GetQueryParams(uri);
@@ -109,7 +127,7 @@ http::Request StorageConnectionManager::createHttpRequest(const Poco::URI& uri,
     // Copy the headers, including the cookies.
     for (const auto& pair : request)
     {
-        httpRequest.header().set(pair.first, pair.second);
+        httpRequest.set(pair.first, pair.second);
     }
 
     return httpRequest;
@@ -130,7 +148,7 @@ StorageConnectionManager::getHttpSession(const Poco::URI& uri, std::chrono::seco
         // We decoupled the Wopi communication from client communication because
         // the Wopi communication must have an independent policy.
         // So, we will use here only Storage settings.
-        useSSL = SSLEnabled || COOLWSD::isSSLTermination();
+        useSSL = SSLEnabled || ConfigUtil::isSSLTermination();
     }
 
     const auto protocol =
@@ -141,8 +159,8 @@ StorageConnectionManager::getHttpSession(const Poco::URI& uri, std::chrono::seco
 
     if (timeout == std::chrono::seconds::zero())
     {
-        static std::chrono::seconds defTimeout =
-            std::chrono::seconds(COOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30));
+        CONFIG_STATIC const std::chrono::seconds defTimeout =
+            ConfigUtil::getConfigValue<std::chrono::seconds>("net.connection_timeout_secs", 30);
         timeout = defTimeout;
     }
 
@@ -150,3 +168,91 @@ StorageConnectionManager::getHttpSession(const Poco::URI& uri, std::chrono::seco
 
     return httpSession;
 }
+
+void StorageConnectionManager::initialize()
+{
+#if ENABLE_SSL
+    // FIXME: should use our own SSL socket implementation here.
+    Poco::Crypto::initializeCrypto();
+    Poco::Net::initializeSSL();
+
+    // Init client
+    Poco::Net::Context::Params sslClientParams;
+
+    // false default for upgrade to preserve legacy configuration
+    // in-config-file defaults are true.
+    SSLAsScheme = ConfigUtil::getConfigValue<bool>("storage.ssl.as_scheme", false);
+
+    // Fallback to ssl.enable if not set - for back compatibility & simplicity.
+    SSLEnabled = ConfigUtil::getConfigValue<bool>(
+        "storage.ssl.enable", ConfigUtil::getConfigValue<bool>("ssl.enable", true));
+
+#if ENABLE_DEBUG
+    char* StorageSSLEnabled = getenv("STORAGE_SSL_ENABLE");
+    if (StorageSSLEnabled != nullptr)
+    {
+        if (!strcasecmp(StorageSSLEnabled, "true"))
+            SSLEnabled = true;
+        else if (!strcasecmp(StorageSSLEnabled, "false"))
+            SSLEnabled = false;
+    }
+#endif // ENABLE_DEBUG
+
+    if (SSLEnabled || SSLAsScheme)
+    {
+        if (ConfigUtil::isSslEnabled())
+        {
+            sslClientParams.certificateFile = ConfigUtil::getPathFromConfigWithFallback(
+                "storage.ssl.cert_file_path", "ssl.cert_file_path");
+            sslClientParams.privateKeyFile = ConfigUtil::getPathFromConfigWithFallback(
+                "storage.ssl.key_file_path", "ssl.key_file_path");
+            sslClientParams.caLocation = ConfigUtil::getPathFromConfigWithFallback(
+                "storage.ssl.ca_file_path", "ssl.ca_file_path");
+        }
+        else
+        {
+            sslClientParams.certificateFile =
+                ConfigUtil::getPathFromConfig("storage.ssl.cert_file_path");
+            sslClientParams.privateKeyFile =
+                ConfigUtil::getPathFromConfig("storage.ssl.key_file_path");
+            sslClientParams.caLocation = ConfigUtil::getPathFromConfig("storage.ssl.ca_file_path");
+        }
+        sslClientParams.cipherList =
+            ConfigUtil::getPathFromConfigWithFallback("storage.ssl.cipher_list", "ssl.cipher_list");
+        const bool sslVerification = ConfigUtil::getConfigValue<bool>("ssl.ssl_verification", true);
+        sslClientParams.verificationMode =
+            !sslVerification ? Poco::Net::Context::VERIFY_NONE : Poco::Net::Context::VERIFY_STRICT;
+        sslClientParams.loadDefaultCAs = true;
+    }
+    else
+        sslClientParams.verificationMode = Poco::Net::Context::VERIFY_NONE;
+
+    Poco::SharedPtr<Poco::Net::PrivateKeyPassphraseHandler> consoleClientHandler =
+        new Poco::Net::KeyConsoleHandler(false);
+    Poco::SharedPtr<Poco::Net::InvalidCertificateHandler> invalidClientCertHandler =
+        new Poco::Net::AcceptCertificateHandler(false);
+
+    Poco::Net::Context::Ptr sslClientContext =
+        new Poco::Net::Context(Poco::Net::Context::CLIENT_USE, sslClientParams);
+    sslClientContext->disableProtocols(Poco::Net::Context::Protocols::PROTO_SSLV2 |
+                                       Poco::Net::Context::Protocols::PROTO_SSLV3 |
+                                       Poco::Net::Context::Protocols::PROTO_TLSV1);
+    Poco::Net::SSLManager::instance().initializeClient(std::move(consoleClientHandler),
+                                                       std::move(invalidClientCertHandler),
+                                                       std::move(sslClientContext));
+
+    // Initialize our client SSL context.
+    ssl::Manager::initializeClientContext(
+        sslClientParams.certificateFile, sslClientParams.privateKeyFile, sslClientParams.caLocation,
+        sslClientParams.cipherList,
+        sslClientParams.verificationMode == Poco::Net::Context::VERIFY_NONE
+            ? ssl::CertificateVerification::Disabled
+            : ssl::CertificateVerification::Required);
+    if (!ssl::Manager::isClientContextInitialized())
+        LOG_ERR("Failed to initialize Client SSL.");
+    else
+        LOG_INF("Initialized Client SSL.");
+#endif // ENABLE_SSL
+}
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

@@ -49,7 +49,7 @@ public:
         const bool firstView = _checkFileInfoCount == 0;
         ++_checkFileInfoCount;
 
-        LOG_TST("CheckFileInfo: " << (firstView ? "editor" : "viewer"));
+        TST_LOG("CheckFileInfo: " << (firstView ? "editor" : "viewer"));
 
         fileInfo->set("SupportsLocks", "true");
         fileInfo->set("UserCanWrite", firstView ? "true" : "false");
@@ -65,7 +65,7 @@ public:
     {
         const std::string lockToken = request.get("X-WOPI-Lock", std::string());
         const std::string newLockState = request.get("X-WOPI-Override", std::string());
-        LOG_TST("In " << toString(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
+        TST_LOG("In " << name(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
                       << newLockState << ", for URI: " << request.getURI());
 
         if (_phase == Phase::Lock)
@@ -88,7 +88,7 @@ public:
         }
         else
         {
-            LOK_ASSERT_FAIL("Unexpected lock-state change while in " + toString(_phase));
+            LOK_ASSERT_FAIL("Unexpected lock-state change while in " << name(_phase));
         }
 
         return nullptr; // Success.
@@ -97,7 +97,7 @@ public:
     void onDocBrokerViewLoaded(const std::string&,
                                const std::shared_ptr<ClientSession>& session) override
     {
-        LOG_TST("View #" << _viewCount + 1 << " [" << session->getName() << "] loaded");
+        TST_LOG("View #" << _viewCount + 1 << " [" << session->getName() << "] loaded");
 
         ++_viewCount;
         if (_viewCount == 2)
@@ -106,7 +106,7 @@ public:
             TRANSITION_STATE(_phase, Phase::Unlock);
 
             // force kill the session with edit permission
-            LOG_TST("Disconnecting first connection with edit permission");
+            TST_LOG("Disconnecting first connection with edit permission");
             deleteSocketAt(0);
         }
     }
@@ -120,15 +120,15 @@ public:
                 // Always transition before issuing commands.
                 TRANSITION_STATE(_phase, Phase::Lock);
 
-                LOG_TST("Creating first connection");
+                TST_LOG("Creating first connection");
                 initWebsocket("/wopi/files/0?access_token=anything");
 
-                LOG_TST("Creating second connection");
+                TST_LOG("Creating second connection");
                 addWebSocket();
 
-                LOG_TST("Loading first view (editor)");
+                TST_LOG("Loading first view (editor)");
                 WSD_CMD_BY_CONNECTION_INDEX(0, "load url=" + getWopiSrc());
-                LOG_TST("Loading second view (viewer)");
+                TST_LOG("Loading second view (viewer)");
                 WSD_CMD_BY_CONNECTION_INDEX(1, "load url=" + getWopiSrc());
                 break;
             }
@@ -175,7 +175,7 @@ public:
 
         const bool firstView = _checkFileInfoCount == 1;
 
-        LOG_TST("CheckFileInfo: " << (firstView ? "viewer" : "editor"));
+        TST_LOG("CheckFileInfo: " << (firstView ? "viewer" : "editor"));
 
         fileInfo->set("SupportsLocks", "true");
         fileInfo->set("UserCanWrite", firstView ? "false" : "true");
@@ -191,7 +191,7 @@ public:
     {
         const std::string lockToken = request.get("X-WOPI-Lock", std::string());
         const std::string newLockState = request.get("X-WOPI-Override", std::string());
-        LOG_TST("In " << toString(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
+        TST_LOG("In " << name(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
                       << newLockState << ", for URI: " << request.getURI());
 
         LOG_ASSERT_MSG(_checkFileInfoCount == 2, "Must have had two CheckFileInfo requests");
@@ -216,7 +216,7 @@ public:
         }
         else
         {
-            LOK_ASSERT_FAIL("Unexpected lock-state change while in " + toString(_phase));
+            LOK_ASSERT_FAIL("Unexpected lock-state change while in " << name(_phase));
         }
 
         return nullptr; // Success.
@@ -229,19 +229,19 @@ public:
         TRANSITION_STATE(_phase, Phase::Unlock);
 
         // The document is modified.
-        LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsModifiedByUser"));
+        LOK_ASSERT_EQUAL_STR("true", request.get("X-COOL-WOPI-IsModifiedByUser"));
         LOK_ASSERT_EQUAL(false, request.has("X-LOOL-WOPI-IsModifiedByUser"));
 
         // Triggered manually or during closing, not auto-save.
-        LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsAutosave"));
+        LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsAutosave"));
         LOK_ASSERT_EQUAL(false, request.has("X-LOOL-WOPI-IsAutosave"));
 
         // The only editor goes away.
-        // LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsExitSave"));
-        // LOK_ASSERT_EQUAL(std::string("true"), request.get("X-LOOL-WOPI-IsExitSave"));
+        // LOK_ASSERT_EQUAL_STR("true", request.get("X-COOL-WOPI-IsExitSave"));
+        // LOK_ASSERT_EQUAL_STR("true", request.get("X-LOOL-WOPI-IsExitSave"));
 
         // Simulate the viewer closing browser.
-        LOG_TST("Disconnecting Viewer");
+        TST_LOG("Disconnecting Viewer");
         deleteSocketAt(0);
 
         return nullptr; // Success.
@@ -250,7 +250,8 @@ public:
     void onDocBrokerViewLoaded(const std::string&,
                                const std::shared_ptr<ClientSession>& session) override
     {
-        LOG_TST("View #" << _viewCount + 1 << " [" << session->getName() << "] loaded");
+        TST_LOG("View #" << _viewCount + 1 << " [" << session->getName()
+                         << "] loaded, phase: " << name(_phase));
 
         ++_viewCount;
         if (_viewCount == 1)
@@ -258,7 +259,7 @@ public:
             LOK_ASSERT_STATE(_phase, Phase::LoadViewer);
             TRANSITION_STATE(_phase, Phase::Lock);
 
-            LOG_TST("Loading second view (editor)");
+            TST_LOG("Loading second view (editor)");
             WSD_CMD_BY_CONNECTION_INDEX(1, "load url=" + getWopiSrc());
         }
         else if (_viewCount == 2)
@@ -267,7 +268,7 @@ public:
             TRANSITION_STATE(_phase, Phase::WaitModify);
 
             // Modify the doc.
-            LOG_TST("Modifying (editor)");
+            TST_LOG("Modifying (editor)");
             WSD_CMD_BY_CONNECTION_INDEX(1, "key type=input char=97 key=0");
             WSD_CMD_BY_CONNECTION_INDEX(1, "key type=up char=0 key=512");
         }
@@ -276,7 +277,7 @@ public:
     /// The document is modified. Disconnect editor.
     bool onDocumentModified(const std::string& message) override
     {
-        LOG_TST("onDocumentModified: [" << message << ']');
+        TST_LOG("onDocumentModified: [" << message << "], phase: " << name(_phase));
 
         // We get this twice, skip the second one.
         if (_phase != Phase::Upload)
@@ -293,7 +294,7 @@ public:
     void onDocBrokerRemoveSession(const std::string&,
                                   const std::shared_ptr<ClientSession>& session) override
     {
-        LOG_TST("Removing session [" << session->getName() << ']');
+        TST_LOG("Removing session [" << session->getName() << "], phase: " << name(_phase));
         if (_phase == Phase::Unlock)
         {
             // LOK_ASSERT_STATE(_phase, Phase::WaitUnload);
@@ -302,7 +303,7 @@ public:
 
     void onDocBrokerDestroy(const std::string& docKey) override
     {
-        LOG_TST("Destroyed dockey [" << docKey << ']');
+        TST_LOG("Destroyed dockey [" << docKey << "], phase: " << name(_phase));
         LOK_ASSERT_STATE(_phase, Phase::WaitUnload);
 
         TRANSITION_STATE(_phase, Phase::Done);
@@ -388,7 +389,7 @@ public:
     {
         const std::string lockToken = request.get("X-WOPI-Lock", std::string());
         const std::string newLockState = request.get("X-WOPI-Override", std::string());
-        LOG_TST("In " << toString(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
+        TST_LOG("In " << name(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
                       << newLockState << ", for URI: " << request.getURI());
 
         if (_phase == Phase::Lock)
@@ -412,12 +413,11 @@ public:
             ++_lockRefreshCount;
             LOK_ASSERT_EQUAL_MESSAGE("Lock refresh with expired token", 1UL, _lockRefreshCount);
 
-            // Internal Server Error.
-            return std::make_unique<http::Response>(http::StatusCode::Unauthorized);
+            return std::make_unique<http::Response>(http::StatusCode::ServiceUnavailable);
         }
         else
         {
-            LOK_ASSERT_FAIL("Unexpected lock-state change while in " + toString(_phase));
+            LOK_ASSERT_FAIL("Unexpected lock-state change while in " << name(_phase));
         }
 
         return nullptr; // Success.
@@ -432,10 +432,10 @@ public:
                 // Always transition before issuing commands.
                 TRANSITION_STATE(_phase, Phase::Lock);
 
-                LOG_TST("Creating first connection");
+                TST_LOG("Creating first connection");
                 initWebsocket("/wopi/files/0?access_token=anything");
 
-                LOG_TST("Loading first view (editor)");
+                TST_LOG("Loading first view (editor)");
                 WSD_CMD_BY_CONNECTION_INDEX(0, "load url=" + getWopiSrc());
                 break;
             }
@@ -501,7 +501,7 @@ public:
     std::unique_ptr<http::Response>
     assertPutFileRequest(const Poco::Net::HTTPRequest& /*request*/) override
     {
-        LOG_TST("assertPutFileRequest");
+        TST_LOG("assertPutFileRequest");
         LOK_ASSERT_STATE(_phase, Phase::Upload);
 
         TRANSITION_STATE(_phase, Phase::Unlock);
@@ -513,7 +513,7 @@ public:
     {
         const std::string lock = request.get("X-WOPI-Lock", std::string());
         const std::string newLockState = request.get("X-WOPI-Override", std::string());
-        LOG_TST("In " << toString(_phase) << ", X-WOPI-Lock: " << lock << ", X-WOPI-Override: "
+        TST_LOG("In " << name(_phase) << ", X-WOPI-Lock: " << lock << ", X-WOPI-Override: "
                       << newLockState << ", for URI: " << request.getURI());
 
         if (_phase == Phase::Lock)
@@ -537,7 +537,7 @@ public:
         }
         else
         {
-            LOK_ASSERT_FAIL("Unexpected lock-state change while in " + toString(_phase));
+            LOK_ASSERT_FAIL("Unexpected lock-state change while in " << name(_phase));
         }
 
         return nullptr; // Success.
@@ -548,25 +548,25 @@ public:
                                const std::shared_ptr<ClientSession>& session) override
     {
         ++_sessionCount;
-        LOG_TST("New Session [" << session->getName() << "] added. Have " << _sessionCount
+        TST_LOG("New Session [" << session->getName() << "] added. Have " << _sessionCount
                                 << " sessions.");
     }
 
     void onDocBrokerViewLoaded(const std::string&,
                                const std::shared_ptr<ClientSession>& session) override
     {
-        LOG_TST("View for session [" << session->getName() << "] loaded. Have " << _sessionCount
+        TST_LOG("View for session [" << session->getName() << "] loaded. Have " << _sessionCount
                                      << " sessions.");
     }
 
     /// The document is loaded.
     bool onDocumentLoaded(const std::string& message) override
     {
-        LOG_TST("onDocumentLoaded: [" << message << ']');
+        TST_LOG("onDocumentLoaded: [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::Modify);
 
         // Modify the doc.
-        LOG_TST("Modifying");
+        TST_LOG("Modifying");
         WSD_CMD("key type=input char=97 key=0");
         WSD_CMD("key type=up char=0 key=512");
 
@@ -576,12 +576,12 @@ public:
     /// The document is modified. Load the viewer session.
     bool onDocumentModified(const std::string& message) override
     {
-        LOG_TST("onDocumentModified: [" << message << ']');
+        TST_LOG("onDocumentModified: [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::Modify);
 
         TRANSITION_STATE(_phase, Phase::Upload);
 
-        LOG_TST("Disconnecting");
+        TST_LOG("Disconnecting");
         deleteSocketAt(0);
 
         return true;
@@ -592,7 +592,7 @@ public:
                                   const std::shared_ptr<ClientSession>& session) override
     {
         --_sessionCount;
-        LOG_TST("Session [" << session->getName() << "] removed. Have " << _sessionCount
+        TST_LOG("Session [" << session->getName() << "] removed. Have " << _sessionCount
                             << " sessions.");
     }
 
@@ -605,10 +605,10 @@ public:
                 // Always transition before issuing commands.
                 TRANSITION_STATE(_phase, Phase::Lock);
 
-                LOG_TST("Creating first connection");
+                TST_LOG("Creating first connection");
                 initWebsocket("/wopi/files/0?access_token=anything");
 
-                LOG_TST("Loading view");
+                TST_LOG("Loading view");
                 WSD_CMD_BY_CONNECTION_INDEX(0, "load url=" + getWopiSrc());
                 break;
             }
@@ -625,13 +625,124 @@ public:
     }
 };
 
+/// This is to test that when we unload an idle document,
+/// we also unlock.
+class UnitWopiLockIdle : public WopiTestServer
+{
+    STATE_ENUM(Phase, Load, Lock, Unlock, Done) _phase;
+
+    std::string _lockState;
+    std::string _lockToken;
+    std::chrono::steady_clock::time_point _refreshTime;
+
+    static constexpr int IdleTimeoutSeconds = 5;
+
+public:
+    UnitWopiLockIdle()
+        : WopiTestServer("UnitWopiLockIdle")
+        , _phase(Phase::Load)
+        , _lockState("UNLOCK")
+    {
+    }
+
+    void configure(Poco::Util::LayeredConfiguration& config) override
+    {
+        WopiTestServer::configure(config);
+
+        // Small value to shorten the test run time.
+        config.setUInt("per_document.idle_timeout_secs", IdleTimeoutSeconds);
+    }
+
+    void configCheckFileInfo(const Poco::Net::HTTPRequest& /*request*/,
+                             Poco::JSON::Object::Ptr& fileInfo) override
+    {
+        fileInfo->set("SupportsLocks", "true");
+    }
+
+    std::unique_ptr<http::Response>
+    assertLockRequest(const Poco::Net::HTTPRequest& request) override
+    {
+        const std::string lockToken = request.get("X-WOPI-Lock", std::string());
+        const std::string newLockState = request.get("X-WOPI-Override", std::string());
+        TST_LOG("In " << name(_phase) << ", X-WOPI-Lock: " << lockToken << ", X-WOPI-Override: "
+                      << newLockState << ", for URI: " << request.getURI());
+
+        if (_phase == Phase::Lock)
+        {
+            LOK_ASSERT_EQUAL_MESSAGE("Expected X-WOPI-Override:LOCK", std::string("LOCK"),
+                                     newLockState);
+            LOK_ASSERT_MESSAGE("Lock token cannot be empty", !lockToken.empty());
+            _lockState = newLockState;
+            _lockToken = lockToken;
+
+            _refreshTime = std::chrono::steady_clock::now();
+            TRANSITION_STATE(_phase, Phase::Unlock);
+        }
+        else if (_phase == Phase::Unlock)
+        {
+            LOK_ASSERT_EQUAL_MESSAGE("Expected X-WOPI-Override:UNLOCK", std::string("UNLOCK"),
+                                     newLockState);
+            LOK_ASSERT_EQUAL_MESSAGE("Document is not locked", std::string("LOCK"), _lockState);
+            LOK_ASSERT_EQUAL_MESSAGE("The lock token has changed", _lockToken, lockToken);
+
+            TRANSITION_STATE(_phase, Phase::Done);
+            exitTest(TestResult::Ok);
+        }
+        else
+        {
+            LOK_ASSERT_FAIL("Unexpected lock-state change while in " << name(_phase));
+        }
+
+        return nullptr; // Success.
+    }
+
+    /// The document is loaded.
+    bool onDocumentLoaded(const std::string& message) override
+    {
+        TST_LOG("onDocumentLoaded: [" << message << "] in " << name(_phase));
+        // As locking is async, it can race with this loaded event.
+
+        // Simulate some potential user modification.
+        // This triggers the "maybe modified" logic.
+        TST_LOG("Non-modifying key input");
+        WSD_CMD("key type=input char=0 key=16402");
+
+        return true;
+    }
+
+    void invokeWSDTest() override
+    {
+        switch (_phase)
+        {
+            case Phase::Load:
+            {
+                // Always transition before issuing commands.
+                TRANSITION_STATE(_phase, Phase::Lock);
+
+                TST_LOG("Creating first connection");
+                initWebsocket("/wopi/files/0?access_token=anything");
+
+                TST_LOG("Loading first view (editor)");
+                WSD_CMD_BY_CONNECTION_INDEX(0, "load url=" + getWopiSrc());
+                break;
+            }
+            case Phase::Unlock:
+            case Phase::Lock:
+                break;
+            case Phase::Done:
+            {
+                // just wait for the results
+                break;
+            }
+        }
+    }
+};
+
 UnitBase** unit_create_wsd_multi(void)
 {
-    return new UnitBase* [5]
-    {
-        new UnitWopiLock(), new UnitWopiLockReadOnly(), new UnitWopiLockFail(),
-            new UnitWopiUnlock(), nullptr
-    };
+    return new UnitBase*[6]{ new UnitWopiLock(),     new UnitWopiLockReadOnly(),
+                             new UnitWopiLockFail(), new UnitWopiUnlock(),
+                             new UnitWopiLockIdle(), nullptr };
 }
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

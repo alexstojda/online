@@ -1,3 +1,12 @@
+/*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
 const https = require("https");
 const http = require("http");
 
@@ -21,12 +30,12 @@ const recordStats = process.argv[8];
 // verbose console output
 const debug = false;
 
-/* dont use the default port (9980)*/
+/* don't use the default port (9980) */
 const port = '9999';
 let args = [
 	`--o:sys_template_path=${top_builddir}/systemplate`,
-	'--o:security.capabilities=false',
 	`--o:child_root_path=${top_builddir}/jails`,
+	`--o:cache_files.path=${top_builddir}/cache`,
 	'--o:storage.filesystem[@allow]=true',
 	'--o:admin_console.username=admin',
 	'--o:admin_console.password=admin',

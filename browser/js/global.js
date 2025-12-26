@@ -1,8 +1,9 @@
 /* -*- js-indent-level: 8 -*- */
-/* global Uint8Array _ */
+
+/* global Module ArrayBuffer Uint8Array _ */
 
 /*
-	For extending window.app object, please see "docstate.js" file.
+	For extending window.app object, please see "docstate.ts" file.
 	Below definition is only for the properties that this (global.js) file needs at initialization.
 */
 window.app = {
@@ -10,12 +11,538 @@ window.app = {
 	console: {}
 };
 
+// For typings (including the global object), please see browser/src/global.d.ts
+
+// This function may look unused, but it's needed in Android to send data through the fake websocket. Please
+// don't remove it without first grepping for 'Base64ToArrayBuffer' in the C++ code
+// eslint-disable-next-line
+var Base64ToArrayBuffer = function(base64Str) {
+	var binStr = atob(base64Str);
+	var ab = new ArrayBuffer(binStr.length);
+	var bv = new Uint8Array(ab);
+	for (var i = 0, l = binStr.length; i < l; i++) {
+		bv[[i]] = binStr.charCodeAt(i);
+	}
+	return ab;
+};
+
+// Written and named as a sort of analog to plain atob ... except this one supports non-ascii
+// Nothing is perfect so this also mangles binary - don't decode tiles with it
+// This function may look unused, but it's needed in mobile to send data through the fake websocket. Please
+// don't remove it without first grepping for 'Base64ToArrayBuffer' in the C++ code
+// eslint-disable-next-line
+var b64d = function(base64Str) {
+	var binStr = atob(base64Str);
+	var u8Array = Uint8Array.from(binStr, c => c.codePointAt(0));
+	return new TextDecoder().decode(u8Array);
+}
+
+// Put these into a class to separate them better.
+class BrowserProperties {
+	static initiateBrowserProperties(global) {
+		global.L = {};
+
+		let ua = navigator.userAgent.toLowerCase();
+		let uv = navigator.vendor.toLowerCase();
+		let doc = document.documentElement;
+
+		let cypressTest = ua.indexOf('cypress') !== -1;
+
+		// Firefox has undefined navigator.clipboard.read and navigator.clipboard.write,
+		// unsecure contexts (such as http + non-localhost) has the entire navigator.clipboard
+		// undefined.
+		let clipboardApiAvailable = navigator.clipboard !== undefined && navigator.clipboard.write !== undefined && navigator.clipboard.read !== undefined;
+
+		let webkit    = ua.indexOf('webkit') !== -1;
+		let chrome    = ua.indexOf('chrome') !== -1;
+		let gecko     = (ua.indexOf('gecko') !== -1 || (cypressTest && 'MozUserFocus' in doc.style)) && !webkit && !global.opera;
+		let safari    = !chrome && (ua.indexOf('safari') !== -1 || uv.indexOf('apple') == 0);
+
+		let win = navigator.platform.indexOf('Win') === 0;
+
+		let mobile = typeof orientation !== 'undefined' || ua.indexOf('mobile') !== -1;
+		let msPointer = !global.PointerEvent && global.MSPointerEvent;
+		let pointer = (global.PointerEvent && navigator.pointerEnabled && navigator.maxTouchPoints) || msPointer;
+
+		let webkit3d = ('WebKitCSSMatrix' in global) && ('m11' in new global.WebKitCSSMatrix());
+		let gecko3d = 'MozPerspective' in doc.style;
+
+		var mac = navigator.appVersion.indexOf('Mac') != -1 || navigator.userAgent.indexOf('Mac') != -1;
+		var chromebook = global.ThisIsTheAndroidApp && global.COOLMessageHandler.isChromeOS();
+
+		var navigatorLang = navigator.languages && navigator.languages.length ? navigator.languages[0] :
+		(navigator.language || navigator.userLanguage || navigator.browserLanguage || navigator.systemLanguage);
+
+		function getFirefoxVersion() {
+			var version = '';
+
+			var userAgent = navigator.userAgent.toLowerCase();
+			if (userAgent.indexOf('firefox') !== -1) {
+				var matches = userAgent.match(/firefox\/([0-9]+\.*[0-9]*)/);
+				if (matches) {
+					version = matches[1];
+				}
+			}
+			return version;
+		}
+
+		window.L.Browser = {
+			// @property edge: Boolean
+			// `true` for the Edge web browser.
+			edge: 'msLaunchUri' in navigator && !('documentMode' in document),
+
+			// @property webkit: Boolean
+			// `true` for webkit-based browsers like Chrome and Safari (including mobile versions).
+			webkit: webkit,
+
+			// @property gecko: Boolean
+			// `true` for gecko-based browsers like Firefox.
+			gecko: gecko,
+
+			// @property geckoVersion: String
+			// Firefox version: abc.d.
+			geckoVersion: getFirefoxVersion(),
+
+			// @property android: Boolean
+			// `true` for any browser running on an Android platform.
+			android: ua.indexOf('android') !== -1,
+
+			// @property chrome: Boolean
+			// `true` for the Chrome browser.
+			chrome: chrome,
+
+			// @property safari: Boolean
+			// `true` for the Safari browser.
+			safari: safari,
+
+			// @property win: Boolean
+			// `true` when the browser is running in a Windows platform
+			win: win,
+
+			// @property mac: Boolean
+			// `true` when the browser is running in a Mac platform
+			mac: mac,
+
+			// @property any3d: Boolean
+			// `true` for all browsers supporting CSS transforms.
+			any3d: !global.L_DISABLE_3D && (webkit3d || gecko3d),
+
+			// @property mobile: Boolean
+			// `true` for all browsers running in a mobile device.
+			mobile: mobile,
+
+			// @property mobileWebkit: Boolean
+			// `true` for all webkit-based browsers in a mobile device.
+			mobileWebkit: mobile && webkit,
+
+			// @property cypressTest: Boolean
+			// `true` when the browser run by cypress
+			cypressTest: cypressTest,
+
+
+			// @property clipboardApiAvailable: Boolean
+			// `true` when permission-based clipboard api is available.
+			clipboardApiAvailable: clipboardApiAvailable,
+
+			// @property msPointer: Boolean
+			// `true` for browsers implementing the Microsoft touch events model (notably IE10).
+			msPointer: !!msPointer,
+
+			// @property pointer: Boolean
+			// `true` for all browsers supporting [pointer events](https://msdn.microsoft.com/en-us/library/dn433244%28v=vs.85%29.aspx).
+			pointer: !!pointer,
+
+			// @property retina: Boolean
+			// `true` for browsers on a high-resolution "retina" screen.
+			retina: (global.devicePixelRatio || (global.screen.deviceXDPI / global.screen.logicalXDPI)) > 1,
+
+			// @property lang: String
+			// browser language locale
+			lang: navigatorLang
+		};
+
+		global.mode = {
+			isChromebook: function() {
+				return chromebook;
+			},
+			// Here "mobile" means "mobile phone" (at least for now). Has to match small screen size
+			// requirement.
+			isMobile: function() {
+				if (global.mode.isChromebook())
+					return false;
+
+				if (global.L.Browser.mobile && global.L.Browser.cypressTest) {
+					return true;
+				}
+
+				return global.L.Browser.mobile && (screen.width < 768 || screen.height < 768);
+			},
+			// Mobile device with big screen size.
+			isTablet: function() {
+				if (global.mode.isChromebook())
+					return false;
+
+				return global.L.Browser.mobile && !global.mode.isMobile();
+			},
+			isDesktop: function() {
+				if (global.mode.isChromebook())
+					return true;
+
+				return !global.L.Browser.mobile;
+			},
+			getDeviceFormFactor: function() {
+				if (global.mode.isMobile())
+					return 'mobile';
+				else if (global.mode.isTablet())
+					return 'tablet';
+				else if (global.mode.isDesktop())
+					return 'desktop';
+				else
+					return null;
+			}
+		};
+	}
+}
+
+class InitializerBase {
+	constructor() {
+		BrowserProperties.initiateBrowserProperties(window);
+
+		this.uriPrefix = document.getElementById('init-uri-prefix').value;
+		this.brandingUriPrefix = this.uriPrefix;
+
+		window.welcomeUrl = document.getElementById("init-welcome-url") ? document.getElementById("init-welcome-url").value: "";
+		window.feedbackUrl = document.getElementById("init-feedback-url") ? document.getElementById("init-feedback-url").value: "";
+		window.buyProductUrl = document.getElementById("init-buy-product-url") ? document.getElementById("init-buy-product-url").value: "";
+		let initCSSVars = document.getElementById("init-css-vars") ? document.getElementById("init-css-vars").value: "";
+
+		if (initCSSVars) {
+			initCSSVars = atob(initCSSVars);
+			const sheet = new CSSStyleSheet();
+			if (typeof sheet.replace === 'function')
+			{
+				sheet.replace(initCSSVars);
+				document.adoptedStyleSheets.push(sheet);
+			} // else jsdom
+		}
+
+		const element = window.L.initial = document.getElementById("initial-variables");
+		window.L.initial._stubMessage = function () {};
+
+		window.host = "";
+		window.serviceRoot = "";
+		window.hexifyUrl = false;
+		window.versionPath = "";
+		window.accessToken = element.dataset.accessToken;
+		window.accessTokenTTL = element.dataset.accessTokenTtl;
+		window.noAuthHeader = element.dataset.noAuthHeader;
+		window.accessHeader = element.dataset.accessHeader;
+		window.postMessageOriginExt = "";
+		window.coolwsdVersion = "";
+		window.enableWelcomeMessage = false;
+		window.autoShowWelcome = false;
+		window.autoShowFeedback = true;
+		window.allowUpdateNotification = false;
+		window.useIntegrationTheme = false;
+		window.enableMacrosExecution = false;
+		window.enableAccessibility = false;
+		window.protocolDebug = false;
+		window.enableDebug = false;
+		window.frameAncestors = "";
+		window.socketProxy = false;
+		window.uiDefaults = {};
+		window.useStatusbarSaveIndicator = false;
+		window.checkFileInfoOverride = {};
+		window.deeplEnabled = false;
+		window.zoteroEnabled = false;
+		window.savedUIState = true;
+		window.extraExportFormats = [];
+		window.wasmEnabled = false;
+		window.indirectionUrl = "";
+		window.geolocationSetup = false;
+		window.canvasSlideshowEnabled = false;
+		window.wopiSettingBaseUrl = element.dataset.wopiSettingBaseUrl;
+
+		window.tileSize = 256;
+
+		window.ThisIsAMobileApp = false;
+		window.ThisIsTheiOSApp = false;
+		window.ThisIsTheGtkApp = false;
+		window.ThisIsTheAndroidApp = false;
+		window.ThisIsTheEmscriptenApp = false;
+
+		window.bundlejsLoaded = false;
+		window.fullyLoadedAndReady = false;
+		window.addEventListener('load', function() {
+			window.fullyLoadedAndReady = true;
+
+			const contentKeeper = document.getElementById('content-keeper');
+			while (contentKeeper.children.length > 0)
+				document.body.insertBefore(contentKeeper.children[contentKeeper.children.length - 1], document.body.firstChild);
+
+			document.getElementById('content-keeper').remove();
+		}, false);
+
+		let productName = document.getElementById("init-product-branding-name").value;
+		if (typeof productName === 'string' && productName.length) {
+			window.brandProductName = productName;
+		}
+		let productURL = document.getElementById("init-product-branding-url").value;
+		if (typeof productURL === 'string' && productURL.length) {
+			window.brandProductURL = productURL;
+		}
+		let logoURL = document.getElementById("init-logo-url").value;
+		if (typeof logoURL === 'string' && logoURL.length) {
+			window.logoURL= logoURL;
+		}
+
+		this.initiateCoolParams();
+	}
+
+	initiateCoolParams() {
+		const gls = window.location.search;
+
+		const coolParams = { p: new URLSearchParams(gls.slice(gls.lastIndexOf('?') + 1)) };
+
+		/* We need to return an empty string instead of `null` */
+		coolParams.get = function(name) {
+			const value = this.p.get(name);
+			return value === null ? '' : value;
+		}.bind(coolParams);
+
+		coolParams.set = function(name, value) {
+			this.p.set(name, value);
+		}.bind(coolParams);
+
+		window.coolParams = coolParams;
+	}
+
+	loadCSSFiles() {
+		// Dynamically load the appropriate *-mobile.css, *-tablet.css or *-desktop.css
+		const link = document.createElement('link');
+		link.setAttribute("rel", "stylesheet");
+		link.setAttribute("type", "text/css");
+
+		const brandingLink = document.createElement('link');
+		brandingLink.setAttribute("rel", "stylesheet");
+		brandingLink.setAttribute("type", "text/css");
+
+		const theme_name = document.getElementById('init-branding-name').value;
+		let theme_prefix = '';
+
+		if(window.useIntegrationTheme && theme_name !== '')
+			theme_prefix = theme_name + '/';
+
+		if (window.mode.isMobile()) {
+			link.setAttribute("href", this.uriPrefix + 'device-mobile.css');
+			brandingLink.setAttribute("href", this.brandingUriPrefix + theme_prefix + 'branding-mobile.css');
+		} else if (window.mode.isTablet()) {
+			link.setAttribute("href", this.uriPrefix + 'device-tablet.css');
+			brandingLink.setAttribute("href", this.brandingUriPrefix + theme_prefix + 'branding-tablet.css');
+		} else {
+			link.setAttribute("href", this.uriPrefix + 'device-desktop.css');
+			brandingLink.setAttribute("href", this.brandingUriPrefix + theme_prefix + 'branding-desktop.css');
+		}
+
+		const otherStylesheets = document.querySelectorAll('link[rel="stylesheet"]');
+		const lastOtherStylesheet = otherStylesheets[otherStylesheets.length - 1];
+
+		lastOtherStylesheet
+			.insertAdjacentElement('afterend', link)
+			.insertAdjacentElement('afterend', brandingLink);
+	}
+
+	initializeViewMode() {
+		const darkTheme = window.coolParams.get('darkTheme');
+		if (darkTheme) { window.uiDefaults = { 'darkTheme': true }; }
+	}
+
+	afterInitialization() {
+		this.initializeViewMode();
+		this.loadCSSFiles();
+	}
+}
+
+class BrowserInitializer extends InitializerBase {
+	constructor() {
+		super();
+
+		window.WOPIpostMessageReady = false;
+
+		// Start listening for Host_PostmessageReady message and save the result for future
+		this._boundPostMessageHandler = this.postMessageHandler.bind(this);
+		window.addEventListener('message', this._boundPostMessageHandler, false);
+
+		const element = document.getElementById("initial-variables");
+
+		window.host = element.dataset.host;
+		window.serviceRoot = element.dataset.serviceRoot;
+		window.hexifyUrl = element.dataset.hexifyUrl.toLowerCase().trim() === "true";
+		window.versionPath = element.dataset.versionPath;
+
+		window.postMessageOriginExt = element.dataset.postMessageOriginExt;
+		window.coolLogging = element.dataset.coolLogging;
+		window.coolwsdVersion = element.dataset.coolwsdVersion;
+		window.enableWelcomeMessage = element.dataset.enableWelcomeMessage.toLowerCase().trim() === "true";
+		window.autoShowWelcome = element.dataset.autoShowWelcome.toLowerCase().trim() === "true";
+		window.autoShowFeedback = element.dataset.autoShowFeedback.toLowerCase().trim() === "true";
+		window.allowUpdateNotification = element.dataset.allowUpdateNotification.toLowerCase().trim() === "true";
+		window.userInterfaceMode = element.dataset.userInterfaceMode;
+		window.useIntegrationTheme = element.dataset.useIntegrationTheme.toLowerCase().trim() === "true";
+		window.useStatusbarSaveIndicator = element.dataset.statusbarSaveIndicator.toLowerCase().trim() === "true";
+		window.enableMacrosExecution = element.dataset.enableMacrosExecution.toLowerCase().trim() === "true";
+		window.enableAccessibility = element.dataset.enableAccessibility.toLowerCase().trim() === "true";
+		window.outOfFocusTimeoutSecs = parseInt(element.dataset.outOfFocusTimeoutSecs);
+		window.idleTimeoutSecs = parseInt(element.dataset.idleTimeoutSecs);
+		window.minSavedMessageTimeoutSecs = parseInt(element.dataset.minSavedMessageTimeoutSecs);
+		window.protocolDebug = element.dataset.protocolDebug.toLowerCase().trim() === "true";
+		window.enableDebug = element.dataset.enableDebug.toLowerCase().trim() === "true";
+		window.frameAncestors = decodeURIComponent(element.dataset.frameAncestors);
+		window.socketProxy = element.dataset.socketProxy.toLowerCase().trim() === "true";
+		window.uiDefaults = JSON.parse(atob(element.dataset.uiDefaults));
+		window.checkFileInfoOverride = element.dataset.checkFileInfoOverride;
+		window.deeplEnabled = element.dataset.deeplEnabled.toLowerCase().trim() === "true";
+		window.zoteroEnabled = element.dataset.zoteroEnabled.toLowerCase().trim() === "true";
+		window.documentSigningEnabled = element.dataset.documentSigningEnabled.toLowerCase().trim() === "true";
+		window.savedUIState = element.dataset.savedUiState.toLowerCase().trim() === "true";
+		window.extraExportFormats = Array.from(element.dataset.extraExportFormats.split(" "));
+		window.wasmEnabled = element.dataset.wasmEnabled.toLowerCase().trim() === "true";
+		window.indirectionUrl = element.dataset.indirectionUrl;
+		window.geolocationSetup = element.dataset.geolocationSetup.toLowerCase().trim() === "true";
+		window.canvasSlideshowEnabled = element.dataset.canvasSlideshowEnabled.toLowerCase().trim() === "true";
+		window.wopiSettingBaseUrl = element.dataset.wopiSettingBaseUrl;
+	}
+
+	postMessageHandler(e) {
+		if (!(e && e.data))
+			return;
+
+		try {
+			var msg = JSON.parse(e.data);
+		} catch (err) {
+			return;
+		}
+
+		if (msg.MessageId === 'Host_PostmessageReady') {
+			window.WOPIPostmessageReady = true;
+			window.removeEventListener('message', this._boundPostMessageHandler, false);
+			console.log('Received Host_PostmessageReady.');
+		}
+	}
+}
+
+class MobileAppInitializer extends InitializerBase {
+	constructor() {
+		super();
+
+		window.ThisIsAMobileApp = true;
+		window.HelpFile = document.getElementById("init-help-file").value;
+
+		// eslint-disable-next-line
+		window.open = function (url, windowName, windowFeatures) {
+		  window.postMobileMessage('HYPERLINK ' + url); /* don't call the 'normal' window.open on mobile at all */
+		};
+
+		const element = document.getElementById("initial-variables");
+
+		window.MobileAppName = element.dataset.mobileAppName;
+		window.brandProductName = element.dataset.mobileAppName;
+
+		window.coolLogging = "true";
+		window.outOfFocusTimeoutSecs = 1000000;
+		window.idleTimeoutSecs = 1000000;
+
+		window.canvasSlideshowEnabled = true;
+	}
+}
+
+class IOSAppInitializer extends MobileAppInitializer {
+	constructor() {
+		super();
+
+		window.ThisIsTheiOSApp = true;
+		window.postMobileMessage = function(msg) { window.webkit.messageHandlers.lok.postMessage(msg); };
+		window.postMobileError   = function(msg) { window.webkit.messageHandlers.error.postMessage(msg); };
+		window.postMobileDebug   = function(msg) { window.webkit.messageHandlers.debug.postMessage(msg); };
+
+		// Related to issue #5841: the iOS app sets the base text direction via the "dir" parameter
+		document.dir = window.coolParams.get('dir');
+
+		window.userInterfaceMode = window.coolParams.get('userinterfacemode');
+
+		this.brandingUriPrefix = "Branding/" + this.brandingUriPrefix;
+	}
+}
+
+class GTKAppInitializer extends MobileAppInitializer {
+	constructor() {
+		super();
+
+		window.ThisIsTheGtkApp = true;
+		window.postMobileMessage = function(msg) { window.webkit.messageHandlers.cool.postMessage(msg, '*'); };
+		window.postMobileError   = function(msg) { window.webkit.messageHandlers.error.postMessage(msg, '*'); };
+		window.postMobileDebug   = function(msg) { window.webkit.messageHandlers.debug.postMessage(msg, '*'); };
+	}
+}
+
+class AndroidAppInitializer extends MobileAppInitializer {
+	constructor() {
+		super();
+
+		window.ThisIsTheAndroidApp = true;
+		window.postMobileMessage = function(msg) { window.COOLMessageHandler.postMobileMessage(msg); };
+		window.postMobileError   = function(msg) { window.COOLMessageHandler.postMobileError(msg); };
+		window.postMobileDebug   = function(msg) { window.COOLMessageHandler.postMobileDebug(msg); };
+
+		window.userInterfaceMode = window.coolParams.get('userinterfacemode');
+	}
+}
+
+class EMSCRIPTENAppInitializer extends MobileAppInitializer {
+	constructor() {
+		super();
+
+		window.ThisIsTheEmscriptenApp = true;
+		window.postMobileMessage = function(msg) { Module._handle_cool_message(Module.stringToNewUTF8(msg)); };
+		window.postMobileError   = function(msg) { console.log('COOL Error: ' + msg); };
+		window.postMobileDebug   = function(msg) { console.log('COOL Debug: ' + msg); };
+
+		window.userInterfaceMode = 'notebookbar';
+	}
+}
+
+function getInitializerClass() {
+	window.appType = document.getElementById("init-app-type").value;
+
+	if (window.appType === "browser") {
+		return new BrowserInitializer();
+	}
+	else if (window.appType === "mobile") {
+		let osType = document.getElementById("init-mobile-app-os-type");
+
+		if (osType) {
+			osType = osType.value;
+
+			if (osType === "IOS")
+				return new IOSAppInitializer();
+			else if (osType === "GTK")
+				return new GTKAppInitializer();
+			else if (osType === "ANDROID")
+				return new AndroidAppInitializer();
+			else if (osType === "EMSCRIPTEN")
+				return new EMSCRIPTENAppInitializer();
+		}
+	}
+}
+
 (function (global) {
+	const initializer = getInitializerClass();
+	initializer.afterInitialization();
 
 	global.logServer = function (log) {
 		if (global.ThisIsAMobileApp) {
 			global.postMobileError(log);
-		} else if (global.socket && (global.socket instanceof WebSocket) && global.socket.readyState === 1) {
+		} else if (global.socket && (global.socket instanceof WebSocket || global.socket instanceof global.IndirectSocket) && global.socket.readyState === 1) {
 			global.socket.send(log);
 		} else if (global.socket && global.L && global.app.definitions.Socket &&
 			   (global.socket instanceof global.app.definitions.Socket) && global.socket.connected()) {
@@ -56,6 +583,14 @@ window.app = {
 							global.logServer(log);
 						}
 
+						// Can use optional chaining if we increase the ecma version
+						if (global.L && global.L.Map && global.L.Map.THIS &&
+								global.L.Map.THIS._debug && global.L.Map.THIS._debug.logTrace === true) {
+							console.groupCollapsed("Trace");
+							console.trace();
+							console.groupEnd();
+						}
+
 						return global.console[method].apply(console, args);
 					};
 				}(loggingMethods[i]));
@@ -73,6 +608,12 @@ window.app = {
 				var desc = err ? err.message || '(no message)': '(no err)', stack = err ? err.stack || '(no stack)': '(no err)';
 				var log = 'jserror ' + JSON.stringify(data, null, 2) + '\n' + desc + '\n' + stack + '\n';
 				global.logServer(log);
+
+				if (L.Browser.cypressTest && window.parent !== window && err !== null) {
+					console.log("Sending global error to Cypress...:", err);
+					window.parent.postMessage(err);
+				}
+
 				return false;
 			};
 		}
@@ -80,209 +621,38 @@ window.app = {
 
 	global.setLogging(global.coolLogging != '');
 
-	var gls = global.location.search;
-	var coolParams = {
-		p: new URLSearchParams(gls.slice(gls.lastIndexOf('?') + 1)),
-	};
-	/* We need to return an empty string instead of `null` */
-	coolParams.get = function(name) {
-		var value = this.p.get(name);
-		return value === null ? '' : value;
-	}.bind(coolParams);
-	coolParams.set = function(name, value) {
-		this.p.set(name, value);
-	}.bind(coolParams);
-	global.coolParams = coolParams;
-
-	var ua = navigator.userAgent.toLowerCase(),
-	    uv = navigator.vendor.toLowerCase(),
-	    doc = document.documentElement,
-
-	    ie = 'ActiveXObject' in global,
-
-	    cypressTest = ua.indexOf('cypress') !== -1,
-	    // Firefox has undefined navigator.clipboard.read and navigator.clipboard.write,
-	    // unsecure contexts (such as http + non-localhost) has the entire navigator.clipboard
-	    // undefined.
-	    hasNavigatorClipboardRead = navigator.clipboard && navigator.clipboard.read,
-	    hasNavigatorClipboardWrite = navigator.clipboard && navigator.clipboard.write,
-	    webkit    = ua.indexOf('webkit') !== -1,
-	    phantomjs = ua.indexOf('phantom') !== -1,
-	    android23 = ua.search('android [23]') !== -1,
-	    chrome    = ua.indexOf('chrome') !== -1,
-	    gecko     = (ua.indexOf('gecko') !== -1 || (cypressTest && 'MozUserFocus' in doc.style))
-			&& !webkit && !global.opera && !ie,
-	    safari    = !chrome && (ua.indexOf('safari') !== -1 || uv.indexOf('apple') == 0),
-
-	    win = navigator.platform.indexOf('Win') === 0,
-
-	    mobile = typeof orientation !== 'undefined' || ua.indexOf('mobile') !== -1,
-	    msPointer = !global.PointerEvent && global.MSPointerEvent,
-	    pointer = (global.PointerEvent && navigator.pointerEnabled && navigator.maxTouchPoints) || msPointer,
-
-	    ie3d = ie && ('transition' in doc.style),
-	    webkit3d = ('WebKitCSSMatrix' in global) && ('m11' in new global.WebKitCSSMatrix()) && !android23,
-	    gecko3d = 'MozPerspective' in doc.style,
-	    opera12 = 'OTransition' in doc.style;
-
-	var mac = navigator.appVersion.indexOf('Mac') != -1 || navigator.userAgent.indexOf('Mac') != -1;
-	var chromebook = global.ThisIsTheAndroidApp && global.COOLMessageHandler.isChromeOS();
-
-	var isInternetExplorer = (navigator.userAgent.toLowerCase().indexOf('msie') != -1 ||
-				  navigator.userAgent.toLowerCase().indexOf('trident') != -1);
-
-	var navigatorLang = navigator.languages && navigator.languages.length ? navigator.languages[0] :
-	    (navigator.language || navigator.userLanguage || navigator.browserLanguage || navigator.systemLanguage);
-
-	function getFirefoxVersion() {
-		var version = '';
-
-		var userAgent = navigator.userAgent.toLowerCase();
-		if (userAgent.indexOf('firefox') !== -1) {
-			var matches = userAgent.match(/firefox\/([0-9]+\.*[0-9]*)/);
-			if (matches) {
-				version = matches[1];
-			}
+	function parseBool(val) {
+		if (typeof val !== 'string') return false;
+		switch (val.toLowerCase().trim()) {
+		case '1':
+		case 'true':
+		case 'yes':
+		case 'on':
+			return true;
+		case '0':
+		case 'false':
+		case 'no':
+		case 'off':
+			return false;
+		default:
+			return false;
 		}
-		return version;
 	}
-
-	global.L = {};
 
 	global.L.Params = {
 		/// Shows close button if non-zero value provided
-		closeButtonEnabled: global.coolParams.get('closebutton'),
+		closeButtonEnabled: parseBool(global.coolParams.get('closebutton')),
 
 		/// Shows revision history file menu option
-		revHistoryEnabled: global.coolParams.get('revisionhistory'),
-	};
-
-	global.L.Browser = {
-
-		// @property ie: Boolean
-		// `true` for all Internet Explorer versions (not Edge).
-		ie: ie,
-
-		// @property ielt9: Boolean
-		// `true` for Internet Explorer versions less than 9.
-		ielt9: ie && !document.addEventListener,
-
-		// @property edge: Boolean
-		// `true` for the Edge web browser.
-		edge: 'msLaunchUri' in navigator && !('documentMode' in document),
-
-		// @property webkit: Boolean
-		// `true` for webkit-based browsers like Chrome and Safari (including mobile versions).
-		webkit: webkit,
-
-		// @property gecko: Boolean
-		// `true` for gecko-based browsers like Firefox.
-		gecko: gecko,
-
-		// @property geckoVersion: String
-		// Firefox version: abc.d.
-		geckoVersion: getFirefoxVersion(),
-
-		// @property android: Boolean
-		// `true` for any browser running on an Android platform.
-		android: ua.indexOf('android') !== -1,
-
-		// @property android23: Boolean
-		// `true` for browsers running on Android 2 or Android 3.
-		android23: android23,
-
-		// @property chrome: Boolean
-		// `true` for the Chrome browser.
-		chrome: chrome,
-
-		// @property safari: Boolean
-		// `true` for the Safari browser.
-		safari: safari,
-
-		// @property win: Boolean
-		// `true` when the browser is running in a Windows platform
-		win: win,
-
-		// @property mac: Boolean
-		// `true` when the browser is running in a Mac platform
-		mac: mac,
-
-		// @property ie3d: Boolean
-		// `true` for all Internet Explorer versions supporting CSS transforms.
-		ie3d: ie3d,
-
-		// @property isInternetExplorer: Boolean
-		// `true` for Internet Explorer
-		isInternetExplorer: isInternetExplorer,
-
-		// @property webkit3d: Boolean
-		// `true` for webkit-based browsers supporting CSS transforms.
-		webkit3d: webkit3d,
-
-		// @property gecko3d: Boolean
-		// `true` for gecko-based browsers supporting CSS transforms.
-		gecko3d: gecko3d,
-
-		// @property opera12: Boolean
-		// `true` for the Opera browser supporting CSS transforms (version 12 or later).
-		opera12: opera12,
-
-		// @property any3d: Boolean
-		// `true` for all browsers supporting CSS transforms.
-		any3d: !global.L_DISABLE_3D && (ie3d || webkit3d || gecko3d) && !opera12 && !phantomjs,
-
-
-		// @property mobile: Boolean
-		// `true` for all browsers running in a mobile device.
-		mobile: mobile,
-
-		// @property mobileWebkit: Boolean
-		// `true` for all webkit-based browsers in a mobile device.
-		mobileWebkit: mobile && webkit,
-
-		// @property mobileWebkit3d: Boolean
-		// `true` for all webkit-based browsers in a mobile device supporting CSS transforms.
-		mobileWebkit3d: mobile && webkit3d,
-
-		// @property mobileOpera: Boolean
-		// `true` for the Opera browser in a mobile device.
-		mobileOpera: mobile && global.opera,
-
-		// @property mobileGecko: Boolean
-		// `true` for gecko-based browsers running in a mobile device.
-		mobileGecko: mobile && gecko,
-
-		// @property cypressTest: Boolean
-		// `true` when the browser run by cypress
-		cypressTest: cypressTest,
-
-		// @property hasNavigatorClipboardRead: Boolean
-		// `true` when permission-based clipboard paste is available.
-		hasNavigatorClipboardRead: hasNavigatorClipboardRead,
-
-		// @property hasNavigatorClipboardWrite: Boolean
-		// `true` when permission-based clipboard copy is available.
-		hasNavigatorClipboardWrite: hasNavigatorClipboardWrite,
-
-		// @property msPointer: Boolean
-		// `true` for browsers implementing the Microsoft touch events model (notably IE10).
-		msPointer: !!msPointer,
-
-		// @property pointer: Boolean
-		// `true` for all browsers supporting [pointer events](https://msdn.microsoft.com/en-us/library/dn433244%28v=vs.85%29.aspx).
-		pointer: !!pointer,
-
-		// @property retina: Boolean
-		// `true` for browsers on a high-resolution "retina" screen.
-		retina: (global.devicePixelRatio || (global.screen.deviceXDPI / global.screen.logicalXDPI)) > 1,
-
-		// @property lang: String
-		// browser language locale
-		lang: navigatorLang
+		revHistoryEnabled: parseBool(global.coolParams.get('revisionhistory')),
 	};
 
 	global.prefs = {
-		_localStorageChanges: {}, // TODO: change this to new Map() when JS version allows
+		_localStorageCache: {}, // TODO: change this to new Map() when JS version allows
+		_userBrowserSetting: new Map(),
+		_settingUpdateJSON: {},
+		_pendingSettingUpdate: undefined,
+		useBrowserSetting: false,
 		canPersist: (function() {
 			var str = 'localstorage_test';
 			try {
@@ -293,6 +663,37 @@ window.app = {
 				return false;
 			}
 		})(),
+
+		_initializeBrowserSetting: function (msg) {
+			let settingJSON = JSON.parse(msg.substring('browsersetting:'.length + 1));;
+
+			if (typeof settingJSON === 'undefined')
+				return;
+
+			const processObject = (object, parentKey = '') => {
+				Object.keys(object).forEach((key) => {
+					const fullKey = parentKey ? `${parentKey}.${key}` : key;
+					const value = object[key];
+
+					if (typeof value === 'object' && !Array.isArray(value) && value !== null) {
+						processObject(value, fullKey);
+					} else if (Array.isArray(value)) {
+						global.prefs._userBrowserSetting[fullKey] = JSON.stringify(value);
+					} else {
+						global.prefs._userBrowserSetting[fullKey] =
+							typeof value === 'boolean' ? (value ? "true" : "false") : value;
+					}
+				});
+			};
+
+			processObject(settingJSON);
+
+			global.prefs._localStorageCache = {};
+			global.prefs.useBrowserSetting = true;
+
+			// make sure set accessibilityState for cypress
+			global.getAccessibilityState();
+		},
 
 		_renameLocalStoragePref: function(oldName, newName) {
 			if (!global.prefs.canPersist) {
@@ -306,7 +707,7 @@ window.app = {
 				return;
 			}
 
-			// we do not remove the old value, both for downgrades and incase we split an old global preference to a per-app one
+			// we do not remove the old value, both for downgrades and in case we split an old global preference to a per-app one
 			global.localStorage.setItem(newName, oldValue);
 		},
 
@@ -335,8 +736,8 @@ window.app = {
 		},
 
 		get: function(key, defaultValue = undefined) {
-			if (key in global.prefs._localStorageChanges) {
-				return global.prefs._localStorageChanges[key];
+			if (key in global.prefs._localStorageCache) {
+				return global.prefs._localStorageCache[key];
 			}
 
 			const uiDefault = global.prefs._getUIDefault(key);
@@ -344,37 +745,98 @@ window.app = {
 				!global.savedUIState &&
 				uiDefault !== undefined
 			) {
+				global.prefs._localStorageCache[key] = uiDefault;
 				return uiDefault;
+			}
+
+			if (global.prefs.useBrowserSetting) {
+				let val = defaultValue;
+				if (Object.prototype.hasOwnProperty.call(global.prefs._userBrowserSetting, key))
+					val = global.prefs._userBrowserSetting[key];
+
+				if(val !== undefined && val !== '') {
+					global.prefs._localStorageCache[key] = val;
+					return val;
+				}
 			}
 
 			if (global.prefs.canPersist) {
 				const localStorageItem = global.localStorage.getItem(key);
 
 				if (localStorageItem) {
+					global.prefs._localStorageCache[key] = localStorageItem;
 					return localStorageItem;
 				}
 			}
 
 			if (uiDefault !== undefined) {
+				global.prefs._localStorageCache[key] = uiDefault;
 				return uiDefault;
 			}
 
+			global.prefs._localStorageCache[key] = defaultValue;
 			return defaultValue;
+		},
+
+		sendPendingBrowserSettingsUpdate: function() {
+			const isEmpty = (obj) => Object.keys(obj).length === 0;
+			if (!isEmpty(global.prefs._settingUpdateJSON)) {
+				global.socket.send('browsersetting action=update json=' + JSON.stringify(global.prefs._settingUpdateJSON));
+				global.prefs._settingUpdateJSON = {};
+			}
+			clearTimeout(global.prefs._pendingSettingUpdate);
+			global.prefs._pendingSettingUpdate = undefined;
+		},
+
+		// set multiple preference together and when browsersetting is enabled send
+		// update only once
+		setMultiple: function (prefsObject) {
+			const browserSettingEnabled = global.prefs.useBrowserSetting;
+			for (const [key, value] of Object.entries(prefsObject)) {
+				if (browserSettingEnabled) {
+					const oldValue = global.prefs._userBrowserSetting[key];
+					global.prefs._userBrowserSetting[key] = value;
+					if (oldValue !== value)
+						global.prefs._settingUpdateJSON[key] = value;
+				}
+				if (global.prefs.canPersist) {
+					global.localStorage.setItem(key, value);
+				}
+				global.prefs._localStorageCache[key] = value;
+			}
+
+			const isEmpty = (obj) => Object.keys(obj).length === 0;
+			if (browserSettingEnabled && !isEmpty(global.prefs._settingUpdateJSON) && global.socket && (global.socket instanceof WebSocket || global.socket instanceof global.IndirectSocket) && global.socket.readyState === 1) {
+				clearTimeout(global.prefs._pendingSettingUpdate);
+				global.prefs._pendingSettingUpdate = setTimeout(L.bind(this.sendPendingBrowserSettingsUpdate, this), 5000);
+			}
 		},
 
 		set: function(key, value) {
 			value = String(value); // NOT "new String(...)". We cannot use .toString here because value could be null/undefined
+			if (global.prefs.useBrowserSetting) {
+				const oldValue = global.prefs._userBrowserSetting[key];
+				global.prefs._userBrowserSetting[key] = value;
+				if (global.socket && (global.socket instanceof WebSocket || global.socket instanceof global.IndirectSocket) && global.socket.readyState === 1 && oldValue !== value) {
+					global.prefs._settingUpdateJSON[key] = value;
+					clearTimeout(global.prefs._pendingSettingUpdate);
+					global.prefs._pendingSettingUpdate = setTimeout(L.bind(this.sendPendingBrowserSettingsUpdate, this), 5000);
+				}
+			}
 			if (global.prefs.canPersist) {
 				global.localStorage.setItem(key, value);
 			}
-			global.prefs._localStorageChanges[key] = value;
+			global.prefs._localStorageCache[key] = value;
 		},
 
 		remove: function(key) {
+			if (global.prefs.useBrowserSetting) {
+				global.prefs._userBrowserSetting.delete(key);
+			}
 			if (global.prefs.canPersist) {
 				global.localStorage.removeItem(key);
 			}
-			global.prefs._localStorageChanges[key] = undefined;
+			global.prefs._localStorageCache[key] = undefined;
 		},
 
 		getBoolean: function(key, defaultValue = false) {
@@ -402,6 +864,23 @@ window.app = {
 
 			return parsedValue;
 		},
+	};
+
+	global.getAccessibilityState = function () {
+		var isCalcTest =
+			global.docURL.includes('data/desktop/calc/') ||
+			global.docURL.includes('data/mobile/calc/') ||
+			global.docURL.includes('data/idle/calc/') ||
+			global.docURL.includes('data/multiuser/calc/');
+
+		// FIXME: a11y doesn't work in calc under cypress
+		if (L.Browser.cypressTest && isCalcTest)
+			global.enableAccessibility = false;
+
+		if (L.Browser.cypressTest)
+			global.prefs.set('accessibilityState', global.enableAccessibility);
+
+		return global.prefs.getBoolean('accessibilityState');
 	};
 
 	// Renamed in 24.04.4.1
@@ -533,6 +1012,10 @@ window.app = {
 				return !e.isMouseEvent;
 			}
 
+			if (e.guessEmulatedFromTouch) {
+				return true;
+			}
+
 			return !(e instanceof MouseEvent);
 		},
 
@@ -565,53 +1048,54 @@ window.app = {
 			return global.matchMedia('(any-pointer: coarse)').matches;
 		},
 
-	};
+		/// a tristate (boolean | null) determining whether the last event was a touch event
+		/// may be useful to supplement hasAnyTouchscreen or hasPrimaryTouchscreen for, for example, determining UI or
+		///   hitboxes after a tap in a place where you can't sensibly figure out whether the direct trigger was a
+		///   touchscreen. Examples might be click events that are roundtripped through core
+		/// is null when no touch or click events have yet occurred, true when the last touch or click event was from a
+		///   touchscreen, and false when the last touch or click event was from a mouse
+		/// is updated with active listeners during the capture phase of the <html> element, so should be done before
+		///   most other event processing takes place
+		lastEventWasTouch: null,
 
-	global.mode = {
-		isChromebook: function() {
-			return chromebook;
-		},
-		// Here "mobile" means "mobile phone" (at least for now). Has to match small screen size
-		// requirement.
-		isMobile: function() {
-			if (global.mode.isChromebook())
-				return false;
+		/// a timestamp to indicate when lastEventWasTouch was last set
+		/// internally used to determine if hover (mouseover/out/enter/leave) events are likely from a mouse or from a
+		/// touch event
+		lastEventTime: null,
 
-			if (global.L.Browser.mobile && global.L.Browser.cypressTest) {
-				return true;
+		/// detect if the last event was a touch event, or if no events have yet occurred whether we have a touchscreen
+		///   available to us. Should be able to replace uses of hasAnyTouchscreen for uses where we are OK with the
+		///   result being less stable
+		currentlyUsingTouchscreen: function() {
+			if (global.touch.lastEventWasTouch !== null) {
+				return global.touch.lastEventWasTouch;
 			}
 
-			return global.L.Browser.mobile && (screen.width < 768 || screen.height < 768);
+			return global.touch.hasAnyTouchscreen();
 		},
-		// Mobile device with big screen size.
-		isTablet: function() {
-			if (global.mode.isChromebook())
-				return false;
-
-			return global.L.Browser.mobile && !global.mode.isMobile();
-		},
-		isDesktop: function() {
-			if (global.mode.isChromebook())
-				return true;
-
-			return !global.L.Browser.mobile;
-		},
-		getDeviceFormFactor: function() {
-			if (global.mode.isMobile())
-				return 'mobile';
-			else if (global.mode.isTablet())
-				return 'tablet';
-			else if (global.mode.isDesktop())
-				return 'desktop';
-			else
-				return null;
-		}
 	};
 
-	if (!global.prefs.getBoolean('hasNavigatorClipboardWrite', true)) {
-		// navigator.clipboard.write failed on us once, don't even try it.
-		global.L.Browser.hasNavigatorClipboardWrite = false;
-	}
+	const registerTapOrClick = (e) => {
+		registerGuessEmulatedFromTouch(e);
+		global.touch.lastEventWasTouch = global.touch.isTouchEvent(e);
+		global.touch.lastEventTime = Date.now();
+	};
+	const registerGuessEmulatedFromTouch = (e) => {
+		// on some touchscreens (e.g. iPads) these MouseEvents are emulated for the movement caused by touch events,
+		// leading to tooltips erroneously triggering ... these are all movement events so don't necessarily need a click,
+		// but for touch events they will happen around other touch events so we can still tell what they are
+		e.guessEmulatedFromTouch = global.touch.lastEventWasTouch && Date.now() - global.touch.lastEventTime < 50;
+	};
+	document.addEventListener('touchstart', registerTapOrClick, { capture: true });
+	document.addEventListener('touchend', registerTapOrClick, { capture: true });
+	document.addEventListener('mousedown', registerTapOrClick, { capture: true });
+	document.addEventListener('mouseup', registerTapOrClick, { capture: true });
+	document.addEventListener('pointerdown', registerTapOrClick, { capture: true });
+	document.addEventListener('pointerup', registerTapOrClick, { capture: true });
+	document.addEventListener('mouseenter', registerGuessEmulatedFromTouch, { capture: true });
+	document.addEventListener('mouseleave', registerGuessEmulatedFromTouch, { capture: true });
+	document.addEventListener('mouseover', registerGuessEmulatedFromTouch, { capture: true });
+	document.addEventListener('mouseout', registerGuessEmulatedFromTouch, { capture: true });
 
 	global.deviceFormFactor = global.mode.getDeviceFormFactor();
 
@@ -678,14 +1162,15 @@ window.app = {
 		this.id = global.proxySocketCounter++;
 		this.msgInflight = 0;
 		this.openInflight = 0;
-		this.inSerial = 0;
-		this.outSerial = 0;
+		this.inSerial = 1; // monotonic serial of the last processed received message
+		this.outSerial = 1; // monotonic serial of the next message to send.
 		this.minPollMs = 25; // Anything less than ~25 ms can overwhelm the HTTP server.
 		this.maxPollMs = 500; // We can probably go as much as 1-2 seconds without ill-effect.
 		this.curPollMs = this.minPollMs; // The current poll period.
 		this.minIdlePollsToThrottle = 3; // This many 'no data' responses and we throttle.
 		this.throttleFactor = 1.15; // How rapidly to throttle. 15% takes 4s to go from 25 to 500ms.
 		this.lastDataTimestamp = performance.now(); // The last time we got any data.
+		this.serialQueue = new Map();
 		this.onclose = function() {
 		};
 		this.onerror = function() {
@@ -699,8 +1184,25 @@ window.app = {
 		this.decode = function(bytes,start,end) {
 			return this.decoder.decode(this.doSlice(bytes, start,end));
 		};
+		this.processBufferedMessages = function (expectedSerial) {
+			while (this.serialQueue.has(expectedSerial)) {
+				let bufferedMessage = this.serialQueue.get(expectedSerial);
+				this.inSerial = bufferedMessage.serial;
+
+				try {
+					this.onmessage({ data: bufferedMessage.data });
+				} catch (e) {
+					global.app.console.error(e);
+					global.app.console.warn(`Failed processing a ProxySocket message (due to ${e}), ignoring`);
+					// It's better to ignore any failures rather than to lose the rest of the messages in this packet
+				}
+
+				this.serialQueue.delete(expectedSerial);
+				expectedSerial++;
+			}
+		},
 		this.parseIncomingArray = function(arr) {
-			//global.app.console.debug('proxy: parse incoming array of length ' + arr.length);
+			// global.app.console.debug('proxy: parse incoming array of length ' + arr.length);
 			for (var i = 0; i < arr.length; ++i)
 			{
 				var left = arr.length - i;
@@ -754,11 +1256,11 @@ window.app = {
 				else
 					data = this.doSlice(arr, i, i + size);
 
-				if (serial !== that.inSerial + 1) {
-					global.app.console.debug('Error: serial mismatch ' + serial + ' vs. ' + (that.inSerial + 1));
-				}
-				that.inSerial = serial;
-				this.onmessage({ data: data });
+				this.serialQueue.set(serial, {
+					'data': data,
+					'serial': serial
+				});
+				this.processBufferedMessages(serial);
 
 				i += size; // skip trailing '\n' in loop-increment
 			}
@@ -828,7 +1330,8 @@ window.app = {
 			//global.app.console.debug('send msg - ' + that.msgInflight + ' on session ' +
 			//	      that.sessionId + '  queue: "' + that.sendQueue + '"');
 			var req = new XMLHttpRequest();
-			req.open('POST', that.getEndPoint('write'));
+			const url = that.getEndPoint('write');
+			req.open('POST', url);
 			req.responseType = 'arraybuffer';
 			req.addEventListener('load', function() {
 				if (this.status == 200)
@@ -870,9 +1373,11 @@ window.app = {
 			req.addEventListener('loadend', function() {
 				that.msgInflight--;
 			});
-			req.send(that.sendQueue);
+			const toSend = that.sendQueue;
 			that.sendQueue = '';
 			that.msgInflight++;
+			// terminate all messages with an end-marker
+			req.send(toSend.concat('.'));
 		};
 		this.getSessionId = function() {
 			if (this.openInflight > 0)
@@ -902,7 +1407,9 @@ window.app = {
 			global.lastCreatedProxySocket = performance.now();
 
 			var req = new XMLHttpRequest();
-			req.open('POST', that.getEndPoint('open'));
+			const endPoint = that.getEndPoint('open');
+
+			req.open('POST', endPoint);
 			req.responseType = 'text';
 			req.addEventListener('load', function() {
 				global.app.console.debug('got session: ' + this.responseText);
@@ -947,7 +1454,8 @@ window.app = {
 			}
 		};
 		this.sendCloseMsg = function(beacon) {
-			var url = that.getEndPoint('close');
+			const url = that.getEndPoint('close');
+
 			if (!beacon)
 			{
 				var req = new XMLHttpRequest();
@@ -981,6 +1489,24 @@ window.app = {
 		// queue fetch of session id.
 		this.getSessionId();
 	};
+
+	class MobileSocket extends global.ProxySocket {
+		constructor(url) {
+			super("cool:/cool/mobilesocket" + url);
+
+			delete this.send;
+			delete this._setPollInterval;
+			delete this.close;
+			// HACK: We need this to complete the override because ProxySocket messed up the protoype chain... evenually I want to convert it to a Real Class which will fix it
+		}
+
+		send(data) {
+			global.postMobileMessage(data);
+		}
+
+		close() {} // We don't support re-opening the mobile socket, so let's make sure we don't close it...
+		_setPollInterval() {} // This is a no-op on mobile since as we will be calling from the native part to notify when we get a message
+	}
 
 	global.iterateCSSImages = function(visitor) {
 		var visitUrls = function(rules, visitor, base) {
@@ -1075,9 +1601,9 @@ window.app = {
 		this.sendPostMsg = function(errorCode) {
 			var errorMsg;
 			if (errorCode === 0) {
-				errorMsg = _('Cluster is scaling, retrying...');
+				errorMsg = _('The system is currently adjusting resources. Please wait a moment while we retry your request...');
 			} else if (errorCode === 1) {
-				errorMsg = _('Document is migrating to new server, retrying...');
+				errorMsg = _('The document is being migrated to a new server. Retrying shortly...');
 			} else {
 				errorMsg = _('Failed to get RouteToken from controller');
 			}
@@ -1093,53 +1619,63 @@ window.app = {
 			global.parent.postMessage(JSON.stringify(msg), '*');
 		};
 
-		var http = new XMLHttpRequest();
-		http.open('GET', global.indirectionUrl + '?Uri=' + encodeURIComponent(that.uri), true);
-		http.responseType = 'json';
-		http.addEventListener('load', function() {
-			if (this.status === 200) {
-				var uriWithRouteToken = http.response.uri;
-				global.expectedServerId = http.response.serverId;
-				var params = (new URL(uriWithRouteToken)).searchParams;
-				global.routeToken = params.get('RouteToken');
-				global.app.console.log('updated routeToken: ' + global.routeToken);
-				that.innerSocket = new WebSocket(uriWithRouteToken);
-				that.innerSocket.binaryType = that.binaryType;
-				that.innerSocket.onerror = function() {
-					that.readyState = that.innerSocket.readyState;
-					that.onerror();
-				};
-				that.innerSocket.onclose = function() {
-					that.readyState = 3;
-					that.onclose();
-					that.innerSocket.onerror = function () {};
-					that.innerSocket.onclose = function () {};
-					that.innerSocket.onmessage = function () {};
-				};
-				that.innerSocket.onopen = function() {
-					that.readyState = 1;
-					that.onopen();
-				};
-				that.innerSocket.onmessage = function(e) {
-					that.readyState = that.innerSocket.readyState;
-					that.onmessage(e);
-				};
-			} else if (this.status === 202) {
-				if (!(window.app && window.app.socket && window.app.socket._reconnecting)) {
+		this.sendRouteTokenRequest = function (requestUri) {
+			var http = new XMLHttpRequest();
+			// let url = global.indirectionUrl + '?Uri=' + encodeURIComponent(that.uri);
+			http.open('GET', requestUri, true);
+			http.responseType = 'json';
+			http.addEventListener('load', function () {
+				if (this.status === 200) {
+					var uriWithRouteToken = http.response.uri;
+					global.expectedServerId = http.response.serverId;
+					var params = (new URL(uriWithRouteToken)).searchParams;
+					global.routeToken = params.get('RouteToken');
+					global.app.console.log('updated routeToken: ' + global.routeToken);
+					that.innerSocket = new WebSocket(uriWithRouteToken);
+					that.innerSocket.binaryType = that.binaryType;
+					that.innerSocket.onerror = function () {
+						that.readyState = that.innerSocket.readyState;
+						that.onerror();
+					};
+					that.innerSocket.onclose = function () {
+						that.readyState = 3;
+						that.onclose();
+						that.innerSocket.onerror = function () { };
+						that.innerSocket.onclose = function () { };
+						that.innerSocket.onmessage = function () { };
+					};
+					that.innerSocket.onopen = function () {
+						that.readyState = 1;
+						that.onopen();
+					};
+					that.innerSocket.onmessage = function (e) {
+						that.readyState = that.innerSocket.readyState;
+						that.onmessage(e);
+					};
+				} else if (this.status === 202) {
+					if (!(window.app && window.app.socket && window.app.socket._reconnecting)) {
 						that.sendPostMsg(http.response.errorCode);
+					}
+					var timeoutFn = function (requestUri) {
+						console.warn('Requesting again for routeToken');
+						this.open('GET', requestUri, true);
+						this.send();
+					}.bind(this);
+					setTimeout(timeoutFn, 3000, requestUri);
+				} else {
+					global.app.console.error('Indirection url: error on incoming response ' + this.status);
+					that.sendPostMsg(-1);
 				}
-				var timeoutFn = function (indirectionUrl, uri) {
-					console.warn('Requesting again for routeToken');
-					this.open('GET', indirectionUrl + '?Uri=' + encodeURIComponent(uri), true);
-					this.send();
-				}.bind(this);
-				setTimeout(timeoutFn, 3000, global.indirectionUrl, that.uri);
-			} else {
-				global.app.console.error('Indirection url: error on incoming response ' + this.status);
-				that.sendPostMsg(-1);
-			}
-		});
-		http.send();
+			});
+			http.send();
+		};
+
+		let requestUri = global.indirectionUrl + '?Uri=' + encodeURIComponent(that.uri);
+		if (global.geolocationSetup) {
+			let timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+			requestUri += "&TimeZone=" + timeZone;
+		}
+		this.sendRouteTokenRequest(requestUri);
 	};
 
 	global.createWebSocket = function(uri) {
@@ -1147,8 +1683,9 @@ window.app = {
 			uri = global.processCoolUrl({ url: uri, type: 'ws' });
 		}
 
-		if (global.socketProxy) {
-			global.socketProxy = true;
+		if (global.ThisIsAMobileApp) {
+			return new MobileSocket(uri);
+		} else if (global.socketProxy) {
 			return new global.ProxySocket(uri);
 		} else if (global.indirectionUrl != '' && !global.migrating) {
 			global.indirectSocket = true;
@@ -1195,7 +1732,7 @@ window.app = {
 	if (global.wopiSrc != '') {
 		global.docURL = decodeURIComponent(global.wopiSrc);
 		if (global.accessToken !== '') {
-			wopiParams = { 'access_token': global.accessToken, 'access_token_ttl': global.accessTokenTTL };
+			wopiParams = { 'access_token': global.accessToken, 'access_token_ttl': global.accessTokenTTL, 'no_auth_header': global.noAuthHeader };
 		}
 		else if (global.accessHeader !== '') {
 			wopiParams = { 'access_header': global.accessHeader };
@@ -1206,16 +1743,15 @@ window.app = {
 				return encodeURIComponent(key) + '=' + encodeURIComponent(wopiParams[key]);
 			}).join('&');
 		}
-	} else if (global.ThisIsTheEmscriptenApp) {
-		// This is of course just a horrible temporary hack
-		global.docURL = 'file:///sample.docx';
 	} else {
 		global.docURL = filePath;
 	}
 
 	// Form a valid WS URL to the host with the given path.
 	global.makeWsUrl = function (path) {
-		global.app.console.assert(global.host.startsWith('ws'), 'host is not ws: ' + global.host);
+		if (!global.ThisIsAMobileApp) {
+			global.app.console.assert(global.host.startsWith('ws'), 'host is not ws: ' + global.host);
+		}
 		return global.host + global.serviceRoot + path;
 	};
 
@@ -1263,6 +1799,14 @@ window.app = {
 		return global.makeDocAndWopiSrcUrl(httpURI, docUrlParams, suffix, wopiSrcParam);
 	};
 
+	global.makeClientVisibleArea = function() {
+		// An approximation till we don't yet have CanvasTileLayer, which would properly use
+		// map.getPixelBounds() and pixelsToTwips().
+		const width = window.innerWidth * 15;
+		const height = window.innerHeight * 15;
+		return '0;0;' + width + ';' + height;
+	};
+
 	// Encode a string to hex.
 	global.hexEncode = function (string) {
 		var bytes = new TextEncoder().encode(string);
@@ -1284,7 +1828,7 @@ window.app = {
 		return new TextDecoder().decode(bytes);
 	};
 
-	if (global.ThisIsAMobileApp) {
+	if (global.ThisIsTheGtkApp || global.ThisIsTheEmscriptenApp) {
 		global.socket = new global.FakeWebSocket();
 		global.TheFakeWebSocket = global.socket;
 	} else {
@@ -1314,8 +1858,20 @@ window.app = {
 	}
 
 	var lang = global.coolParams.get('lang');
-	if (lang)
+	if (lang) {
+		// Workaround for broken integrations vs. LOKit language fallback
+		if (lang === 'en-us')
+			lang = 'en-US';
+		if (lang === 'en-gb')
+			lang = 'en-GB';
+		if (lang === 'pt-br')
+			lang = 'pt-BR';
+		if (lang === 'zh-cn')
+			lang = 'zh-CN';
+		if (lang === 'zh-tw')
+			lang = 'zh-TW';
 		global.langParam = encodeURIComponent(lang);
+		}
 	else
 		global.langParam = 'en-US';
 	global.langParamLocale = new Intl.Locale(global.langParam);
@@ -1339,18 +1895,7 @@ window.app = {
 				var now2 = Date.now();
 				global.socket.send('coolclient ' + ProtocolVersionNumber + ' ' + ((now0 + now2) / 2) + ' ' + now1);
 
-				var isCalcTest =
-					global.docURL.includes('data/desktop/calc/') ||
-					global.docURL.includes('data/mobile/calc/') ||
-					global.docURL.includes('data/idle/calc/') ||
-					global.docURL.includes('data/multiuser/calc/');
-
-				if (L.Browser.cypressTest && isCalcTest)
-					global.enableAccessibility = false;
-
-				var accessibilityState = global.prefs.getBoolean('accessibilityState');
-				accessibilityState = accessibilityState || (L.Browser.cypressTest && !isCalcTest);
-				msg += ' accessibilityState=' + accessibilityState;
+				msg += ' accessibilityState=' + global.getAccessibilityState();
 
 				if (global.ThisIsAMobileApp) {
 					msg += ' lang=' + global.LANG;
@@ -1368,7 +1913,7 @@ window.app = {
 				if (global.deviceFormFactor) {
 					msg += ' deviceFormFactor=' + global.deviceFormFactor;
 				}
-				var spellOnline = window.prefs.get('SpellOnline');
+				var spellOnline = window.prefs.get('spellOnline');
 				if (spellOnline) {
 					msg += ' spellOnline=' + spellOnline;
 				}
@@ -1376,7 +1921,11 @@ window.app = {
 				const darkTheme = window.prefs.getBoolean('darkTheme');
 				msg += ' darkTheme=' + darkTheme;
 
+				const darkBackground = window.prefs.getBoolean('darkBackgroundForTheme.' + (darkTheme ? 'dark' : 'light'), darkTheme);
+				msg += ' darkBackground=' + darkBackground;
+
 				msg += ' timezone=' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+				msg += ' clientvisiblearea=' + window.makeClientVisibleArea();
 
 				global.socket.send(msg);
 			}
@@ -1391,6 +1940,13 @@ window.app = {
 		};
 
 		global.socket.onmessage = function (event) {
+			if (event.data.startsWith('browsersetting:')) {
+				try {
+					global.prefs._initializeBrowserSetting(event.data);
+				} catch (e) {
+					global.app.console.error('Failed to initialize browser settings: ', e.message)
+				}
+			}
 			if (typeof global.socket._onMessage === 'function') {
 				global.socket._emptyQueue();
 				global.socket._onMessage(event);

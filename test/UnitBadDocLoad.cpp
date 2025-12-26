@@ -72,8 +72,8 @@ UnitBase::TestResult UnitBadDocLoad::testBadDocLoadFail()
         LOK_ASSERT_EQUAL(true, dialog.size() > 0);
 
         // Extract all json entries into a map.
-        items = Util::JsonToMap(dialog.substr(sizeof("jsdialog:")));
-        auto firstId = items["id"];
+        items = JsonUtil::jsonToMap(dialog.substr(sizeof("jsdialog:")));
+        const std::string firstId = items["id"];
 
         // Click "Yes" in a dialog
         helpers::sendTextFrame(socket, "dialogevent " + firstId + " {\"id\":\"yes\", \"cmd\": \"click\", \"data\": \"2\", \"type\": \"responsebutton\"}", testname);
@@ -83,7 +83,7 @@ UnitBase::TestResult UnitBadDocLoad::testBadDocLoadFail()
         do {
             dialog2 = helpers::getResponseString(socket, "jsdialog:", testname);
             LOK_ASSERT_EQUAL(true, dialog2.size() > 0);
-            items = Util::JsonToMap(dialog2.substr(sizeof("jsdialog:")));
+            items = JsonUtil::jsonToMap(dialog2.substr(sizeof("jsdialog:")));
         } while(items["id"] == firstId); // a duplicate update of existing dialog
 
         // Now we received jsdialog with warning that repair failed
@@ -100,8 +100,8 @@ UnitBase::TestResult UnitBadDocLoad::testBadDocLoadFail()
         std::string errorKind;
         COOLProtocol::getTokenString(tokens[1], "cmd", errorCommand);
         COOLProtocol::getTokenString(tokens[2], "kind", errorKind);
-        LOK_ASSERT_EQUAL(std::string("load"), errorCommand);
-        LOK_ASSERT_EQUAL(std::string("faileddocloading"), errorKind);
+        LOK_ASSERT_EQUAL_STR("load", errorCommand);
+        LOK_ASSERT_EQUAL_STR("faileddocloading", errorKind);
     }
     catch (const Poco::Exception& exc)
     {

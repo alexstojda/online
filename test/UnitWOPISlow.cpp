@@ -26,6 +26,8 @@
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Util/LayeredConfiguration.h>
 
+using namespace std::literals;
+
 /// Test slow saving/uploading.
 /// We modify the document, save, and immediately
 /// modify again followed by closing the connection.
@@ -56,19 +58,19 @@ public:
         , _inputCount(0)
     {
         // We need more time than the default.
-        setTimeout(std::chrono::minutes(10));
+        setTimeout(10min);
     }
 
     std::unique_ptr<http::Response>
     assertPutFileRequest(const Poco::Net::HTTPRequest& request) override
     {
-        LOG_TST("PutFile");
+        TST_LOG("PutFile");
         LOK_ASSERT_STATE(_phase, Phase::WaitPutFile);
 
         // Triggered while closing.
-        LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsAutosave"));
+        LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsAutosave"));
 
-        LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsModifiedByUser"));
+        LOK_ASSERT_EQUAL_STR("true", request.get("X-COOL-WOPI-IsModifiedByUser"));
 
         passTest("Document uploaded on closing as expected.");
         return nullptr;
@@ -82,13 +84,13 @@ public:
     /// The document is loaded.
     bool onDocumentLoaded(const std::string& message) override
     {
-        LOG_TST("Doc (" << toString(_phase) << "): [" << message << ']');
+        TST_LOG("Doc (" << name(_phase) << "): [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::WaitLoadStatus);
 
         // Modify and wait for the notification.
         TRANSITION_STATE(_phase, Phase::WaitModifiedStatus);
 
-        LOG_TST("Sending key input #" << ++_inputCount);
+        TST_LOG("Sending key input #" << ++_inputCount);
         WSD_CMD("key type=input char=97 key=0");
         WSD_CMD("key type=up char=0 key=512");
 
@@ -102,18 +104,18 @@ public:
         // Only the first time is handled here.
         if (_phase == Phase::WaitModifiedStatus)
         {
-            LOG_TST("Doc (" << toString(_phase) << "): [" << message << ']');
+            TST_LOG("Doc (" << name(_phase) << "): [" << message << ']');
             LOK_ASSERT_STATE(_phase, Phase::WaitModifiedStatus);
 
             // Save and immediately modify, then close the connection.
             WSD_CMD("save dontTerminateEdit=0 dontSaveIfUnmodified=0 "
                     "extendedData=CustomFlag%3DCustom%20Value%3BAnotherFlag%3DAnotherValue");
 
-            LOG_TST("Sending key input #" << ++_inputCount);
+            TST_LOG("Sending key input #" << ++_inputCount);
             WSD_CMD("key type=input char=97 key=0");
             WSD_CMD("key type=up char=0 key=512");
 
-            LOG_TST("Closing the connection.");
+            TST_LOG("Closing the connection.");
             deleteSocketAt(0);
 
             // Don't transition to WaitPutFile until after closing the socket.
@@ -131,7 +133,7 @@ public:
             {
                 TRANSITION_STATE(_phase, Phase::WaitLoadStatus);
 
-                LOG_TST("Load: initWebsocket.");
+                TST_LOG("Load: initWebsocket.");
                 initWebsocket("/wopi/files/large-six-hundred.odt?access_token=anything");
 
                 WSD_CMD("load url=" + getWopiSrc());
@@ -156,7 +158,7 @@ class UnitSuperfluousSaves : public WopiTestServer
 
     /// The number of key input sent.
     std::size_t _saveCount;
-    int _uploadCount; //< The number of times we uploaded.
+    int _uploadCount; ///< The number of times we uploaded.
 
 public:
     UnitSuperfluousSaves()
@@ -166,27 +168,27 @@ public:
         , _uploadCount(0)
     {
         // We need more time than the default.
-        setTimeout(std::chrono::minutes(2));
+        setTimeout(2min);
     }
 
     std::unique_ptr<http::Response>
     assertPutFileRequest(const Poco::Net::HTTPRequest& request) override
     {
         ++_uploadCount;
-        LOG_TST("PutFile #" << _uploadCount);
+        TST_LOG("PutFile #" << _uploadCount);
 
-        LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsAutosave"));
-        LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsExitSave"));
+        LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsAutosave"));
+        LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsExitSave"));
 
         if (_phase == Phase::WaitPutFile)
         {
-            LOK_ASSERT_EQUAL(std::string("true"), request.get("X-COOL-WOPI-IsModifiedByUser"));
+            LOK_ASSERT_EQUAL_STR("true", request.get("X-COOL-WOPI-IsModifiedByUser"));
             LOK_ASSERT_EQUAL_MESSAGE("Expected to be in Phase::WaitPutFile", 1, _uploadCount);
             TRANSITION_STATE(_phase, Phase::Done);
         }
         else
         {
-            LOK_ASSERT_EQUAL(std::string("false"), request.get("X-COOL-WOPI-IsModifiedByUser"));
+            LOK_ASSERT_EQUAL_STR("false", request.get("X-COOL-WOPI-IsModifiedByUser"));
             LOK_ASSERT_STATE(_phase, Phase::Done);
             // LOK_ASSERT_EQUAL_MESSAGE("Expected to be in Phase::WaitPutFile", 2, _uploadCount);
         }
@@ -197,7 +199,7 @@ public:
     /// The document is loaded.
     bool onDocumentLoaded(const std::string& message) override
     {
-        LOG_TST("Doc (" << toString(_phase) << "): [" << message << ']');
+        TST_LOG("Doc (" << name(_phase) << "): [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::WaitLoadStatus);
 
         // Modify and wait for the notification.
@@ -212,7 +214,7 @@ public:
     /// The document is modified. Save, modify, and close it.
     bool onDocumentModified(const std::string& message) override
     {
-        LOG_TST("Doc (" << toString(_phase) << "): [" << message << ']');
+        TST_LOG("Doc (" << name(_phase) << "): [" << message << ']');
         LOK_ASSERT_STATE(_phase, Phase::WaitModifiedStatus);
 
         _stopwatch.restart();
@@ -231,7 +233,7 @@ public:
             {
                 TRANSITION_STATE(_phase, Phase::WaitLoadStatus);
 
-                LOG_TST("Load: initWebsocket.");
+                TST_LOG("Load: initWebsocket.");
                 initWebsocket("/wopi/files/" + getTestname() + "?access_token=anything");
 
                 WSD_CMD("load url=" + getWopiSrc());
@@ -244,13 +246,13 @@ public:
             case Phase::WaitPutFile:
             {
                 // Save while we're waiting.
-                LOG_TST("Sending key input #" << _saveCount);
+                TST_LOG("Sending key input #" << _saveCount);
                 WSD_CMD("save dontTerminateEdit=0 dontSaveIfUnmodified=0");
             }
             break;
             case Phase::Done:
             {
-                if (_stopwatch.elapsed(std::chrono::minutes(1)))
+                if (_stopwatch.elapsed(10s))
                 {
                     passTest("No unexpected conditions met");
                 }

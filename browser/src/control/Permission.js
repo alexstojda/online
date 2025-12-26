@@ -12,7 +12,7 @@
  * Document permission handler
  */
 /* global app $ _ */
-L.Map.include({
+window.L.Map.include({
 	readonlyStartingFormats: {
 		'txt': { canEdit: true, odfFormat: 'odt' },
 		'csv': { canEdit: true, odfFormat: 'ods' },
@@ -27,7 +27,7 @@ L.Map.include({
 		button.attr('title', _('Edit document'));
 		button.attr('aria-label', _('Edit document'));
 		// app.file.fileBasedView is new view that has continuous scrolling
-		// used for PDF and we dont permit editing for PDFs
+		// used for PDF and we don't permit editing for PDFs
 		// this._shouldStartReadOnly() is a check for files that should start in readonly mode and even on desktop browser
 		// we warn the user about loosing the rich formatting and offer an option to
 		// save as ODF instead of the current format
@@ -36,7 +36,7 @@ L.Map.include({
 		// we offer save-as to another place where the user can edit the document
 		var isPDF = app.file.fileBasedView && app.file.editComment;
 		if (!isPDF && (this._shouldStartReadOnly() || window.mode.isMobile() || window.mode.isTablet())) {
-			button.show();
+			button.css('display', 'flex');
 		} else {
 			button.hide();
 		}
@@ -206,7 +206,10 @@ L.Map.include({
 			this._textInput.setSwitchedToEditMode();
 		}
 
-		this.fire('updatepermission', {perm : perm});
+		if (app.map['stateChangeHandler'].getItemValue('EditDoc') === 'false')
+			app.map.sendUnoCommand('.uno:EditDoc?Editable:bool=true');
+
+		app.events.fire('updatepermission', {perm : perm});
 
 		if (this._docLayer._docType === 'text') {
 			this.setZoom(10);
@@ -226,9 +229,8 @@ L.Map.include({
 		if (this._docLayer) {
 			this._docLayer._onUpdateCursor();
 			this._docLayer._clearSelections();
-			this._docLayer._onUpdateTextSelection();
 		}
-		this.fire('updatepermission', {perm : perm});
+		app.events.fire('updatepermission', {perm : perm});
 		this.fire('closemobilewizard');
 		this.fire('closealldialogs');
 

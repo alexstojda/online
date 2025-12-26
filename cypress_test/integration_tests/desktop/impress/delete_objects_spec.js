@@ -12,8 +12,9 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 
 	it('Delete Text', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.leaflet-layer').dblclick('center');
+		cy.cGet('#document-container').dblclick('center');
 		cy.cGet('#document-container svg g').should('exist');
+		cy.wait(500);
 		helper.typeIntoDocument('text');
 		helper.selectAllText();
 		helper.copy();
@@ -23,11 +24,38 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 		helper.textSelectionShouldNotExist();
 	});
 
+	it('Delete Text From Second Page', function() {
+		// Insert second page.
+		cy.cGet('#insertpage-button').click();
+
+		// Check / wait for the inserted page.
+		cy.cGet('#preview-img-part-1').should('exist');
+
+		// Activate the inserted page.
+		cy.cGet('#preview-img-part-1').click();
+
+		// Click on canvas to activate the document.
+		cy.cGet('#document-canvas').click(100, 100);
+
+		// Press delete button. If the document is correctly activated, the second page shouldn't be deleted.
+		helper.typeIntoDocument('{del}');
+
+		/*
+			Manually tested the failing case.
+			This wait is a little long but it takes more than 3 seconds to remove the preview while testing.
+			We are testing if we accidentaly delete the slide or not. To be sure we didn't delete it, we need to wait.
+			Or below condition will succeed first, then the page will be deleted = false positive.
+		*/
+		cy.wait(5000);
+
+		// Check if the second page still exists.
+		cy.cGet('#preview-img-part-1').should('exist');
+	});
+
 	it('Delete Shapes', function() {
-		cy.cGet('#toolbar-up > .ui-scroll-right').click();
-		cy.wait(1000);
 		//insert
-		cy.cGet('#insertshapes').click();
+		desktopHelper.getCompactIconArrow('DefaultNumbering').click();
+		desktopHelper.getCompactIconArrow('BasicShapes').click();
 		cy.cGet('.col.w2ui-icon.symbolshapes').should($el => { expect(Cypress.dom.isDetached($el)).to.eq(false); }).click();
 		cy.cGet('#test-div-shapeHandlesSection').should('exist');
 
@@ -37,9 +65,9 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 	});
 
 	it('Delete Chart' , function() {
-		cy.cGet('#toolbar-up > .ui-scroll-right').click();
+		desktopHelper.getCompactIconArrow('DefaultNumbering').click();
 		//insert
-		cy.cGet('#insertobjectchart').click();
+		desktopHelper.getCompactIcon('InsertObjectChart').click();
 		cy.cGet('#test-div-shapeHandlesSection').should('exist');
 		//delete
 		helper.typeIntoDocument('{del}');
@@ -47,7 +75,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 	});
 
 	it('Delete Table',function() {
-		desktopHelper.selectZoomLevel('50');
+		desktopHelper.selectZoomLevel('50', false);
 
 		cy.cGet('#menu-table').click();
 		cy.cGet('body').contains('Insert Table...').click();
@@ -56,7 +84,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 		helper.typeIntoDocument('{shift}{enter}');
 
 		// Table is inserted with the markers shown
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('exist');
+		cy.cGet('.table-column-resize-marker').should('exist');
 		cy.cGet('#test-div-shapeHandlesSection').then(function(element) {
 			const x = element[0].getBoundingClientRect().left;
 			const y = element[0].getBoundingClientRect().top;
@@ -65,7 +93,7 @@ describe(['tagdesktop', 'tagnextcloud', 'tagproxy'], 'Delete Objects', function(
 		});
 
 		cy.cGet('body').contains('.context-menu-item', 'Delete').click();
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('not.exist');
+		cy.cGet('.table-column-resize-marker').should('not.exist');
 	});
 
 	it('Delete Fontwork', function() {

@@ -10,7 +10,6 @@
  */
 
 #include <config.h>
-#include <config_version.h>
 
 #include <helpers.hpp>
 #include <lokassert.hpp>
@@ -74,11 +73,9 @@ class HTTPServerTest : public CPPUNIT_NS::TestFixture
     void testRenderSearchResult();
 
 protected:
-    void assertHTTPFilesExist(const Poco::URI& uri,
-                              Poco::RegularExpression& expr,
-                              const std::string& html,
-                              const std::string& mimetype,
-                              const std::string& testname);
+    void assertHTTPFilesExist(const Poco::URI& uri, Poco::RegularExpression& expr,
+                              const std::string& html, const std::string& mimetype,
+                              const std::string_view testname);
 
 public:
     HTTPServerTest()
@@ -132,28 +129,28 @@ public:
 
 void HTTPServerTest::testCoolGet()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     const auto pathAndQuery = "/browser/dist/cool.html?access_token=111111111";
     const std::shared_ptr<const http::Response> httpResponse
         = http::get(_uri.toString(), pathAndQuery);
 
     LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-    LOK_ASSERT_EQUAL(std::string("text/html"), httpResponse->header().getContentType());
+    LOK_ASSERT_EQUAL_STR("text/html", httpResponse->header().getContentType());
 
     //FIXME: Replace with own URI parser.
     Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, pathAndQuery);
     Poco::Net::HTMLForm param(request);
 
-    const std::string html = httpResponse->getBody();
+    const std::string& html = httpResponse->getBody();
     LOK_ASSERT(html.find(param["access_token"]) != std::string::npos);
     LOK_ASSERT(html.find(_uri.getHost()) != std::string::npos);
-    LOK_ASSERT(html.find(std::string(COOLWSD_VERSION_HASH)) != std::string::npos);
+    LOK_ASSERT(html.find(Util::getCoolVersionHash()) != std::string::npos);
 }
 
 void HTTPServerTest::testCoolPostPoco()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     std::unique_ptr<Poco::Net::HTTPClientSession> session(helpers::createSession(_uri));
 
@@ -178,7 +175,7 @@ void HTTPServerTest::testCoolPostPoco()
 
     std::string csp = response["Content-Security-Policy"];
     StringVector lines = StringVector::tokenize(csp, ';');
-    LOG_TST("CSP - " << csp << " tokens " << lines.size());
+    TST_LOG("CSP - " << csp << " tokens " << lines.size());
     for (size_t i = 0; i < lines.size(); ++i)
     {
         if(lines.startsWith(i, " connect-src") ||
@@ -193,12 +190,12 @@ void HTTPServerTest::testCoolPostPoco()
                     continue;
 
                 Poco::URI uri(split[j]);
-                LOG_TST("URL - " << split[j]);
-                LOK_ASSERT_EQUAL(std::string(""), uri.getUserInfo());
+                TST_LOG("URL - " << split[j]);
+                LOK_ASSERT_EQUAL_STR("", uri.getUserInfo());
                 LOK_ASSERT(uri.getPath() == std::string("") ||
                            uri.getPath() == std::string("*"));
-                LOK_ASSERT_EQUAL(std::string(""), uri.getQuery());
-                LOK_ASSERT_EQUAL(std::string(""), uri.getFragment());
+                LOK_ASSERT_EQUAL_STR("", uri.getQuery());
+                LOK_ASSERT_EQUAL_STR("", uri.getFragment());
             }
         }
     }
@@ -209,7 +206,7 @@ void HTTPServerTest::testCoolPostPoco()
 
 void HTTPServerTest::testCoolPost()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     const auto pathAndQuery = "/browser/dist/"
                               "cool.html?WOPISrc=https%3A%2F%2Flocalhost%2Fnextcloud%2Findex.php%"
@@ -218,24 +215,23 @@ void HTTPServerTest::testCoolPost()
 
     http::Request httpRequest(pathAndQuery, http::Request::VERB_POST);
 
-    http::Header& httpHeader = httpRequest.header();
-    httpHeader.set("Cache-Control", "max-age=0");
-    httpHeader.set("sec-ch-ua",
-                   "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"");
-    httpHeader.set("sec-ch-ua-mobile", "?0");
-    httpHeader.set("sec-ch-ua-platform", "\"Linux\"");
-    httpHeader.set("Upgrade-Insecure-Requests", "1");
-    httpHeader.set("Origin", "null");
-    httpHeader.set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
-                                 "Gecko) Chrome/114.0.0.0 Safari/537.36");
-    httpHeader.set("Accept",
-                   "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/"
-                   "webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
-    httpHeader.set("Sec-Fetch-Site", "same-site");
-    httpHeader.set("Sec-Fetch-Mode", "navigate");
-    httpHeader.set("Sec-Fetch-Dest", "iframe");
-    httpHeader.set("Accept-Encoding", "gzip, deflate, br");
-    httpHeader.set("Accept-Language", "en-US,en;q=0.9");
+    httpRequest.set("Cache-Control", "max-age=0");
+    httpRequest.set("sec-ch-ua",
+                    "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"");
+    httpRequest.set("sec-ch-ua-mobile", "?0");
+    httpRequest.set("sec-ch-ua-platform", "\"Linux\"");
+    httpRequest.set("Upgrade-Insecure-Requests", "1");
+    httpRequest.set("Origin", "null");
+    httpRequest.set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
+                                  "Gecko) Chrome/114.0.0.0 Safari/537.36");
+    httpRequest.set("Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/"
+                    "webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+    httpRequest.set("Sec-Fetch-Site", "same-site");
+    httpRequest.set("Sec-Fetch-Mode", "navigate");
+    httpRequest.set("Sec-Fetch-Dest", "iframe");
+    httpRequest.set("Accept-Encoding", "gzip, deflate, br");
+    httpRequest.set("Accept-Language", "en-US,en;q=0.9");
 
     httpRequest.setBody(
         "access_token=choMXq0rSMcsm0RoZZWDWsrgAcE5AHwc&ui_defaults=TextRuler%3Dfalse%3BTextSidebar%"
@@ -256,36 +252,29 @@ void HTTPServerTest::testCoolPost()
         httpSession->syncRequest(httpRequest, http::Session::getDefaultTimeout());
 
     LOK_ASSERT_EQUAL(http::StatusCode::OK, httpResponse->statusLine().statusCode());
-    LOK_ASSERT_EQUAL(std::string("text/html"), httpResponse->header().getContentType());
+    LOK_ASSERT_EQUAL_STR("text/html", httpResponse->header().getContentType());
 
-    const std::string html = httpResponse->getBody();
+    const std::string& html = httpResponse->getBody();
     fprintf(stderr, "%s\n", html.c_str());
     LOK_ASSERT(html.find(_uri.getHost()) != std::string::npos);
-    LOK_ASSERT(html.find("window.versionPath = '" COOLWSD_VERSION_HASH "';") != std::string::npos);
-    LOK_ASSERT(html.find("window.coolwsdVersion = '" COOLWSD_VERSION "';") != std::string::npos);
-    LOK_ASSERT(html.find("window.accessToken = 'choMXq0rSMcsm0RoZZWDWsrgAcE5AHwc';") !=
+    LOK_ASSERT(html.find("data-version-path = \"" + Util::getCoolVersionHash() + '"') !=
                std::string::npos);
-    LOK_ASSERT(html.find("window.accessTokenTTL = '0';") != std::string::npos);
-    LOK_ASSERT(html.find("window.accessHeader = '';") != std::string::npos);
-    LOK_ASSERT(html.find("window.postMessageOriginExt = 'https://www.example.com:8080';") !=
+    LOK_ASSERT(html.find("data-coolwsd-version = \"" + Util::getCoolVersion() + '"') !=
                std::string::npos);
-    LOK_ASSERT(
-        html.find(
-            "window.frameAncestors = decodeURIComponent('%20127.0.0.1:%2A%20localhost:%2A');") !=
-        std::string::npos);
-    LOK_ASSERT(
-        html.find(
-            R"xx(window.uiDefaults = {"presentation":{"ShowSidebar":"false","ShowStatusbar":"false"},"spreadsheet":{"ShowSidebar":"false","ShowStatusbar":"false"},"text":{"ShowRuler":"false","ShowSidebar":"false","ShowStatusbar":"false"},"uiMode":"classic"};)xx") !=
-        std::string::npos);
-    LOK_ASSERT(
-        html.find(
-            R"xx(<style>:root {--co-primary-text:#ffffff;--co-primary-element:#0082c9;--co-text-accent:#0082c9;--co-primary-light:#e6f3fa;--co-primary-element-light:#17adff;--co-color-error:#e9322d;--co-color-warning:#eca700;--co-color-success:#46ba61;--co-border-radius:3px;--co-border-radius-large:10px;--co-loading-light:#ccc;--co-loading-dark:#444;--co-box-shadow:rgba(77, 77, 77, 0.5);--co-border:#ededed;--co-border-dark:#dbdbdb;--co-border-radius-pill:100px;}</style>)xx") !=
-        std::string::npos);
+    LOK_ASSERT(html.find("choMXq0rSMcsm0RoZZWDWsrgAcE5AHwc") != std::string::npos);
+    LOK_ASSERT(html.find("data-access-token = \"choMXq0rSMcsm0RoZZWDWsrgAcE5AHwc\"") !=
+               std::string::npos);
+    LOK_ASSERT(html.find("data-access-token-ttl = \"0\"") != std::string::npos);
+    LOK_ASSERT(html.find("data-access-header = \"\"") != std::string::npos);
+    LOK_ASSERT(html.find("data-post-message-origin-ext = \"https://www.example.com:8080\"") != std::string::npos);
+    LOK_ASSERT(html.find("data-frame-ancestors = \"%20127.0.0.1:%2A%20localhost:%2A\"") != std::string::npos);
+    LOK_ASSERT(html.find("data-ui-defaults = \"eyJwcmVzZW50YXRpb24iOnsiU2hvd1NpZGViYXIiOiJmYWxzZSIsIlNob3dTdGF0dXNiYXIiOiJmYWxzZSJ9LCJzcHJlYWRzaGVldCI6eyJTaG93U2lkZWJhciI6ImZhbHNlIiwiU2hvd1N0YXR1c2JhciI6ImZhbHNlIn0sInRleHQiOnsiU2hvd1J1bGVyIjoiZmFsc2UiLCJTaG93U2lkZWJhciI6ImZhbHNlIiwiU2hvd1N0YXR1c2JhciI6ImZhbHNlIn0sInVpTW9kZSI6ImNsYXNzaWMifQ==\"") != std::string::npos);
+    LOK_ASSERT(html.find("OnJvb3Qgey0tY28tcHJpbWFyeS10ZXh0OiNmZmZmZmY7LS1jby1wcmltYXJ5LWVsZW1lbnQ6IzAwODJjOTstLWNvLXRleHQtYWNjZW50OiMwMDgyYzk7LS1jby1wcmltYXJ5LWxpZ2h0OiNlNmYzZmE7LS1jby1wcmltYXJ5LWVsZW1lbnQtbGlnaHQ6IzE3YWRmZjstLWNvLWNvbG9yLWVycm9yOiNlOTMyMmQ7LS1jby1jb2xvci13YXJuaW5nOiNlY2E3MDA7LS1jby1jb2xvci1zdWNjZXNzOiM0NmJhNjE7LS1jby1ib3JkZXItcmFkaXVzOjNweDstLWNvLWJvcmRlci1yYWRpdXMtbGFyZ2U6MTBweDstLWNvLWxvYWRpbmctbGlnaHQ6I2NjYzstLWNvLWxvYWRpbmctZGFyazojNDQ0Oy0tY28tYm94LXNoYWRvdzpyZ2JhKDc3LCA3NywgNzcsIDAuNSk7LS1jby1ib3JkZXI6I2VkZWRlZDstLWNvLWJvcmRlci1kYXJrOiNkYmRiZGI7LS1jby1ib3JkZXItcmFkaXVzLXBpbGw6MTAwcHg7fQ") != std::string::npos);
 }
 
 void HTTPServerTest::assertHTTPFilesExist(const Poco::URI& uri, Poco::RegularExpression& expr,
                                           const std::string& html, const std::string& mimetype,
-                                          const std::string& testname)
+                                          const std::string_view testname)
 {
     Poco::RegularExpression::MatchVec matches;
     bool found = false;
@@ -310,7 +299,8 @@ void HTTPServerTest::assertHTTPFilesExist(const Poco::URI& uri, Poco::RegularExp
 
             Poco::Net::HTTPResponse responseScript;
             session->receiveResponse(responseScript);
-            LOK_ASSERT_EQUAL(Poco::Net::HTTPResponse::HTTP_OK, responseScript.getStatus());
+            std::string msg("cool.html references: " + scriptString + " which should exist.");
+            LOK_ASSERT_EQUAL_MESSAGE(msg, Poco::Net::HTTPResponse::HTTP_OK, responseScript.getStatus());
 
             if (!mimetype.empty())
             LOK_ASSERT_EQUAL(mimetype, responseScript.getContentType());
@@ -322,7 +312,7 @@ void HTTPServerTest::assertHTTPFilesExist(const Poco::URI& uri, Poco::RegularExp
 
 void HTTPServerTest::testScriptsAndLinksGet()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     std::unique_ptr<Poco::Net::HTTPClientSession> session(helpers::createSession(_uri));
 
@@ -345,7 +335,7 @@ void HTTPServerTest::testScriptsAndLinksGet()
 
 void HTTPServerTest::testScriptsAndLinksPost()
 {
-    constexpr auto testname = __func__;
+    constexpr std::string_view testname = __func__;
 
     std::unique_ptr<Poco::Net::HTTPClientSession> session(helpers::createSession(_uri));
 
@@ -502,7 +492,8 @@ void HTTPServerTest::testConvertToWithForwardedIP_Deny()
     }
     catch(const Poco::Exception& exc)
     {
-        LOK_ASSERT_FAIL(exc.displayText() + ": " + (exc.nested() ? exc.nested()->displayText() : ""));
+        LOK_ASSERT_FAIL(exc.displayText()
+                        << ": " << (exc.nested() ? exc.nested()->displayText() : ""));
     }
 }
 
@@ -560,7 +551,8 @@ void HTTPServerTest::testConvertToWithForwardedIP_Allow()
     }
     catch(const Poco::Exception& exc)
     {
-        LOK_ASSERT_FAIL(exc.displayText() + ": " + (exc.nested() ? exc.nested()->displayText() : ""));
+        LOK_ASSERT_FAIL(exc.displayText()
+                        << ": " << (exc.nested() ? exc.nested()->displayText() : ""));
     }
 }
 
@@ -612,7 +604,8 @@ void HTTPServerTest::testConvertToWithForwardedIP_DenyMulti()
     }
     catch(const Poco::Exception& exc)
     {
-        LOK_ASSERT_FAIL(exc.displayText() + ": " + (exc.nested() ? exc.nested()->displayText() : ""));
+        LOK_ASSERT_FAIL(exc.displayText()
+                        << ": " << (exc.nested() ? exc.nested()->displayText() : ""));
     }
 }
 
@@ -628,6 +621,7 @@ void HTTPServerTest::testExtractDocStructure()
     Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_POST, "/cool/extract-document-structure");
     Poco::Net::HTMLForm form;
     form.setEncoding(Poco::Net::HTMLForm::ENCODING_MULTIPART);
+    form.set("filter", "contentcontrol");
     form.addPart("data", new Poco::Net::FilePartSource(srcPath));
     form.prepareSubmit(request);
     try
@@ -708,6 +702,7 @@ void HTTPServerTest::testTransformDocStructure()
         Poco::Net::HTMLForm form;
         form.setEncoding(Poco::Net::HTMLForm::ENCODING_MULTIPART);
         form.set("format", "docx");
+        form.set("filter", "contentcontrol");
         form.addPart("data", new Poco::Net::FilePartSource(srcPath2));
         form.prepareSubmit(request);
         try

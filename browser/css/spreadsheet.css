@@ -1,14 +1,23 @@
+.spreadsheet-cursor {
+	cursor: cell !important;
+}
+
+.bucket-cursor.spreadsheet-cursor {
+	cursor: url('images/cursors/fill.png') 4 18, auto !important;
+}
+
 .spreadsheet-tabs-container {
 	margin: 0;
 	padding: 0;
 	position: relative;
-	height: 39px;
+	height: 38px;
 	overflow: hidden;
 	width: 100%;
 	white-space: nowrap;
 	text-align: start;
 	background-color: transparent;
 	vertical-align: middle;
+	align-content: center;
 }
 
 .spreadsheet-tab-scroll {
@@ -26,7 +35,7 @@
 }
 
 .spreadsheet-tab {
-	margin: 5px 0px 0px !important;
+	margin: 0 !important;
 	padding: 6px 9px 4px !important;
 	text-decoration: none;
 
@@ -42,7 +51,7 @@
 }
 
 .spreadsheet-tab.spreadsheet-tab-selected {
-	background-color: var(--color-primary) !important;
+	background-color: rgba(var(--doc-type)) !important;
 	color: var(--color-primary-text) !important;
 	border: 1px solid var(--color-border-dark);
 }
@@ -54,8 +63,22 @@
 	background-repeat: no-repeat !important;
 }
 
+.spreadsheet-tab.spreadsheet-tab-sheetview > .lock, .spreadsheet-tab.spreadsheet-tab-sheetview:hover > .lock {
+	width: 16px;
+	height: 16px;
+	background-image: url('images/sheetview.svg') !important;
+	background-repeat: no-repeat !important;
+}
+
+.spreadsheet-tab.spreadsheet-tab-sheetview-unsynced > .lock, .spreadsheet-tab.spreadsheet-tab-sheetview-unsynced:hover > .lock {
+	width: 16px;
+	height: 16px;
+	background-image: url('images/sheetview_unsynced.svg') !important;
+	background-repeat: no-repeat !important;
+}
+
 #spreadsheet-tab-scroll button.spreadsheet-tab-selected:hover {
-	background-color: var(--color-primary-dark) !important;
+	background-color: rgba(var(--doc-type)) !important;
 	color: var(--color-primary-text) !important;
 }
 
@@ -76,7 +99,7 @@
 
 #spreadsheet-header-corner-container {
 	border: 1px solid var(--color-border-dark);
-	background-color: var(--colo-background-dark);
+	background-color: var(--color-background-dark);
 	cursor: pointer;
 
 	position: absolute;
@@ -101,7 +124,7 @@
 
 .spreadsheet-header-corner-styles {
 	border: 1px solid var(--color-border-dark);
-	background-color: var(--colo-background-dark);
+	background-color: var(--color-background-dark);
 	font: var(--default-font-size)/1.5 var(--cool-font);
 	color: var(--color-text-dark);
 	cursor: pointer;
@@ -109,7 +132,7 @@
 
 #spreadsheet-header-columns-container {
 	border: 1px solid var(--color-border-dark);
-	background-color: var(--colo-background-dark);
+	background-color: var(--color-background-dark);
 
 	position: absolute;
 	display: inline-block;
@@ -123,7 +146,7 @@
 
 #spreadsheet-header-rows-container {
 	border: 1px solid var(--color-border-dark);
-	background-color: var(--colo-background-dark);
+	background-color: var(--color-background-dark);
 
 	position: absolute;
 	left: 0;
@@ -147,22 +170,29 @@
 
 .spreadsheet-header-row,
 .spreadsheet-header-column {
-	border: 1px solid var(--color-border-dark);
-	background-color: var(--colo-background-dark);
+	border: 1px solid var(--color-border-calc-header);
+	background-color: var(--color-calc-header);
 	font: var(--default-font-size)/1.5 var(--cool-font);
 	color: var(--color-text-dark);
-	cursor: pointer;
+}
+
+.spreadsheet-header-row {
+	cursor: e-resize;
+}
+
+.spreadsheet-header-column {
+	cursor: s-resize;
 }
 
 .spreadsheet-header-row-hover,
 .spreadsheet-header-column-hover {
-	background-color: var(--background-color-darker);
+	background-color: var(--color-calc-header-hover);
 }
 
 .spreadsheet-header-row-selected,
 .spreadsheet-header-column-selected {
-	color: var(--color-primary-text);
-	background: linear-gradient(var(--color-primary), var(--color-primary), var(--color-primary));
+	color: var(--color-text-calc-header-selected);
+	background: linear-gradient(var(--color-calc-header-selected), var(--color-calc-header-selected), var(--color-calc-header-selected));
 }
 
 .spreadsheet-header-column-resize {
@@ -171,6 +201,32 @@
 
 .spreadsheet-header-row-resize {
 	cursor: row-resize;
+}
+
+.spreadsheet-header-sheetview-row,
+.spreadsheet-header-sheetview-column {
+	border: 1px solid var(--color-border-calc-header-sheetview);
+	background-color: var(--color-calc-header-sheetview);
+	font: var(--default-font-size)/1.5 var(--cool-font);
+	color: var(--color-text-calc-header);
+}
+
+.spreadsheet-header-sheetview-row-hover,
+.spreadsheet-header-sheetview-column-hover {
+	background-color: var(--color-calc-header-sheetview-hover);
+}
+.spreadsheet-header-sheetview-row-selected,
+.spreadsheet-header-sheetview-column-selected {
+	color: var(--color-text-calc-header-sheetview-selected);
+	background: linear-gradient(var(--color-calc-header-sheetview-selected), var(--color-calc-header-sheetview-selected), var(--color-calc-header-sheetview-selected));
+}
+
+.spreadsheet-header-sheetview-unsynced-row,
+.spreadsheet-header-sheetview-unsynced-column {
+	border: 1px solid var(--color-border-calc-header);
+	background-color: var(--color-calc-header-sheetview-unsynced);
+	font: var(--default-font-size)/1.5 var(--cool-font);
+	color: var(--color-text-light);
 }
 
 .spreadsheet-cell-autofill-marker {
@@ -199,37 +255,22 @@
 	box-shadow: 0 0 0 0 transparent, inset 0 0 1px 0 #00000015;
 }
 
-#toolbar-wrapper.spreadsheet.tablet {
+[data-docType='spreadsheet'] #toolbar-wrapper.tablet {
 	z-index: auto;
 }
 
-#toolbar-wrapper.spreadsheet.tablet.readonly {
+[data-docType='spreadsheet'] #toolbar-wrapper.tablet.readonly {
 	z-index: -1;
 }
 
-/* Sidebar: Style: Hide dialog button
-   - There is no paragraph style dialog in calc
-   - The style sidebar pane visible on core side is not implemented in online
-*/
-.spreadsheet ~ #main-document-content #sidebar-dock-wrapper .unoEditStyle.sidebar {
-	display: none;
-}
-
 /* formulabar */
-
-#addressInput {
-	display: flex;
-	flex-flow: column;
-}
-#addressInput-input {
-	color: var(--color-main-text);
-	background-color: var(--color-background-lighter);
-	border: 1px solid var(--color-border);
-	border-radius: var(--border-radius);
-	align-self: stretch;
-	/* Same line-height as formulabar input */
-	line-height: 1.2;
-	flex-basis: 30px;
+#formulabar-row {
+	display: grid;
+	grid-template-columns: 120px auto;
+	align-items: center;
+	padding: 4px;
+	background-color: var(--color-main-background);
+	border-top: 1px solid var(--color-border);
 }
 
 #formulabar-toolbox {
@@ -249,15 +290,13 @@
 	grid-template-rows: 72px;
 }
 
-#formulabar {
-	padding: 4px;
-	background-color: var(--color-main-background);
-	border-top: 1px solid var(--color-border);
+#formulabar, #addressInput {
+	display: none;
 }
 
 #formulabar > .root-container > .formulabar {
 	display: grid;
-	grid-template-columns: 110px 112px auto;
+	grid-template-columns: 112px auto;
 	grid-template-rows: 30px;
 }
 
@@ -275,7 +314,7 @@
 	width: 100%;
 	z-index: 1000;
 	display: grid;
-	grid-template-columns: 170px auto;
+	grid-template-columns: 180px auto;
 	text-align: center;
 	vertical-align: middle;
 	padding: 0;
@@ -287,7 +326,12 @@
 	display: grid;
 	grid-auto-flow: column;
 	align-content: center;
-	height: 39px;
+	height: 38px;
+}
+
+#sheets-buttons-toolbox .unotoolbutton {
+	width: var(--btn-size);
+	height: var(--btn-size);
 }
 
 .tab-drop-area {

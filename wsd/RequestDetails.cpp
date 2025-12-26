@@ -12,16 +12,20 @@
 #include <config.h>
 
 #include "RequestDetails.hpp"
-#include "Util.hpp"
-#include "common/Log.hpp"
+
+#include <common/HexUtil.hpp>
+#include <common/Log.hpp>
+#include <common/Util.hpp>
 #if !MOBILEAPP
-#include <HostUtil.hpp>
+#include <wsd/HostUtil.hpp>
 #endif // !MOBILEAPP
+#include <wsd/Exceptions.hpp>
 
 #include <Poco/URI.h>
+
 #include <sstream>
 #include <stdexcept>
-#include "Exceptions.hpp"
+#include <utility>
 
 namespace
 {
@@ -41,8 +45,8 @@ std::map<std::string, std::string> getParams(const std::string& uri)
 #endif // ENABLE_DEBUG
         }
 
-        std::string key = Util::decodeURIComponent(param.first);
-        std::string value = Util::decodeURIComponent(param.second);
+        std::string key = Uri::decode(param.first);
+        std::string value = Uri::decode(param.second);
         LOG_TRC("Decoding param [" << param.first << "] = [" << param.second << "] -> [" << key
                                    << "] = [" << value << ']');
 
@@ -63,43 +67,66 @@ RequestDetails::RequestDetails(Poco::Net::HTTPRequest &request, const std::strin
     _uriString = request.getURI().substr(serviceRoot.length());
     dehexify();
     request.setURI(_uriString);
-    const std::string &method = request.getMethod();
-    _isGet = method == "GET";
-    _isHead = method == "HEAD";
+    _method = stringToMethod(request.getMethod());
     auto it = request.find("ProxyPrefix");
     _isProxy = it != request.end();
     if (_isProxy)
         _proxyPrefix = it->second;
     it = request.find("Upgrade");
     _isWebSocket = it != request.end() && Util::iequal(it->second, "websocket");
+    _closeConnection = !request.getKeepAlive(); // HTTP/1.1: closeConnection true w/ "Connection: close" only!
     // request.getHost fires an exception on mobile.
-    if (!Util::isMobileApp())
+    if constexpr (!Util::isMobileApp())
         _hostUntrusted = request.getHost();
 
     processURI();
 }
 
-RequestDetails::RequestDetails(const std::string &mobileURI)
-    : _isGet(true)
-    , _isHead(false)
+RequestDetails::RequestDetails(http::RequestParser& request, const std::string& serviceRoot)
+{
+    // Check and remove the ServiceRoot from the request.getURI()
+    if (!request.getUrl().starts_with(serviceRoot))
+        throw BadRequestException("The request does not start with prefix: " + serviceRoot);
+
+    // re-writes ServiceRoot out of request
+    _uriString = request.getUrl().substr(serviceRoot.length());
+    dehexify();
+    request.setUrl(_uriString);
+    _method = stringToMethod(request.getVerb());
+    _isProxy = request.has("ProxyPrefix");
+    if (_isProxy)
+        _proxyPrefix = request.get("ProxyPrefix");
+    _isWebSocket = Util::iequal(request.get("Upgrade"), "websocket");
+    _closeConnection =
+        !request.isKeepAlive(); // HTTP/1.1: closeConnection true w/ "Connection: close" only!
+    // request.getHost fires an exception on mobile.
+    if constexpr (!Util::isMobileApp())
+        _hostUntrusted = request.get("Host");
+
+    processURI();
+}
+
+RequestDetails::RequestDetails(std::string mobileURI)
+    : _uriString(std::move(mobileURI))
+    , _method(Method::GET)
     , _isProxy(false)
     , _isWebSocket(false)
+    , _closeConnection(false)
 {
-    _uriString = mobileURI;
     dehexify();
     processURI();
 }
 
 RequestDetails::RequestDetails(const std::string& wopiSrc, const std::vector<std::string>& options,
                                const std::string& compat)
-    : _isGet(true)
-    , _isHead(false)
+    : _method(Method::GET)
     , _isProxy(false)
     , _isWebSocket(false)
+    , _closeConnection(false)
 {
     // /cool/<encoded-document-URI+options>/ws?WOPISrc=<encoded-document-URI>&compat=/ws[/<sessionId>/<command>/<serial>]
 
-    const std::string decodedWopiSrc = Util::decodeURIComponent(wopiSrc);
+    const std::string decodedWopiSrc = Uri::decode(wopiSrc);
     std::string wopiSrcWithOptions = decodedWopiSrc;
     if (!options.empty())
     {
@@ -117,19 +144,32 @@ RequestDetails::RequestDetails(const std::string& wopiSrc, const std::vector<std
     // create a valid URI and let it parse and set the various
     // members, as necessary.
     std::ostringstream oss;
-    oss << "/cool/" << Util::encodeURIComponent(wopiSrcWithOptions);
-    oss << "/ws?WOPISrc=" << Util::encodeURIComponent(decodedWopiSrc);
+    oss << "/cool/" << Uri::encode(wopiSrcWithOptions);
+    oss << "/ws?WOPISrc=" << Uri::encode(decodedWopiSrc);
     oss << "&compat=/ws" << compat;
     _uriString = oss.str();
 
     processURI();
 }
 
+RequestDetails::Method RequestDetails::stringToMethod(const std::string_view method)
+{
+    if (method == "GET") {
+        return Method::GET;
+    } else if (method == "HEAD") {
+        return Method::HEAD;
+    } else if (method == "POST") {
+        return Method::POST;
+    } else {
+        return Method::unknown;
+    }
+}
+
 void RequestDetails::dehexify()
 {
     // For now, we only hexify cool/ URLs.
-    constexpr auto Prefix = "cool/0x";
-    constexpr auto PrefixLen = sizeof(Prefix) - 1;
+    constexpr std::string_view Prefix = "cool/0x";
+    constexpr auto PrefixLen = Prefix.size();
 
     const auto hexPos = _uriString.find(Prefix);
     if (hexPos != std::string::npos)
@@ -144,12 +184,12 @@ void RequestDetails::dehexify()
         const std::string encoded =
             _uriString.substr(start, (end == std::string::npos) ? end : end - start);
         std::string decoded;
-        Util::dataFromHexString(encoded, decoded);
+        HexUtil::dataFromHexString(encoded, decoded);
         res += decoded;
 
-        res += _uriString.substr(end); // Concatinate the remainder.
+        res += _uriString.substr(end); // Concatenate the remainder.
 
-        _uriString = res; // Replace the original uri with the decoded one.
+        _uriString = std::move(res); // Replace the original uri with the decoded one.
     }
 }
 
@@ -194,35 +234,12 @@ void RequestDetails::processURI()
     // DocumentURI is the second segment in cool URIs.
     if (_pathSegs.equals(0, "cool") || _pathSegs.equals(0, "wasm"))
     {
-        //FIXME: For historic reasons the DocumentURI includes the WOPISrc.
-        // This is problematic because decoding a URI that embeds not one, but
-        // *two* encoded URIs within it is bound to produce an invalid URI.
-        // Potentially three '?' might exist in the result (after decoding).
-        std::size_t end = uriRes.rfind("/ws?");
-        if (end != std::string::npos)
-        {
-            // Until the end of the WOPISrc.
-            // e.g. <encoded-document-URI+options>/ws?WOPISrc=<encoded-document-URI>&compat=
-            end = uriRes.find_first_of("/?", end + 4, 2); // Start searching after '/ws?'.
-        }
-        else
-        {
-            end = (posLastWS != std::string::npos ? posLastWS : uriRes.find('/'));
-            if (end == std::string::npos)
-                end = uriRes.find('?'); // e.g. /cool/clipboard?WOPISrc=file%3A%2F%2F%2Ftmp%2Fcopypasteef324307_empty.ods...
-        }
-
-        const std::string docUri = uriRes.substr(0, end);
-
-        _fields[Field::LegacyDocumentURI] = Util::decodeURIComponent(docUri);
-
         // Find the DocumentURI proper.
-        end = uriRes.find_first_of("/?", 0, 2);
-        _fields[Field::DocumentURI] = Util::decodeURIComponent(uriRes.substr(0, end));
+        std::size_t end = uriRes.find_first_of("/?", 0, 2);
+        _fields[Field::DocumentURI] = Uri::decode(uriRes.substr(0, end));
     }
     else // Otherwise, it's the full URI.
     {
-        _fields[Field::LegacyDocumentURI] = _uriString;
         _fields[Field::DocumentURI] = _uriString;
     }
 
@@ -231,15 +248,15 @@ void RequestDetails::processURI()
     _fields[Field::WOPISrc] = getParam("WOPISrc");
 
     // &compat=
-    const std::string compat = getParam("compat");
+    std::string compat = getParam("compat");
     if (!compat.empty())
-        _fields[Field::Compat] = compat;
+        _fields[Field::Compat] = std::move(compat);
 
     // /ws[/<sessionId>/<command>/<serial>]
     if (posLastWS != std::string::npos)
     {
         std::string lastWS = uriRes.substr(posLastWS);
-        const auto proxyTokens = StringVector::tokenize(lastWS, '/');
+        const auto proxyTokens = StringVector::tokenize(std::move(lastWS), '/');
         if (proxyTokens.size() > 1)
         {
             _fields[Field::SessionId] = proxyTokens[1];
@@ -258,7 +275,7 @@ void RequestDetails::processURI()
 Poco::URI RequestDetails::sanitizeURI(const std::string& uri)
 {
     // The URI of the document should be url-encoded.
-    Poco::URI uriPublic((Util::isMobileApp() ? uri : Util::decodeURIComponent(uri)));
+    Poco::URI uriPublic((Util::isMobileApp() ? uri : Uri::decode(uri)));
 
     if (uriPublic.isRelative() || uriPublic.getScheme() == "file")
     {
@@ -279,7 +296,7 @@ Poco::URI RequestDetails::sanitizeURI(const std::string& uri)
         // look for encoded query params (access token as of now)
         if (param.first == "access_token")
         {
-            param.second = Util::decodeURIComponent(param.second);
+            param.second = Uri::decode(param.second);
         }
     }
 
@@ -293,11 +310,7 @@ std::string RequestDetails::getLineModeKey(const std::string& /*access_token*/) 
 {
     // This key is based on the WOPISrc and the access_token only.
     // However, we strip the host:port and scheme from the WOPISrc.
-    const std::string wopiSrc = Poco::URI(getField(RequestDetails::Field::WOPISrc)).getPath();
-
-    //FIXME: For now, just use the path.
-    // return wopiSrc + "?access_token=" + access_token;
-    return wopiSrc;
+    return Poco::URI(getField(RequestDetails::Field::WOPISrc)).getPath();
 }
 
 #if !defined(BUILDING_TESTS)
@@ -306,11 +319,15 @@ std::string RequestDetails::getDocKey(const Poco::URI& uri)
     // resolve aliases
 #if !MOBILEAPP
     const std::string newUri = HostUtil::getNewUri(uri);
+    if (newUri != uri.toString())
+    {
+        LOG_TRC("Canonicalized URI [" << uri.toString() << "] to [" << newUri << ']');
+    }
 #else
     const std::string& newUri = uri.getPath();
 #endif
 
-    std::string docKey = Util::encodeURIComponent(newUri);
+    std::string docKey = Uri::encode(newUri);
     LOG_INF("DocKey from URI [" << uri.toString() << "] => [" << docKey << ']');
     return docKey;
 }

@@ -11,11 +11,16 @@
 
 #include <config.h>
 
+#include <iterator>
+#include <optional>
+
 #include "WopiProxy.hpp"
 
+#include <common/Anonymizer.hpp>
 #include "FileUtil.hpp"
 #include "HttpHelper.hpp"
 #include "HttpRequest.hpp"
+#include "Protocol.hpp"
 #include <COOLWSD.hpp>
 #include <Exceptions.hpp>
 #include <Log.hpp>
@@ -24,7 +29,8 @@
 #include <wopi/StorageConnectionManager.hpp>
 #include <wopi/WopiStorage.hpp>
 
-void WopiProxy::handleRequest([[maybe_unused]] const std::shared_ptr<TerminatingPoll>& poll,
+void WopiProxy::handleRequest(std::istream & message,
+                              [[maybe_unused]] const std::shared_ptr<TerminatingPoll>& poll,
                               SocketDisposition& disposition)
 {
     std::string url = _requestDetails.getDocumentURI();
@@ -34,10 +40,19 @@ void WopiProxy::handleRequest([[maybe_unused]] const std::shared_ptr<Terminating
     }
 
     LOG_INF("URL [" << url << "] for WS Request.");
+
+    std::shared_ptr<StreamSocket> socket = _socket.lock();
+    if (!socket)
+    {
+        LOG_ERR("Invalid socket while handling wopi proxy request for [" << COOLWSD::anonymizeUrl(url) << ']');
+        return;
+    }
+
     const auto uriPublic = RequestDetails::sanitizeURI(url);
-    const auto docKey = RequestDetails::getDocKey(uriPublic);
-    const std::string fileId = Util::getFilenameFromURL(docKey);
-    Util::mapAnonymized(fileId, fileId); // Identity mapping, since fileId is already obfuscated
+    std::string docKey = RequestDetails::getDocKey(uriPublic);
+    const std::string fileId = Uri::getFilenameFromURL(Uri::decode(docKey));
+    Anonymizer::mapAnonymized(fileId,
+                              fileId); // Identity mapping, since fileId is already obfuscated
 
     LOG_INF("Starting GET request handler for session [" << _id << "] on url ["
                                                          << COOLWSD::anonymizeUrl(url) << "].");
@@ -57,62 +72,67 @@ void WopiProxy::handleRequest([[maybe_unused]] const std::shared_ptr<Terminating
         case StorageBase::StorageType::Unsupported:
             LOG_ERR("Unsupported URI [" << COOLWSD::anonymizeUrl(uriPublic.toString())
                                         << "] or no storage configured");
-            throw BadRequestException("No Storage configured or invalid URI " +
+            throw BadRequestException("No Storage configured or invalid URI [" +
                                       COOLWSD::anonymizeUrl(uriPublic.toString()) + ']');
-
             break;
+
         case StorageBase::StorageType::Unauthorized:
             LOG_ERR("No authorized hosts found matching the target host [" << uriPublic.getHost()
                                                                            << "] in config");
-            HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, _socket);
+            HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, socket);
             break;
 
+        case StorageBase::StorageType::Conversion:
+            // We don't expect conversion requests.
+            LOG_ERR("Unsupported URI [" << COOLWSD::anonymizeUrl(uriPublic.toString())
+                                        << "] for conversion");
+            throw BadRequestException("Invalid URI for conversion [" +
+                                      COOLWSD::anonymizeUrl(uriPublic.toString()) + ']');
+            break;
+
+#if ENABLE_LOCAL_FILESYSTEM
         case StorageBase::StorageType::FileSystem:
+        {
             LOG_INF("URI [" << COOLWSD::anonymizeUrl(uriPublic.toString()) << "] on docKey ["
                             << docKey << "] is for a FileSystem document");
 
-            // Remove from the current poll and transfer.
-            disposition.setMove(
-                [this, docKey, url, uriPublic](const std::shared_ptr<Socket>& moveSocket)
-                {
-                    LOG_TRC_S('#' << moveSocket->getFD()
-                                  << ": Dissociating client socket from "
-                                     "ClientRequestDispatcher and creating DocBroker for ["
-                                  << docKey << ']');
-
-                    // Send the file contents.
-                    std::unique_ptr<std::vector<char>> data =
-                        FileUtil::readFile(uriPublic.getPath());
-                    if (data)
-                    {
-                        http::Response response(http::StatusCode::OK);
-                        response.setBody(std::string(data->data(), data->size()),
-                                         "application/octet-stream");
-                        _socket->sendAndShutdown(response);
-                    }
-                    else
-                    {
-                        HttpHelper::sendErrorAndShutdown(http::StatusCode::NotFound, _socket);
-                    }
-                });
+            // Send the file contents.
+            std::unique_ptr<std::vector<char>> data = FileUtil::readFile(uriPublic.getPath());
+            if (data)
+            {
+                http::Response response(http::StatusCode::OK);
+                response.setBody(std::string(data->data(), data->size()),
+                                 "application/octet-stream");
+                socket->sendAndShutdown(response);
+            }
+            else
+            {
+                HttpHelper::sendErrorAndShutdown(http::StatusCode::NotFound, socket);
+            }
             break;
+        }
+#endif // ENABLE_LOCAL_FILESYSTEM
+
 #if !MOBILEAPP
         case StorageBase::StorageType::Wopi:
             LOG_INF("URI [" << COOLWSD::anonymizeUrl(uriPublic.toString()) << "] on docKey ["
                             << docKey << "] is for a WOPI document");
+            std::optional<std::string> postBody;
+            if (_requestDetails.isPost()) {
+                postBody = std::string(std::istreambuf_iterator<char>(message), {});
+            }
             // Remove from the current poll and transfer.
-            disposition.setMove(
-                [this, &poll, docKey, url=std::move(url), uriPublic](const std::shared_ptr<Socket>& moveSocket)
+            disposition.setTransfer(*poll,
+                [this, &poll, docKey = std::move(docKey), url = std::move(url),
+                 uriPublic, postBody](const std::shared_ptr<Socket>& moveSocket)
                 {
                     LOG_TRC_S('#' << moveSocket->getFD()
                                   << ": Dissociating client socket from "
                                      "ClientRequestDispatcher and invoking CheckFileInfo for ["
                                   << docKey << ']');
 
-                    poll->insertNewSocket(moveSocket);
-
                     // CheckFileInfo and only when it's good create DocBroker.
-                    checkFileInfo(poll, uriPublic, RedirectionLimit);
+                    checkFileInfo(poll, uriPublic, postBody, HTTP_REDIRECTION_LIMIT);
                 });
             break;
 #endif //!MOBILEAPP
@@ -121,11 +141,19 @@ void WopiProxy::handleRequest([[maybe_unused]] const std::shared_ptr<Terminating
 
 #if !MOBILEAPP
 void WopiProxy::checkFileInfo(const std::shared_ptr<TerminatingPoll>& poll, const Poco::URI& uri,
-                              int redirectLimit)
+                              std::optional<std::string> const & postBody, int redirectLimit)
 {
-    auto cfiContinuation = [this, poll, uri]([[maybe_unused]] CheckFileInfo& checkFileInfo)
+    auto cfiContinuation = [this, poll, uri, postBody](
+        [[maybe_unused]] CheckFileInfo& checkFileInfo)
     {
         const std::string uriAnonym = COOLWSD::anonymizeUrl(uri.toString());
+
+        std::shared_ptr<StreamSocket> socket = _socket.lock();
+        if (!socket)
+        {
+            LOG_ERR("Invalid socket while handling wopi CheckFileInfo for [" << uriAnonym << ']');
+            return;
+        }
 
         assert(&checkFileInfo == _checkFileInfo.get() && "Unknown CheckFileInfo instance");
         if (_checkFileInfo && _checkFileInfo->state() == CheckFileInfo::State::Pass &&
@@ -140,13 +168,12 @@ void WopiProxy::checkFileInfo(const std::shared_ptr<TerminatingPoll>& poll, cons
             JsonUtil::findJSONValue(object, "BaseFileName", filename);
             JsonUtil::findJSONValue(object, "LastModifiedTime", lastModifiedTime);
 
-            LocalStorage::FileInfo fileInfo =
-                LocalStorage::FileInfo({ size, std::move(filename), std::move(ownerId),
-                                         std::move(lastModifiedTime) });
+            const StorageBase::FileInfo fileInfo(size, std::move(filename), std::move(ownerId),
+                                                 std::move(lastModifiedTime));
 
             // if (COOLWSD::AnonymizeUserData)
-            //     Util::mapAnonymized(Util::getFilenameFromURL(filename),
-            //                         Util::getFilenameFromURL(getUri().toString()));
+            //     Anonymizer::mapAnonymized(Uri::getFilenameFromURL(filename),
+            //                         Uri::getFilenameFromURL(getUri().toString()));
 
             auto wopiInfo = std::make_unique<WopiStorage::WOPIFileInfo>(fileInfo, object, uri);
             // if (wopiInfo->getSupportsLocks())
@@ -165,11 +192,12 @@ void WopiProxy::checkFileInfo(const std::shared_ptr<TerminatingPoll>& poll, cons
                 try
                 {
                     LOG_INF("WOPI::GetFile using FileUrl: " << fileUrlAnonym);
-                    return download(poll, url, Poco::URI(fileUrl), RedirectionLimit);
+                    return transfer(
+                        poll, url, postBody, Poco::URI(fileUrl), HTTP_REDIRECTION_LIMIT);
                 }
                 catch (const std::exception& ex)
                 {
-                    LOG_ERR("Could not download document from WOPI FileUrl [" + fileUrlAnonym +
+                    LOG_ERR("Could not download document from WOPI FileUrl [" << fileUrlAnonym <<
                                 "]. Will use default URL. Error: "
                             << ex.what());
                     // Fall-through.
@@ -186,35 +214,40 @@ void WopiProxy::checkFileInfo(const std::shared_ptr<TerminatingPoll>& poll, cons
             try
             {
                 LOG_INF("WOPI::GetFile using default URI: " << uriAnonym);
-                return download(poll, url, uriObject, RedirectionLimit);
+                return transfer(poll, url, postBody, uriObject, HTTP_REDIRECTION_LIMIT);
             }
             catch (const std::exception& ex)
             {
                 LOG_ERR(
-                    "Cannot download document from WOPI storage uri [" + uriAnonym + "]. Error: "
+                    "Cannot download document from WOPI storage uri [" << uriAnonym << "]. Error: "
                     << ex.what());
                 // Fall-through.
             }
         }
 
         LOG_ERR("Invalid URI or access denied to [" << uriAnonym << ']');
-        HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, _socket);
+        HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, socket);
     };
 
     // CheckFileInfo asynchronously.
-    _checkFileInfo = std::make_unique<CheckFileInfo>(poll, uri, std::move(cfiContinuation));
+    _checkFileInfo = std::make_shared<CheckFileInfo>(poll, uri, std::move(cfiContinuation));
     _checkFileInfo->checkFileInfo(redirectLimit);
 }
 
-void WopiProxy::download(const std::shared_ptr<TerminatingPoll>& poll, const std::string& url,
+void WopiProxy::transfer(const std::shared_ptr<TerminatingPoll>& poll, const std::string& url,
+                         std::optional<std::string> const & postBody,
                          const Poco::URI& uriPublic, int redirectLimit)
 {
-    const std::string uriAnonym = COOLWSD::anonymizeUrl(uriPublic.toString());
+    std::string uriAnonym = COOLWSD::anonymizeUrl(uriPublic.toString());
 
     LOG_DBG("Getting info for wopi uri [" << uriAnonym << ']');
     _httpSession = StorageConnectionManager::getHttpSession(uriPublic);
     Authorization auth = Authorization::create(uriPublic);
     http::Request httpRequest = StorageConnectionManager::createHttpRequest(uriPublic, auth);
+    if (postBody) {
+        httpRequest.setVerb(http::Request::VERB_POST);
+        httpRequest.setBody(*postBody);
+    }
 
     const auto startTime = std::chrono::steady_clock::now();
 
@@ -222,12 +255,19 @@ void WopiProxy::download(const std::shared_ptr<TerminatingPoll>& poll, const std
                                                      << httpRequest.header());
 
     http::Session::FinishedCallback finishedCallback =
-        [this, &poll, startTime, url, uriPublic, uriAnonym,
+        [this, &poll, startTime, url, postBody, uriAnonym=std::move(uriAnonym),
          redirectLimit](const std::shared_ptr<http::Session>& session)
     {
         if (SigUtil::getShutdownRequestFlag())
         {
             LOG_DBG("Shutdown flagged, giving up on in-flight requests");
+            return;
+        }
+
+        std::shared_ptr<StreamSocket> socket = _socket.lock();
+        if (!socket)
+        {
+            LOG_ERR("Invalid socket while downloading [" << uriAnonym << ']');
             return;
         }
 
@@ -246,7 +286,7 @@ void WopiProxy::download(const std::shared_ptr<TerminatingPoll>& poll, const std
                 LOG_TRC("WOPI::GetFile redirect to URI [" << COOLWSD::anonymizeUrl(location)
                                                           << "]");
 
-                download(poll, location, Poco::URI(location), redirectLimit - 1);
+                transfer(poll, location, postBody, Poco::URI(location), redirectLimit - 1);
                 return;
             }
             else
@@ -262,21 +302,27 @@ void WopiProxy::download(const std::shared_ptr<TerminatingPoll>& poll, const std
         (void)callDurationMs;
 
         // Note: we don't log the response if obfuscation is enabled, except for failures.
-        std::string wopiResponse = httpResponse->getBody();
         const bool failed = (httpResponse->statusLine().statusCode() != http::StatusCode::OK);
-
-        Log::Level level = failed ? Log::Level::ERR : Log::Level::TRC;
-        if (Log::isEnabled(level))
+        if (Log::isEnabled(failed ? Log::Level::ERR : Log::Level::TRC))
         {
-            std::ostringstream oss;
-            oss << "WOPI::GetFile " << (failed ? "failed" : "returned") << " for URI ["
-                   << uriAnonym << "]: " << httpResponse->statusLine().statusCode() << ' '
-                   << httpResponse->statusLine().reasonPhrase()
-                   << ". Headers: " << httpResponse->header()
-                   << (failed ? "\tBody: [" + wopiResponse + ']' : std::string());
+            const std::string& wopiResponse = httpResponse->getBody();
 
-            LOG_END_FLUSH(oss);
-            Log::log(level, oss.str());
+            std::ostringstream oss;
+            oss << "WOPI::GetFile " << (failed ? "failed" : "returned") << " for URI [" << uriAnonym
+                << "]: " << httpResponse->statusLine().statusCode() << ' '
+                << httpResponse->statusLine().reasonPhrase()
+                << ". Headers: " << httpResponse->header()
+                << (failed ? "\tBody: [" + COOLProtocol::getAbbreviatedMessage(wopiResponse) + ']'
+                           : std::string());
+
+            if (failed)
+            {
+                LOG_ERR(oss.str());
+            }
+            else
+            {
+                LOG_TRC(oss.str());
+            }
         }
 
         if (failed)
@@ -284,24 +330,24 @@ void WopiProxy::download(const std::shared_ptr<TerminatingPoll>& poll, const std
             if (httpResponse->statusLine().statusCode() == http::StatusCode::Forbidden)
             {
                 LOG_ERR("Access denied to [" << uriAnonym << ']');
-                HttpHelper::sendErrorAndShutdown(http::StatusCode::Forbidden, _socket);
+                HttpHelper::sendErrorAndShutdown(http::StatusCode::Forbidden, socket);
                 return;
             }
 
             LOG_ERR("Invalid URI or access denied to [" << uriAnonym << ']');
-            HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, _socket);
+            HttpHelper::sendErrorAndShutdown(http::StatusCode::Unauthorized, socket);
             return;
         }
 
         http::Response response(http::StatusCode::OK);
         response.setBody(httpResponse->getBody(), "application/octet-stream");
-        _socket->sendAndShutdown(response);
+        socket->sendAndShutdown(response);
     };
 
     _httpSession->setFinishedHandler(std::move(finishedCallback));
 
     // Run the GET request on the WebServer Poll.
-    _httpSession->asyncRequest(httpRequest, *poll);
+    _httpSession->asyncRequest(httpRequest, poll, false);
 }
 #endif //!MOBILEAPP
 

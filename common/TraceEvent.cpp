@@ -5,16 +5,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-// To build a freestanding test executable for just Tracevent:
+// To build a freestanding test executable for just TraceEvent:
 // clang++ -Wall -Wextra -DTEST_TRACEEVENT_EXE TraceEvent.cpp -o TraceEvent -pthread
 
-#include "config.h"
+#include <config.h>
+
+#include "TraceEvent.hpp"
 
 #include <cassert>
 #include <mutex>
 #include <sstream>
 
-#include "TraceEvent.hpp"
 
 std::atomic<bool> TraceEvent::recordingOn(false);
 
@@ -38,7 +39,7 @@ void TraceEvent::emitInstantEvent(const std::string& name, const std::string& ar
                               .count())
                      + ","
                        "\"pid\":"
-                     + std::to_string(getpid())
+                     + std::to_string(Util::getProcessId())
                      + ","
                        "\"tid\":"
                      + std::to_string(getThreadId())

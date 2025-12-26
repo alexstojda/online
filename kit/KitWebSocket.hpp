@@ -21,11 +21,10 @@ class KitSocketPoll;
 
 class KitWebSocketHandler final : public WebSocketHandler
 {
-    std::shared_ptr<KitQueue> _queue;
     std::string _socketName;
     std::shared_ptr<lok::Office> _loKit;
     std::string _jailId;
-    std::string _docKey; //< When we get it while creating a new view.
+    std::string _docKey; ///< When we get it while creating a new view.
     std::shared_ptr<Document> _document;
     std::shared_ptr<KitSocketPoll> _ksPoll;
     const unsigned _mobileAppDocId;
@@ -100,11 +99,12 @@ public:
         , _document(std::move(document))
         , _session(session)
     {
+        _document->bgSaveStarted();
     }
 
     ~BgSaveParentWebSocketHandler()
     {
-        // Just to make it easier to set a breakpoint
+        _document->bgSaveEnded();
     }
 
 protected:
@@ -117,3 +117,5 @@ protected:
     // let WSD know something went wrong during the save
     void reportFailedSave(const std::string &reason);
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

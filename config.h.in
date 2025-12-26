@@ -1,3 +1,5 @@
+#pragma once
+
 /* Variables that usually don't change once configured */
 
 /* The user-visible name of the app you build. */
@@ -15,11 +17,29 @@
 /* Options passed to configure script */
 #undef COOLWSD_BUILDCONFIG
 
+/* Directory that contains configuration of coolwsd */
+#undef COOLWSD_CONFIGDIR
+
+/* Default coolwsd loglevel */
+#undef COOLWSD_LOGLEVEL
+
+/* Default location of coolwsd log file */
+#undef COOLWSD_LOGFILE
+
+/* Default location of coolwsd UI command log file */
+#undef COOLWSD_LOGFILE_UICMD
+
 /* Destination for Trace Event output */
 #undef COOLWSD_TRACEEVENTFILE
 
 /* The user-name which is allowed to run coolwsd and its tools */
 #undef COOL_USER_ID
+
+/* Default number of pre-spawn children */
+#undef NUM_PRESPAWN_CHILDREN
+
+/* Absolute path to the top-level source directory */
+#undef DEBUG_ABSSRCDIR
 
 /* Whether to disable SECCOMP */
 #undef DISABLE_SECCOMP
@@ -52,11 +72,14 @@
 /* User feedback URL. */
 #undef FEEDBACK_URL
 
-/* Whether OpenSSL has PKCS5_PBKDF2_HMAC() */
-#undef HAVE_PKCS5_PBKDF2_HMAC
+/* Define to 1 if libcap (cap_get_proc) is available, otherwise 0 */
+#define HAVE_LIBCAP 0
 
-/* Define to 1 if you have the `ppoll' function. */
+/* Define to 1 if the `ppoll' function is available, otherwise 0. */
 #define HAVE_PPOLL 0
+
+/* Define to 1 if the `memrchr' function is available, otherwise 0. */
+#define HAVE_MEMRCHR 0
 
 /* Default value of help root URL */
 #undef HELP_URL
@@ -109,3 +132,20 @@
 /* Define to 1 if this is the WASM app build. */
 #undef WASMAPP
 
+/* Makes config variables conditionally static, only in non-debug builds, to allow for overriding them in unit-tests. */
+#undef CONFIG_STATIC_TYPE
+
+/* Controls whether or not we allow loading documents from the local filesystem. */
+#ifndef ENABLE_LOCAL_FILESYSTEM
+#if MOBILEAPP || ENABLE_DEBUG
+#define ENABLE_LOCAL_FILESYSTEM 1
+#else
+#define ENABLE_LOCAL_FILESYSTEM 0
+#endif
+#endif
+
+#if defined(__COVERITY__)
+#define CONFIG_STATIC static
+#else
+#define CONFIG_STATIC CONFIG_STATIC_TYPE
+#endif

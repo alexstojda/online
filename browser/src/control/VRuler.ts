@@ -1,3 +1,4 @@
+// @ts-strict-ignore
 /* -*- js-indent-level: 8; fill-column: 100 -*- */
 /*
  * Copyright the Collabora Online contributors.
@@ -10,39 +11,16 @@
  */
 /*
  * Ruler Handler
+
+ * HRuler.ts
+/**
+ * VRuler.ts
+ *
+ * Manages the vertical ruler for displaying measurements and positioning.
+ * Handles user interactions like scrolling and renders grid lines/ticks.
  */
 
-/* global L _ */
-
-interface Params {
-	[key: string]: {
-		type: string;
-		value: any;
-	};
-}
-
-interface Options {
-	interactive: boolean;
-	marginSet: boolean;
-	displayNumber: boolean;
-	tileMargin: number;
-	margin1: number | null;
-	margin2: number | null;
-	leftOffset: number | null;
-	pageOffset: number | null;
-	pageWidth: number | null;
-	pageTopMargin: number | null;
-	pageBottomMargin: number | null;
-	tabs: any[];
-	unit: string | null;
-	DraggableConvertRatio: number | null;
-	timer: ReturnType<typeof setTimeout>;
-	showruler: boolean;
-	position: string;
-	disableMarker: boolean;
-}
-
-class VRuler {
+class VRuler extends Ruler {
 	_pVerticalStartMarker: HTMLDivElement;
 	_pVerticalEndMarker: HTMLDivElement;
 	_rFace: HTMLDivElement;
@@ -60,53 +38,38 @@ class VRuler {
 	_indentationElementId: string;
 	_initialposition: number;
 	_lastposition: number;
-	_map: ReturnType<typeof L.map>;
 
-	options: Options = {
-		interactive: true,
-		marginSet: false,
-		displayNumber: true,
-		tileMargin: 20, // No idea what this means and where it comes from
-		margin1: null,
-		margin2: null,
-		leftOffset: null,
-		pageOffset: null,
-		pageWidth: null,
-		pageTopMargin: null,
-		pageBottomMargin: null,
-		tabs: [],
-		unit: null,
-		DraggableConvertRatio: null,
-		timer: null,
-		showruler: true,
-		position: 'topleft',
-		disableMarker: false,
-	};
+	_map: ReturnType<typeof window.L.map>;
+	options: Options;
 
-	constructor(map: ReturnType<typeof L.map>, options: Options) {
-		this._map = map;
+	constructor(map: ReturnType<typeof window.L.map>, options: Partial<Options>) {
+		super(options);
 		Object.assign(this.options, options);
-		this.onAdd();
+		this._map = map;
+		this.onAdd(); // VRuler created
+
+		app.UI.verticalRuler = this;
 	}
 
 	onAdd() {
 		this._map.on('vrulerupdate', this._updateOptions, this);
 		this._map.on('scrolllimits', this._updatePaintTimer, this);
 		this._map.on('moveend', this._fixOffset, this);
-		this._map.on('updatepermission', this._changeInteractions, this);
+		app.events.on('updatepermission', this._changeInteractions.bind(this));
 		this._map.on(
 			'resettopbottompagespacing',
 			this._resetTopBottomPageSpacing,
 			this,
 		);
 		this._map.on('commandstatechanged', this.onCommandStateChanged, this);
-		L.DomUtil.addClass(this._map.getContainer(), 'hasruler');
+		this._map.on('rulerchanged', this._onRulerChanged, this);
+		window.L.DomUtil.addClass(this._map.getContainer(), 'hasruler');
 
 		const container: HTMLDivElement = this._initLayout();
 		const corner: HTMLElement =
 			this._map._controlCorners[this.options.position];
 
-		L.DomUtil.addClass(container, 'leaflet-control');
+		window.L.DomUtil.addClass(container, 'leaflet-control');
 
 		if (this.options.position.indexOf('bottom') !== -1) {
 			corner.insertBefore(container, corner.firstChild);
@@ -115,19 +78,24 @@ class VRuler {
 		}
 	}
 
-	_updatePaintTimer() {
-		clearTimeout(this.options.timer);
-		this.options.timer = setTimeout(L.bind(this._updateBreakPoints, this), 300);
+	onRemove() {
+		this._map.off('vrulerupdate', this._updateOptions, this);
+		this._map.off('scrolllimits', this._updatePaintTimer, this);
+		this._map.off('moveend', this._fixOffset, this);
+		app.events.off('updatepermission', this._changeInteractions.bind(this));
+		this._map.off(
+			'resettopbottompagespacing',
+			this._resetTopBottomPageSpacing,
+			this,
+		);
+		this._map.off('commandstatechanged', this.onCommandStateChanged, this);
+		this._map.off('rulerchanged', this._onRulerChanged, this);
 	}
 
 	_resetTopBottomPageSpacing(e?: any) {
 		this.options.pageTopMargin = undefined;
 		this.options.pageBottomMargin = undefined;
 		if (e) this.options.disableMarker = e.disableMarker;
-	}
-
-	getWindowProperty<T>(propertyName: string): T | undefined {
-		return (window as any)[propertyName];
 	}
 
 	onCommandStateChanged(e: any) {
@@ -138,7 +106,7 @@ class VRuler {
 
 	_changeInteractions(e: any) {
 		if (this._tMarginDrag) {
-			if (e.perm === 'edit') {
+			if (e.detail.perm === 'edit') {
 				this._tMarginDrag.style.cursor = 'e-resize';
 				this._bMarginDrag.style.cursor = 'w-resize';
 			} else {
@@ -148,8 +116,17 @@ class VRuler {
 		}
 	}
 
+	public show() {
+		this._rFace.parentElement.style.display = '';
+		this._updateParagraphIndentations();
+	}
+
+	public hide() {
+		this._rFace.parentElement.style.display = 'none';
+	}
+
 	_initiateIndentationMarkers() {
-		// Paragraph indentation..
+		// Paragraph indentation
 		this._pVerticalStartMarker = document.createElement('div');
 		this._pVerticalStartMarker.id = 'lo-vertical-pstart-marker';
 		this._pVerticalStartMarker.classList.add(
@@ -157,20 +134,20 @@ class VRuler {
 		);
 		this._rFace.appendChild(this._pVerticalStartMarker);
 
-		// Paragraph end..
+		// Paragraph end
 		this._pVerticalEndMarker = document.createElement('div');
 		this._pVerticalEndMarker.id = 'lo-vertical-pend-marker';
 		this._pVerticalEndMarker.classList.add('cool-ruler-indentation-marker-up');
 		this._rFace.appendChild(this._pVerticalEndMarker);
 
-		// While one of the markers is being dragged, a howrizontal line should be visible in order to indicate the new position of the marker..
-		this._markerHorizontalLine = L.DomUtil.create(
+		// While one of the markers is being dragged, a horizontal line should be visible in order to indicate the new position of the marker.
+		this._markerHorizontalLine = window.L.DomUtil.create(
 			'div',
 			'cool-ruler-horizontal-indentation-marker-center',
 		);
 		this._rFace.appendChild(this._markerHorizontalLine);
 
-		L.DomEvent.on(
+		window.L.DomEvent.on(
 			this._pVerticalStartMarker,
 			'mousedown',
 			(window as typeof window & { touch: any }).touch.mouseOnly(
@@ -178,7 +155,7 @@ class VRuler {
 			),
 			this,
 		);
-		L.DomEvent.on(
+		window.L.DomEvent.on(
 			this._pVerticalEndMarker,
 			'mousedown',
 			(window as typeof window & { touch: any }).touch.mouseOnly(
@@ -189,39 +166,44 @@ class VRuler {
 	}
 
 	_initLayout() {
-		this._rWrapper = L.DomUtil.create(
+		this._rWrapper = window.L.DomUtil.create(
 			'div',
 			'cool-ruler leaflet-bar leaflet-control leaflet-control-custom',
 		);
 		this._rWrapper.id = 'vertical-ruler';
+		this._rWrapper.classList.add('vruler');
 		this._rWrapper.style.visibility = 'hidden';
 
 		// We start it hidden rather than not initialzing at all.
 		// It is due to rulerupdate command that comes from LOK.
 		// If we delay its initialization, we can't calculate its margins and have to wait for another rulerupdate message to arrive.
 		if (!this.options.showruler) {
-			L.DomUtil.setStyle(this._rWrapper, 'display', 'none');
+			window.L.DomUtil.setStyle(this._rWrapper, 'display', 'none');
 		}
-		this._rFace = L.DomUtil.create('div', 'cool-ruler-face', this._rWrapper);
-		this._rMarginWrapper = L.DomUtil.create(
+		this._rFace = window.L.DomUtil.create(
+			'div',
+			'cool-ruler-face',
+			this._rWrapper,
+		);
+		this._rMarginWrapper = window.L.DomUtil.create(
 			'div',
 			'cool-ruler-marginwrapper',
 			this._rFace,
 		);
 		// BP => Break Points
-		this._rBPWrapper = L.DomUtil.create(
+		this._rBPWrapper = window.L.DomUtil.create(
 			'div',
 			'cool-ruler-breakwrapper',
 			this._rFace,
 		);
-		this._rBPContainer = L.DomUtil.create(
+		this._rBPContainer = window.L.DomUtil.create(
 			'div',
 			'cool-ruler-breakcontainer',
 			this._rBPWrapper,
 		);
 
 		// Tab stops
-		this._rTSContainer = L.DomUtil.create(
+		this._rTSContainer = window.L.DomUtil.create(
 			'div',
 			'cool-ruler-tabstopcontainer',
 			this._rMarginWrapper,
@@ -229,6 +211,19 @@ class VRuler {
 		this._initiateIndentationMarkers();
 
 		return this._rWrapper;
+	}
+
+	_onRulerChanged() {
+		// update show ruler state on rulerChange event
+		this.options.showruler = this._map.uiManager.getBooleanDocTypePref(
+			'ShowRuler',
+			true,
+		);
+		if (this.options.showruler) {
+			// in case of disabled ruler at docload calculation of offset can be ignored
+			// but after enabling the ruler we need to set the offset.
+			this._fixOffset();
+		}
 	}
 
 	_updateOptions(obj: Options) {
@@ -263,8 +258,10 @@ class VRuler {
 		this._updateBreakPoints();
 	}
 
-	_updateParagraphIndentations() {
-		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrraper
+	public _updateParagraphIndentations() {
+		// if ruler is hidden no need to calculate the indentation of the para
+		if (!this.options.showruler) return;
+		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrapper
 		const documentTop: number = document
 			.getElementById('document-container')
 			.getBoundingClientRect().top;
@@ -329,7 +326,7 @@ class VRuler {
 
 		let numCounter: number = -1 * Math.floor(topMargin / 1000);
 
-		L.DomUtil.removeChildNodes(this._rBPContainer);
+		window.L.DomUtil.removeChildNodes(this._rBPContainer);
 
 		// this.options.pageWidth is in mm100, so the code here makes one ruler division per
 		// centimetre.
@@ -338,7 +335,7 @@ class VRuler {
 		// least in the US. (The ruler unit to use doesn't seem to be stored in the document
 		// at least for .odt?)
 		for (let num: number = 0; num <= this.options.pageWidth / 1000 + 1; num++) {
-			const marker = L.DomUtil.create(
+			const marker = window.L.DomUtil.create(
 				'div',
 				'cool-ruler-maj',
 				this._rBPContainer,
@@ -354,22 +351,22 @@ class VRuler {
 
 		if (!this.options.marginSet) {
 			this.options.marginSet = true;
-			this._tMarginMarker = L.DomUtil.create(
+			this._tMarginMarker = window.L.DomUtil.create(
 				'div',
 				'cool-ruler-margin cool-ruler-left',
 				this._rFace,
 			);
-			this._bMarginMarker = L.DomUtil.create(
+			this._bMarginMarker = window.L.DomUtil.create(
 				'div',
 				'cool-ruler-margin cool-ruler-right',
 				this._rFace,
 			);
-			this._tMarginDrag = L.DomUtil.create(
+			this._tMarginDrag = window.L.DomUtil.create(
 				'div',
 				'cool-ruler-drag cool-ruler-left',
 				this._rMarginWrapper,
 			);
-			this._bMarginDrag = L.DomUtil.create(
+			this._bMarginDrag = window.L.DomUtil.create(
 				'div',
 				'cool-ruler-drag cool-ruler-right',
 				this._rMarginWrapper,
@@ -399,29 +396,15 @@ class VRuler {
 		this._updateParagraphIndentations();
 
 		if (this.options.interactive) {
-			this._changeInteractions({ perm: 'edit' });
+			this._changeInteractions({ detail: { perm: 'edit' } });
 		} else {
-			this._changeInteractions({ perm: 'readonly' });
+			this._changeInteractions({ detail: { perm: 'readonly' } });
 		}
 	}
 
 	_fixOffset() {
-		if (!this._map.options.docBounds) return;
-
-		const scale: number = this._map.getZoomScale(this._map.getZoom(), 10);
-		const mapPane = this._map._mapPane;
-		const topLeft = this._map.latLngToLayerPoint(
-			this._map.options.docBounds.getNorthWest(),
-		);
-		const firstTileXTranslate = topLeft.y;
-
-		let mapPaneYTranslate: number = 0;
-		const computedStyle = window.getComputedStyle(mapPane);
-		const transformValue = computedStyle.getPropertyValue('transform');
-		const transformMatrix = new DOMMatrixReadOnly(transformValue);
-
-		// Get the translateY values
-		mapPaneYTranslate = transformMatrix.f;
+		// in case of disabled ruler at docload or event like 'moveend' calculation of offset can be ignored
+		if (!this._map.options.docBounds || !this.options.showruler) return;
 
 		// we need to also consider  if there is more then 1 page then pageoffset is crucial to consider
 		// i have calculated current page using pageoffset and pageWidth coming from CORE
@@ -438,10 +421,9 @@ class VRuler {
 				(this._map._docLayer._docPixelSize.y / this._map._docLayer._pages);
 
 		const rulerOffset: number =
-			mapPaneYTranslate +
-			firstTileXTranslate +
-			pageoffset +
-			this.options.tileMargin * scale;
+			-app.activeDocument.activeLayout.viewedRectangle.cY1 +
+			this.options.tileMargin * app.getScale() +
+			pageoffset;
 
 		this._rFace.style.marginInlineStart = rulerOffset + 'px';
 
@@ -456,7 +438,7 @@ class VRuler {
 		const element: HTMLElement = document.getElementById(
 			this._indentationElementId,
 		);
-		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrraper
+		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrapper
 		const documentTop = document
 			.getElementById('document-container')
 			.getBoundingClientRect().top;
@@ -481,8 +463,18 @@ class VRuler {
 		this._map.rulerActive = false;
 
 		if (e.type !== 'panend') {
-			L.DomEvent.off(this._rFace, 'mousemove', this._moveIndentation, this);
-			L.DomEvent.off(this._map, 'mouseup', this._moveIndentationEnd, this);
+			window.L.DomEvent.off(
+				this._rFace,
+				'mousemove',
+				this._moveIndentation,
+				this,
+			);
+			window.L.DomEvent.off(
+				this._map,
+				'mouseup',
+				this._moveIndentationEnd,
+				this,
+			);
 		}
 
 		// Calculation step..
@@ -557,12 +549,22 @@ class VRuler {
 			e.target.id.trim() === '' ? e.target.parentNode.id : e.target.id;
 
 		if (e.type !== 'panstart') {
-			L.DomEvent.on(this._rFace, 'mousemove', this._moveIndentation, this);
-			L.DomEvent.on(this._map, 'mouseup', this._moveIndentationEnd, this);
+			window.L.DomEvent.on(
+				this._rFace,
+				'mousemove',
+				this._moveIndentation,
+				this,
+			);
+			window.L.DomEvent.on(
+				this._map,
+				'mouseup',
+				this._moveIndentationEnd,
+				this,
+			);
 		} else {
 			e.clientX = e.center.x;
 		}
-		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrraper
+		// for horizontal Ruler we need to also consider height of navigation and toolbar-wrapper
 		const documentTop: number = document
 			.getElementById('document-container')
 			.getBoundingClientRect().top;
@@ -572,7 +574,3 @@ class VRuler {
 		this._markerHorizontalLine.style.left = this._lastposition + 'px';
 	}
 }
-
-L.control.vruler = function (map: ReturnType<typeof L.map>, options: any) {
-	return new VRuler(map, options);
-};

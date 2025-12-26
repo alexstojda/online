@@ -13,26 +13,31 @@
  * Util.Dropdown - helper to create dropdown menus for JSDialogs
  */
 
-/* global JSDialog */
+/* global JSDialog app */
 
 function _createDropdownId(id) {
 	return id + '-dropdown';
 }
 
+JSDialog.CreateDropdownEntriesId = function(id) {
+	return id + '-entries';
+}
+
 JSDialog.OpenDropdown = function (id, popupParent, entries, innerCallback, popupAnchor, isSubmenu) {
-	var dropdownWindowId = _createDropdownId(id);
 	var json = {
-		id: dropdownWindowId,
+		id: _createDropdownId(id),
 		type: 'dropdown',
 		isSubmenu: isSubmenu,
 		jsontype: 'dialog',
 		popupParent: popupParent,
 		popupAnchor: popupAnchor,
+		gridKeyboardNavigation: false,
 		cancellable: true,
 		children: [
 			{
-				id: id + '-entries',
+				id: JSDialog.CreateDropdownEntriesId(id),
 				type: 'grid',
+				allyRole: 'listbox',
 				cols: 1,
 				rows: entries.length,
 				children: []
@@ -40,8 +45,12 @@ JSDialog.OpenDropdown = function (id, popupParent, entries, innerCallback, popup
 		]
 	};
 
+	if (popupParent && typeof popupParent._onDropDown === 'function') {
+		popupParent._onDropDown(true);
+	}
+
 	var isChecked = function (unoCommand) {
-		var items = L.Map.THIS['stateChangeHandler'];
+		var items = window.L.Map.THIS['stateChangeHandler'];
 		var val = items.getItemValue(unoCommand);
 
 		if (val && (val === true || val === 'true'))
@@ -57,6 +66,7 @@ JSDialog.OpenDropdown = function (id, popupParent, entries, innerCallback, popup
 		var entry;
 
 		switch (entries[i].type) {
+			// DEPRECACTED: legacy plain HTML adapter
 			case 'html':
 				entry = {
 					id: id + '-entry-' + i,
@@ -64,12 +74,32 @@ JSDialog.OpenDropdown = function (id, popupParent, entries, innerCallback, popup
 					htmlId: entries[i].htmlId,
 					closeCallback: function () { JSDialog.CloseDropdown(id); }
 				};
+				json.gridKeyboardNavigation = true;
 			break;
 
+			// dropdown is a colorpicker
 			case 'colorpicker':
 				entry = entries[i];
+				// for color picker we have a "KeyboardGridNavigation" function defined separately to handle custom cases
+				json.gridKeyboardNavigation = true;
 			break;
 
+			// allows to put regular JSDialog JSON into popup
+			case 'json':
+				entry = entries[i].content;
+				if (entry.type === 'grid') json.gridKeyboardNavigation = true;
+			break;
+
+			// horizontal separator in menu
+			case 'separator':
+				entry = {
+					id: id + '-entry-' + i,
+					type: 'separator',
+					orientation: 'horizontal'
+				};
+			break;
+
+			// menu and submenu entry
 			case 'action':
 			case 'menu':
 			default:
@@ -88,73 +118,79 @@ JSDialog.OpenDropdown = function (id, popupParent, entries, innerCallback, popup
 					hasSubMenu: !!entries[i].items
 				};
 			break;
-
-			case 'separator':
-				entry = {
-					id: id + '-entry-' + i,
-					type: 'separator',
-					orientation: 'horizontal'
-				};
-			break;
 		}
 
 		json.children[0].children.push(entry);
 	}
 
-	var lastSubMenuOpened = null;
 	var generateCallback = function (targetEntries) {
-		return function(objectType, eventType, object, data) {
-			var pos = data ? parseInt(data.substr(0, data.indexOf(';'))) : null;
+		let lastSubMenuOpened = null;
+		const closeLastSubMenu = () => {
+			if (!lastSubMenuOpened) return;
+			JSDialog.CloseDropdown(lastSubMenuOpened);
+			lastSubMenuOpened = null;
+		};
+
+		return function(objectType, eventType, object, data, builder) {
+			if (typeof data == 'number') var pos = data;
+			else var pos = data ? parseInt(data.substr(0, data.indexOf(';'))) : null;
 			var entry = targetEntries && pos !== null ? targetEntries[pos] : null;
+			var subMenuId = object.id + '-' + pos;
 
 			if (eventType === 'selected' || eventType === 'showsubmenu') {
-				if (entry.items) {
-					if (lastSubMenuOpened) {
-						var submenu = JSDialog.GetDropdown(lastSubMenuOpened);
-						if (submenu) {
-							JSDialog.CloseDropdown(lastSubMenuOpened);
-							lastSubMenuOpened = null;
-						}
-					}
+				if (entry && entry.items) {
+					closeLastSubMenu();
 
 					// open submenu
 					var dropdown = JSDialog.GetDropdown(object.id);
-					var subMenuId = object.id + '-' + pos;
 					var targetEntry = dropdown.querySelectorAll('.ui-grid-cell')[pos + 1];
 					JSDialog.OpenDropdown(subMenuId, targetEntry, entry.items,
 						generateCallback(entry.items), 'top-end', true);
 					lastSubMenuOpened = subMenuId;
 
-					var dropdown = JSDialog.GetDropdown(subMenuId);
-					var container = dropdown.querySelector('.ui-grid');
-					JSDialog.MakeFocusCycle(container);
-					var focusables = JSDialog.GetFocusableElements(container);
-					if (focusables && focusables.length)
-						focusables[0].focus();
-				} else if (eventType === 'selected' && entry.uno) {
+					app.layoutingService.appendLayoutingTask(() => {
+						var dropdown = JSDialog.GetDropdown(subMenuId);
+						if (!dropdown) {
+							console.debug('Dropdown: missing :' + subMenuId);
+							return;
+						}
+						var container = dropdown.querySelector('.ui-grid');
+						JSDialog.MakeFocusCycle(container);
+						var focusables = JSDialog.GetFocusableElements(container);
+						if (focusables && focusables.length)
+							focusables[0].focus();
+					});
+
+					return;
+				} else if (eventType === 'selected' && entry && entry.uno) {
 					var uno = (entry.uno.indexOf('.uno:') === 0) ? entry.uno : '.uno:' + entry.uno;
-					L.Map.THIS.sendUnoCommand(uno);
+					window.L.Map.THIS.sendUnoCommand(uno);
 					JSDialog.CloseDropdown(id);
 					return;
 				}
-			} else if (!lastSubMenuOpened && eventType === 'hidedropdown') {
+			} else if (eventType === 'hidedropdown') {
+				closeLastSubMenu();
 				JSDialog.CloseDropdown(id);
+				return;
 			}
 
 			// for multi-level menus last parameter should be used to handle event (it contains selected entry)
-			if (innerCallback && innerCallback(objectType, eventType, object, data, entry))
+			// usually last param is builder see: JSDialogCallback
+			if (innerCallback && innerCallback(objectType, eventType, object, data, entry || builder))
 				return;
 
 			if (eventType === 'selected')
 				JSDialog.CloseDropdown(id);
+			else
+				console.debug('Dropdown: unhandled action: "' + eventType + '"');
 		};
 	};
-
-	L.Map.THIS.fire('jsdialog', {data: json, callback: generateCallback(entries)});
+	window.L.Map.THIS.fire('closepopups'); // close popups if a dropdown menu is opened
+	window.L.Map.THIS.fire('jsdialog', {data: json, callback: generateCallback(entries)});
 };
 
 JSDialog.CloseDropdown = function (id) {
-	L.Map.THIS.fire('jsdialog', {data: {
+	window.L.Map.THIS.fire('jsdialog', {data: {
 		id: _createDropdownId(id),
 		jsontype: 'dialog',
 		action: 'close'
@@ -162,9 +198,11 @@ JSDialog.CloseDropdown = function (id) {
 };
 
 JSDialog.CloseAllDropdowns = function () {
-	L.Map.THIS.jsdialog.closeAllDropdowns();
+	window.L.Map.THIS.jsdialog.closeAllDropdowns();
 };
 
 JSDialog.GetDropdown = function (id) {
-	return document.body.querySelector('#' + _createDropdownId(id));
+	// remember it can get some random numbers due to JSDialog.MakeIdUnique
+	// TODO: use some register for it
+	return document.body.querySelector('[id^="' + id + '"].modalpopup');
 };

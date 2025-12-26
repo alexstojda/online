@@ -11,8 +11,11 @@
 
 #pragma once
 
+#include <chrono>
+#include <functional>
 #include <string>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 // This file hosts network related common functionality
@@ -21,9 +24,51 @@
 
 class StreamSocket;
 class ProtocolHandlerInterface;
+struct addrinfo;
+struct sockaddr;
 
 namespace net
 {
+
+class DefaultValues
+{
+public:
+    /// StreamSocket inactivity timeout in us (3600s default). Zero disables instrument.
+    std::chrono::microseconds inactivityTimeout;
+
+    /// Maximum number of concurrent external TCP connections. Zero disables instrument,
+    /// limiting the maximum number of connections by the available sockets to the system.
+    size_t maxExtConnections;
+};
+extern DefaultValues Defaults;
+
+class HostEntry
+{
+    std::string _requestName;
+    std::string _canonicalName;
+    std::vector<std::string> _ipAddresses;
+    std::shared_ptr<addrinfo> _ainfo;
+    int _saved_errno;
+    int _eaino;
+
+    void setEAI(int eaino);
+
+    std::string makeIPAddress(const sockaddr* ai_addr);
+
+public:
+    HostEntry(const std::string& desc);
+    ~HostEntry();
+
+    bool good() const { return _saved_errno == 0 && _eaino == 0; }
+    std::string errorMessage() const;
+
+    const std::string& getCanonicalName() const { return  _canonicalName; }
+    const std::vector<std::string>& getAddresses() const { return  _ipAddresses; }
+    const addrinfo* getAddrInfo() const { return _ainfo.get(); }
+
+    std::string resolveHostAddress() const;
+    bool isLocalhost() const;
+};
 
 #if !MOBILEAPP
 
@@ -43,46 +88,44 @@ std::vector<std::string> resolveAddresses(const std::string& addressToCheck);
 
 /// Connect to an end-point at the given host and port and return StreamSocket.
 std::shared_ptr<StreamSocket>
-connect(const std::string& host, const std::string& port, const bool isSSL,
+connect(const std::string& host, const std::string& port, bool isSSL,
         const std::shared_ptr<ProtocolHandlerInterface>& protocolHandler);
+
+enum class AsyncConnectResult : std::uint8_t {
+    Ok = 0,
+    SocketError,
+    ConnectionError,
+    HostNameError,
+    UnknownHostError,
+    SSLHandShakeFailure,
+    MissingSSLError
+};
+
+using asyncConnectCB =
+    std::function<void(std::shared_ptr<StreamSocket>, AsyncConnectResult result)>;
+
+void asyncConnect(const std::string& host, const std::string& port, bool isSSL,
+                  const std::shared_ptr<ProtocolHandlerInterface>& protocolHandler,
+                  const asyncConnectCB& asyncCb);
 
 /// Connect to an end-point at the given @uri and return StreamSocket.
 std::shared_ptr<StreamSocket>
 connect(std::string uri, const std::shared_ptr<ProtocolHandlerInterface>& protocolHandler);
 
-/// Decomposes a URI into its components.
-/// Returns true if parsing was successful.
-bool parseUri(std::string uri, std::string& scheme, std::string& host, std::string& port,
-              std::string& url);
-
-/// Decomposes a URI into its components.
-/// Returns true if parsing was successful.
-inline bool parseUri(std::string uri, std::string& scheme, std::string& host, std::string& port)
+inline std::string_view getDefaultPortForScheme(const std::string_view scheme)
 {
-    std::string url;
-    return parseUri(std::move(uri), scheme, host, port, url);
+    if (scheme == "https://" || scheme == "wss://")
+        return "443";
+    if (scheme == "http://" || scheme == "ws://")
+        return "80";
+    return std::string_view();
 }
 
-/// Return the locator given a URI.
-inline std::string parseUrl(const std::string& uri)
-{
-    auto itScheme = uri.find("://");
-    if (itScheme != uri.npos)
-    {
-        itScheme += 3; // Skip it.
-    }
-    else
-    {
-        itScheme = 0;
-    }
-
-    const auto itUrl = uri.find('/', itScheme);
-    if (itUrl != uri.npos)
-    {
-        return uri.substr(itUrl); // Including the first foreslash.
-    }
-
-    return std::string();
-}
+// Returns true if both URIs are equivalent for an origin check. Implicit
+// default port numbers are considered equivalent if explicitly included in the
+// compared against peer.
+bool sameOrigin(const std::string& expectedOrigin, const std::string& actualOrigin);
 
 } // namespace net
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

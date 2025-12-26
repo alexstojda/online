@@ -10,11 +10,12 @@
  */
 
 /*
- * L.Control.NotebookbarBuilder - builder of native HTML widgets for tabbed menu
+ * window.L.Control.NotebookbarBuilder - builder of native HTML widgets for tabbed menu
  */
 
-/* global $ _ JSDialog app */
-L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
+/* global $ _ JSDialog app GraphicSelection Menubar */
+
+window.L.Control.NotebookbarBuilder = window.L.Control.JSDialogBuilder.extend({
 
 	_customizeOptions: function() {
 		this.options.noLabelsForUnoButtons = true;
@@ -23,28 +24,21 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	},
 
 	_overrideHandlers: function() {
-		this._controlHandlers['bigmenubartoolitem'] = this._bigMenubarToolItemHandler;
 		this._controlHandlers['bigtoolitem'] = this._bigtoolitemHandler;
 		this._controlHandlers['combobox'] = this._comboboxControl;
-		this._controlHandlers['menubartoolitem'] = this._inlineMenubarToolItemHandler;
 		this._controlHandlers['exportmenubutton'] = this._exportMenuButton;
 		this._controlHandlers['tabcontrol'] = this._overriddenTabsControlHandler;
+		this._controlHandlers['iconview'] = JSDialog.notebookbarIconView;
 		this._controlHandlers['tabpage'] = this._overriddenTabPageHandler;
-		this._controlHandlers['toolbox'] = this._toolboxHandler;
 
-		this._controlHandlers['pushbutton'] = function() { return false; };
-		this._controlHandlers['spinfield'] = function() { return false; };
-		this._controlHandlers['formattedfield'] = function() { return false; };
-		this._controlHandlers['metricfield'] = function() { return false; };
-
-		this._toolitemHandlers['.uno:XLineColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:FontColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:CharBackColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:BackgroundColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:TableCellBackgroundColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:FrameLineColor'] = this._colorControl;
-		this._toolitemHandlers['.uno:Color'] = this._colorControl;
-		this._toolitemHandlers['.uno:FillColor'] = this._colorControl;
+		this._toolitemHandlers['.uno:XLineColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:FontColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:CharBackColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:BackgroundColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:TableCellBackgroundColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:FrameLineColor'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:Color'] = JSDialog.colorPickerButton;
+		this._toolitemHandlers['.uno:FillColor'] = JSDialog.colorPickerButton;
 
 		this._toolitemHandlers['.uno:SelectBackground'] = this._selectBackgroundControl;
 		this._toolitemHandlers['.uno:InsertAnnotation'] = this._insertAnnotationControl;
@@ -52,6 +46,7 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		this._toolitemHandlers['.uno:Save'] = this._saveControl;
 		this._toolitemHandlers['.uno:SaveAs'] = this._saveAsControl;
 		this._toolitemHandlers['.uno:Print'] = this._printControl;
+		this._toolitemHandlers['.uno:Settings'] = this._onlineHelpControl;
 		this._toolitemHandlers['.uno:InsertPageHeader'] = this._headerFooterControl;
 		this._toolitemHandlers['.uno:InsertPageFooter'] = this._headerFooterControl;
 		this._toolitemHandlers['.uno:Text'] = this._insertTextBoxControl;
@@ -93,7 +88,6 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		this._toolitemHandlers['.uno:HideAllNotes'] = function() {};
 		this._toolitemHandlers['.uno:ShareDocument'] = function() {};
 		this._toolitemHandlers['.uno:EditDoc'] = function() {};
-		this._toolitemHandlers['.uno:AssignLayout'] = function() {};
 		this._toolitemHandlers['.uno:PresentationCurrentSlide'] = function() {};
 		this._toolitemHandlers['.uno:PresentationLayout'] = function() {};
 		this._toolitemHandlers['.uno:CapturePoint'] = function() {};
@@ -103,7 +97,6 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		this._toolitemHandlers['.uno:DeleteAnnotation'] = function() {};
 		this._toolitemHandlers['.uno:NextAnnotation'] = function() {};
 		this._toolitemHandlers['.uno:PreviousAnnotation'] = function() {};
-		this._toolitemHandlers['.uno:AnimationEffects'] = function() {};
 		this._toolitemHandlers['.uno:OptimizeTable'] = function() {};
 		this._toolitemHandlers['.uno:TableDesign'] = function() {};
 		this._toolitemHandlers['.uno:ContourDialog'] = function() {};
@@ -124,10 +117,8 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 
 		/*Draw Home Tab*/
 		this._toolitemHandlers['.uno:ObjectAlign'] = function() {};
-		this._toolitemHandlers['.uno:GridVisible'] = function() {};
 
 		/*Graphic Tab*/
-		this._toolitemHandlers['.uno:Crop'] = function() {};
 		this._toolitemHandlers['.uno:GraphicFilterToolbox'] = function() {};
 		this._toolitemHandlers['.uno:SaveGraphic'] = function() {};
 		this._toolitemHandlers['.uno:InsertCaptionDialog'] = function() {};
@@ -166,13 +157,17 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 			$('#applystyle').val(state).trigger('change');
 		}
 		else if (commandName === '.uno:ModifiedStatus') {
-			if (document.getElementById('save')) {
-				if (state === 'true') {
-					document.getElementById('save').classList.add('savemodified');
-					document.getElementById('file-save').classList.add('savemodified');
+			const saveEle = document.querySelector('[id^="save"].unotoolbutton');
+			if (saveEle) {
+				if (state === 'true' &&  this.map.saveState) {
+					this.map.saveState.showModifiedStatus();
+					const button = document.querySelector('[id^="file-save"]');
+					if (button) button.classList.add('savemodified');
 				} else {
-					document.getElementById('save').classList.remove('savemodified');
-					document.getElementById('file-save').classList.remove('savemodified');
+					const button = document.querySelector('[id^="save"]');
+					if (button) button.classList.remove('savemodified');
+					const fileButton = document.querySelector('[id^="file-save"]');
+					if (fileButton) fileButton.classList.remove('savemodified');
 				}
 			}
 		}
@@ -189,9 +184,9 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		// function inline.
 		if (window.ThisIsTheiOSApp && data.id === 'fontnamecombobox') {
 			// Fix issue #5838 Use unique IDs for font name combobox elements
-			var table = L.DomUtil.createWithId('div', data.id, parentContainer);
-			var row = L.DomUtil.create('div', 'notebookbar row', table);
-			var button = L.DomUtil.createWithId('button', data.id + 'ios', row);
+			var table = window.L.DomUtil.createWithId('div', data.id, parentContainer);
+			var row = window.L.DomUtil.create('div', 'notebookbar row', table);
+			var button = window.L.DomUtil.createWithId('button', data.id + 'ios', row);
 
 			$(table).addClass('select2 select2-container select2-container--default');
 			// Fix issue #5838 Don't add the "select2-selection--single" class
@@ -226,50 +221,62 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	// overriden
 	_createTabClick: function(builder, t, tabs, contentDivs, tabIds)
 	{
-		var tooltipCollapsed = _('Tap to expand');
-		var tooltipExpanded = _('Tap to collapse');
-		$(tabs[t]).prop('title', tooltipExpanded);
+		const isDesktop = window.mode.isDesktop();
+		const tooltipCollapsed = isDesktop ? _('Click to expand') : _('Tap to expand');
+		const tooltipExpanded = isDesktop ? _('Click to collapse') : _('Tap to collapse');
+		if ($(tabs[t]).hasClass('selected'))
+			tabs[t].setAttribute('data-cooltip', tooltipExpanded);
+		window.L.control.attachTooltipEventListener(tabs[t], builder.map);
 		return function(event) {
 			var tabIsSelected = $(tabs[t]).hasClass('selected');
 			var notebookbarIsCollapsed = builder.wizard.isCollapsed();
 
 			var accessibilityInputElementHasFocus = app.UI.notebookbarAccessibility && app.UI.notebookbarAccessibility.accessibilityInputElement === document.activeElement ? true: false;
 
+			for (var i = 0; i < tabs.length; i++) {
+				if (i !== t) {
+					tabs[i].setAttribute('data-cooltip', '');
+				}
+			}
+
 			if (tabIsSelected && !notebookbarIsCollapsed && !accessibilityInputElementHasFocus) {
 				builder.wizard.collapse();
-				$(tabs[t]).prop('title', tooltipCollapsed);
-			} else if (notebookbarIsCollapsed) {
+				for (i = 0; i < tabs.length; i++)
+					tabs[i].setAttribute('data-cooltip', tooltipCollapsed);
+			} else {
 				builder.wizard.extend();
-				$(tabs[t]).prop('title', tooltipExpanded);
+				tabs[t].setAttribute('data-cooltip', tooltipExpanded);
 			}
 
 			$(tabs[t]).addClass('selected');
 			tabs[t].setAttribute('aria-selected', 'true');
 			tabs[t].removeAttribute('tabindex');
-			for (var i = 0; i < tabs.length; i++) {
+			for (i = 0; i < tabs.length; i++) {
 				if (i !== t) {
 					$(tabs[i]).removeClass('selected');
 					tabs[i].setAttribute('aria-selected', 'false');
 					tabs[i].tabIndex = -1;
-					$(tabs[i]).prop('title', '');
 					$(contentDivs[i]).addClass('hidden');
 				}
 			}
 			$(contentDivs[t]).removeClass('hidden');
 			$(window).resize();
+			builder.map.fire('refreshoverflows',{force: true});
 			builder.wizard.selectedTab(tabIds[t]);
 
 			// Keep focus if user is navigating via keyboard.
 			if (!tabs[t].enterPressed) {
 				// don't lose focus on tab change
 				event.preventDefault();
-				builder.map.focus();
+				if (!JSDialog.IsAnyInputFocused())
+					builder.map.focus();
 				t.enterPressed = false;
 			}
 		};
 	},
 
 	_overriddenTabsControlHandler: function(parentContainer, data, builder) {
+		data.isNotebookbar = true;
 		data.tabs = builder.wizard.getTabs();
 		return builder._tabsControlHandler(parentContainer, data, builder, _('Tap to collapse'));
 	},
@@ -281,16 +288,6 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		JSDialog.MakeFocusCycle(tabPage);
 
 		return result;
-	},
-
-	_toolboxHandler: function(parentContainer, data) {
-		if (data.enabled === false || data.enabled === 'false') {
-			for (var index in data.children) {
-				data.children[index].enabled = false;
-			}
-		}
-
-		return true;
 	},
 
 	_exportMenuButton: function(parentContainer, data, builder) {
@@ -322,45 +319,6 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 				app.registerExportFormat(text, format);
 			}
 		}
-
-		return false;
-	},
-
-	_menubarToolItemHandler: function(parentContainer, data, builder) {
-		data.command = data.id;
-
-		var control = builder._unoToolButton(parentContainer, data, builder);
-
-		$(control.button).unbind('click');
-		$(control.label).unbind('click');
-		if (!builder.map.isLockedItem(data)) {
-			$(control.container).click(function (e) {
-				e.preventDefault();
-				L.control.menubar()._executeAction.bind({_map: builder.options.map})(undefined, {id: data.id});
-			});
-		}
-
-		return false;
-	},
-
-	_inlineMenubarToolItemHandler: function(parentContainer, data, builder) {
-		var originalInLineState = builder.options.useInLineLabelsForUnoButtons;
-		builder.options.useInLineLabelsForUnoButtons = true;
-
-		builder._menubarToolItemHandler(parentContainer, data, builder);
-
-		builder.options.useInLineLabelsForUnoButtons = originalInLineState;
-
-		return false;
-	},
-
-	_bigMenubarToolItemHandler: function(parentContainer, data, builder) {
-		var noLabels = builder.options.noLabelsForUnoButtons;
-		builder.options.noLabelsForUnoButtons = false;
-
-		builder._menubarToolItemHandler(parentContainer, data, builder);
-
-		builder.options.noLabelsForUnoButtons = noLabels;
 
 		return false;
 	},
@@ -410,6 +368,10 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					'text': _('PDF Document (.pdf)'),
 					'command': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf'
 				},
+				{
+					'action': 'downloadas-html',
+					'text': _('HTML File (.html)')
+				},
 			].concat(!window.ThisIsTheAndroidApp ? [
 				{
 					'action': 'exportpdf' ,
@@ -434,6 +396,10 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 				{
 					'action': 'downloadas-csv',
 					'text': _('CSV File (.csv)')
+				},
+				{
+					'action': 'downloadas-html',
+					'text': _('HTML File (.html)')
 				},
 				{
 					'action': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf',
@@ -466,17 +432,115 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 					'text': _('PowerPoint 2003 Presentation (.ppt)')
 				},
 				{
-					'action': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf',
-					'text': _('PDF Document (.pdf)'),
-					'command': !window.ThisIsAMobileApp ? 'exportdirectpdf' : 'downloadas-pdf'
+					'action': 'downloadas-html',
+					'text': _('HTML Document (.html)')
 				},
-			].concat(!window.ThisIsTheAndroidApp ? [
 				{
-					'action': 'exportpdf' ,
-					'text': _('PDF Document (.pdf) as...'),
-					'command': 'exportpdf'
+					'action': !window.ThisIsAMobileApp
+						? 'exportdirectpdf'
+						: 'downloadas-pdf',
+					'text': _('PDF Document (.pdf)'),
+					'command': !window.ThisIsAMobileApp
+						? 'exportdirectpdf'
+						: 'downloadas-pdf',
+				},
+			]
+				.concat(
+					!window.ThisIsTheAndroidApp
+						? [
+								{
+									'action': 'exportpdf',
+									'text': _(
+										'PDF Document (.pdf) as...',
+									),
+									'command': 'exportpdf',
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_swf')
+						? [
+								{
+									'action': 'downloadas-swf',
+									'text': _(
+										'Shockwave Flash (.swf)',
+									),
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_svg')
+						? [
+								{
+									'action': 'downloadas-svg',
+									'text': _(
+										'Scalable Vector Graphics (.svg)',
+									),
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_bmp')
+						? [
+								{
+									'action': 'downloadas-bmp',
+									'text': _(
+										'Current slide as Bitmap (.bmp)',
+									),
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_gif')
+						? [
+								{
+									'action': 'downloadas-gif',
+									'text': _(
+										'Current slide as Graphics Interchange Format (.gif)',
+									),
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_png')
+						? [
+								{
+									'action': 'downloadas-png',
+									'text': _(
+										'Current slide as Portable Network Graphics (.png)',
+									),
+								},
+							]
+						: [],
+				)
+				.concat(
+					window.extraExportFormats.includes('impress_tiff')
+						? [
+								{
+									'action': 'downloadas-tiff',
+									'text': _(
+										'Current slide as Tag Image File Format (.tiff)',
+									),
+								},
+							]
+						: [],
+				);
+		} else if (docType === 'drawing') {
+			submenuOpts = [
+				{
+					'action': 'downloadas-odg',
+					'text': _('ODF Drawing (.odg)')
+				},
+				{
+					'action': 'downloadas-png',
+					'text': _('Image (.png)')
 				}
-			] : []);
+			];
 		}
 
 		submenuOpts.forEach(function mapIconToItem(menuItem) {
@@ -643,7 +707,7 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		$(control.button).unbind('click');
 		$(control.label).unbind('click');
 		$(control.container).click(function () {
-			L.control.menubar()._executeAction.bind({_map: builder.options.map})(undefined, {id: originalDataId});
+			(new Menubar())._executeAction.bind({_map: builder.options.map})(undefined, {id: originalDataId});
 		});
 		builder._preventDocumentLosingFocusOnClick(control.container);
 	},
@@ -655,7 +719,7 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 		$(control.button).unbind('click');
 		$(control.label).unbind('click');
 		$(control.container).click(function () {
-			L.DomUtil.get('selectbackground').click();
+			window.L.DomUtil.get('selectbackground').click();
 		});
 		builder._preventDocumentLosingFocusOnClick(control.container);
 	},
@@ -663,11 +727,11 @@ L.Control.NotebookbarBuilder = L.Control.JSDialogBuilder.extend({
 	_insertAnnotationControl: function(parentContainer, data, builder) {
 		var control = builder._unoToolButton(parentContainer, data, builder);
 		$(control.button).unbind('click');
-$(control.label).unbind('click');
+		$(control.label).unbind('click');
 		$(control.container).click(function (e) {
 			e.preventDefault();
 			var docLayer = builder.map._docLayer;
-			if (!(docLayer._docType === 'spreadsheet' && docLayer._hasActiveSelection)) {
+			if (!(docLayer._docType === 'spreadsheet' && GraphicSelection.hasActiveSelection())) {
 				builder.map.insertComment();
 			}
 		});
@@ -719,6 +783,9 @@ $(control.label).unbind('click');
 		if (!data.length)
 			return;
 
+		const inlineLabels = this.options.useInLineLabelsForUnoButtons;
+		this.options.useInLineLabelsForUnoButtons = false;
+
 		data = data[0];
 
 		var type = data.type;
@@ -738,7 +805,7 @@ $(control.label).unbind('click');
 			$('#' + data.id).addClass('hidden-from-event');
 		}
 
-		this.options.useInLineLabelsForUnoButtons = false;
+		this.options.useInLineLabelsForUnoButtons = inlineLabels;
 	},
 
 	// replaces widget in-place with new instance with updated data
@@ -748,8 +815,8 @@ $(control.label).unbind('click');
 
 	build: function(parent, data, hasVerticalParent) {
 		if (hasVerticalParent === undefined) {
-			parent = L.DomUtil.create('div', 'root-container ' + this.options.cssClass, parent);
-			parent = L.DomUtil.create('div', 'vertical ' + this.options.cssClass, parent);
+			parent = window.L.DomUtil.create('div', 'root-container ' + this.options.cssClass, parent);
+			parent = window.L.DomUtil.create('div', 'vertical ' + this.options.cssClass, parent);
 		}
 
 		for (var childIndex in data) {
@@ -760,7 +827,6 @@ $(control.label).unbind('click');
 			var childType = childData.type;
 			var isVertical = (childData.vertical === 'true' || childData.vertical === true) ? true : false;
 
-			this._parentize(childData);
 			var processChildren = true;
 
 			if ((childData.id === undefined || childData.id === '' || childData.id === null)
@@ -773,16 +839,20 @@ $(control.label).unbind('click');
 				if (childData.id && childData.id.indexOf(' ') >= 0)
 					console.error('notebookbar: space in the id: "' + childData.id + '"');
 				var tableId = childData.id ? childData.id.replace(' ', '') : '';
-				var table = L.DomUtil.createWithId('div', tableId, parent);
-				L.DomUtil.addClass(table, this.options.cssClass);
+				var table = window.L.DomUtil.createWithId('div', tableId, parent);
+				window.L.DomUtil.addClass(table, this.options.cssClass);
 				if (isVertical)
-					L.DomUtil.addClass(table, 'vertical');
+					window.L.DomUtil.addClass(table, 'vertical');
 				else
-					L.DomUtil.addClass(table, 'horizontal');
+					window.L.DomUtil.addClass(table, 'horizontal');
 				var childObject = table;
 			} else {
 				childObject = parent;
 			}
+
+			// allow to detect single toolbuttons stacked on each other
+			if (childType === 'toolbox')
+				childData.hasVerticalParent = hasVerticalParent;
 
 			var handler = this._controlHandlers[childType];
 			var twoPanelsAsChildren =
@@ -790,34 +860,33 @@ $(control.label).unbind('click');
 			    && childData.children[0] && childData.children[0].type == 'panel'
 			    && childData.children[1] && childData.children[1].type == 'panel';
 
-			if (twoPanelsAsChildren) {
-				handler = this._controlHandlers['paneltabs'];
-				processChildren = handler(childObject, childData.children, this);
-			} else {
-				if (handler) {
-					processChildren = handler(childObject, childData, this);
-					this.postProcess(childObject, childData);
-				} else
-					window.app.console.warn('NotebookbarBuilder: Unsupported control type: "' + childType + '"');
+			try {
+				if (twoPanelsAsChildren) {
+					handler = this._controlHandlers['paneltabs'];
+					handler(childObject, childData.children, this);
+				} else {
+					if (handler) {
+						processChildren = handler(childObject, childData, this);
+						this.postProcess(childObject, childData);
+					} else
+						window.app.console.warn('NotebookbarBuilder: Unsupported control type: "' + childType + '"');
 
-				if (childType === 'toolbox' && hasVerticalParent === true && childData.children.length === 1)
-					this.options.useInLineLabelsForUnoButtons = true;
-
-				if (processChildren && childData.children != undefined)
-					this.build(childObject, childData.children, isVertical, hasManyChildren);
-				else if (childData.visible && (childData.visible === false || childData.visible === 'false')) {
-					$('#' + childData.id).addClass('hidden-from-event');
+					if (processChildren && childData.children != undefined)
+						this.build(childObject, childData.children, isVertical);
+					else if (childData.visible && (childData.visible === false || childData.visible === 'false')) {
+						$('#' + childData.id).addClass('hidden-from-event');
+					}
 				}
-
-				this.options.useInLineLabelsForUnoButtons = false;
+			} catch (ex) {
+				window.app.console.error('NotebookbarBuilder: exception while building "' + childData.id + '" : ' + ex);
 			}
 		}
 	}
 
 });
 
-L.control.notebookbarBuilder = function (options) {
-	var builder = new L.Control.NotebookbarBuilder(options);
+window.L.control.notebookbarBuilder = function (options) {
+	var builder = new window.L.Control.NotebookbarBuilder(options);
 	builder._setup(options);
 	builder._overrideHandlers();
 	builder._customizeOptions();

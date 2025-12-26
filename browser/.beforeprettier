@@ -1,6 +1,15 @@
+#===========================================================================#
+#                    PLEASE DON'T ADD STUFF TO THIS FILE                    #
+#                                                                           #
+# It's here as a way to stop files that were unformatted when we added      #
+# prettier from needing to be formatted. It shouldn't be used on new files, #
+# especially files which are newly-converted from JavaScript to Typescript. #
+#                                                                           #
+# Please instead format new files by running `make prettier-write`          #
+#===========================================================================#
+
 /src/control/ColorPicker.js
 /src/control/Control.AlertDialog.js
-/src/control/Control.Attribution.js
 /src/control/Control.ColumnGroup.ts
 /src/control/Control.ColumnHeader.ts
 /src/control/Control.Command.js
@@ -21,7 +30,7 @@
 /src/control/Control.LanguageDialog.js
 /src/control/Control.Layers.js
 /src/control/Control.LokDialog.js
-/src/control/Control.Menubar.js
+/src/control/Control.Menubar.ts
 /src/control/Control.MobileBottomBar.js
 /src/control/Control.MobileSlide.js
 /src/control/Control.MobileTopBar.ts
@@ -44,12 +53,11 @@
 /src/control/Control.SearchBar.js
 /src/control/Control.Selection.js
 /src/control/Control.SheetsBar.js
-/src/control/Control.Sidebar.js
 /src/control/Control.StatusBar.js
 /src/control/Control.Tabs.js
 /src/control/Control.Toolbar.js
 /src/control/Control.TopToolbar.js
-/src/control/Control.UIManager.js
+/src/control/Control.UIManager.ts
 /src/control/Control.UserList.js
 /src/control/Control.Zotero.js
 /src/control/IFrameDialog.js
@@ -61,7 +69,6 @@
 /src/control/jsdialog/Widget.Combobox.js
 /src/control/jsdialog/Widget.DrawingArea.js
 /src/control/jsdialog/Widget.FormulabarEdit.js
-/src/control/jsdialog/Widget.Frame.js
 /src/control/jsdialog/Widget.IconView.js
 /src/control/jsdialog/Widget.LanguageSelector.js
 /src/control/jsdialog/Widget.MenuButton.js
@@ -71,11 +78,8 @@
 /src/control/jsdialog/Widget.Progressbar.js
 /src/control/jsdialog/Widget.ScrolledWindow.js
 /src/control/jsdialog/Widget.Timefield.js
-/src/control/jsdialog/Widget.TreeView.js
 /src/control/Parts.js
 /src/control/Permission.js
-/src/control/Ruler.js
-/src/control/Scroll.js
 /src/control/Search.js
 /src/control/Signing.js
 /src/control/Styles.js
@@ -91,7 +95,6 @@
 /src/core/Rectangle.ts
 /src/core/Socket.js
 /src/core/Util.js
-/src/docstate.js
 /src/app/DocEvents.ts
 /src/dom/DomEvent.js
 /src/dom/DomEvent.MultiClick.js
@@ -100,8 +103,6 @@
 /src/dom/Draggable.js
 /src/dom/NotebookbarAccessibility.js
 /src/dom/NotebookbarAccessibilityDefinitions.js
-/src/dom/PosAnimation.js
-/src/dom/PosAnimation.Timer.js
 /src/errormessages.js
 /src/geo/crs/CRS.js
 /src/geo/LatLng.js
@@ -110,26 +111,17 @@
 /src/geometry/Bounds.ts
 /src/geometry/LineUtil.js
 /src/geometry/Point.ts
-/src/geometry/PolyUtil.js
 /src/geometry/Transformation.ts
 /src/layer/CalcSplitPanesContext.ts
-/src/layer/FormFieldButtonLayer.js
 /src/layer/Layer.js
 /src/layer/LayerGroup.js
 /src/layer/marker/A11yTextInput.js
 /src/layer/marker/Cursor.ts
-/src/layer/marker/DivIcon.js
-/src/layer/marker/Icon.Default.js
-/src/layer/marker/Icon.js
-/src/layer/marker/Marker.Drag.js
-/src/layer/marker/Marker.js
 /src/layer/marker/ProgressOverlay.js
 /src/layer/marker/TextInput.js
 /src/layer/SplitPanesContext.ts
-/src/canvas/sections/AutoFillMarkerSection.ts
 /src/canvas/sections/HTMLObjectSection.ts
 /src/canvas/sections/URLPopUpSection.ts
-/src/canvas/sections/InvalidationRectangleSection.ts
 /src/canvas/sections/ShapeHandlesSection.ts
 /src/canvas/sections/ShapeHandleScalingSubSection.ts
 /src/canvas/sections/ShapeHandleCustomSubSection.ts
@@ -144,7 +136,6 @@
 /src/canvas/sections/TextSelectionHandleSection.ts
 /src/canvas/sections/OtherViewGraphicSelectionSection.ts
 /src/canvas/sections/OtherViewCellCursorSection.ts
-/src/canvas/sections/OtherViewCursorSection.ts
 /src/layer/tile/CalcTileLayer.js
 /src/canvas/CanvasSectionContainer.ts
 /src/canvas/CanvasSectionObject.ts
@@ -152,7 +143,6 @@
 /src/layer/tile/CanvasTileLayer.js
 /src/canvas/sections/CommentListSection.ts
 /src/canvas/sections/CalcGridSection.ts
-/src/canvas/sections/SplitSection.ts
 /src/canvas/sections/PixelGridSection.ts
 /src/canvas/sections/CommentSection.ts
 /src/canvas/sections/CursorHeaderSection.ts
@@ -161,10 +151,8 @@
 /src/canvas/sections/ScrollSection.ts
 /src/layer/tile/SheetGeometry.ts
 /src/layer/tile/SheetSwitch.ts
-/src/layer/tile/TileLayer.TableOverlay.js
 /src/canvas/sections/TilesSection.ts
 /src/layer/tile/WriterTileLayer.js
-/src/layer/vector/Canvas.js
 /src/layer/vector/CanvasOverlay.ts
 /src/layer/vector/CDarkOverlay.ts
 /src/layer/vector/CEventsHandler.ts
@@ -175,30 +163,16 @@
 /src/layer/vector/CPolyline.ts
 /src/layer/vector/CPolyUtil.ts
 /src/layer/vector/CRectangle.ts
-/src/layer/vector/CSplitterLine.ts
-/src/layer/vector/Path.Drag.js
-/src/layer/vector/Path.Drag.Transform.js
-/src/layer/vector/Path.js
-/src/layer/vector/Path.Transform.Util.js
-/src/layer/vector/Polygon.js
-/src/layer/vector/Polyline.js
-/src/layer/vector/Rectangle.js
-/src/layer/vector/Renderer.js
 /src/main.js
-/src/map/anim/Map.PanAnimation.js
 /src/map/Clipboard.js
-/src/map/handler/Map.DoubleClickZoom.js
-/src/map/handler/Map.Drag.js
 /src/map/handler/Map.Feedback.js
 /src/map/handler/Map.FileInserter.js
 /src/map/handler/Map.Keyboard.js
 /src/map/handler/Map.KeyboardShortcuts.ts
-/src/map/handler/Map.Mouse.js
 /src/map/handler/Map.Print.js
 /src/map/handler/Map.Scroll.js
 /src/map/handler/Map.SlideShow.js
 /src/map/handler/Map.StateChanges.js
-/src/map/handler/Map.TouchGesture.js
 /src/map/handler/Map.VersionBar.js
 /src/map/handler/Map.Welcome.js
 /src/map/handler/Map.WOPI.js

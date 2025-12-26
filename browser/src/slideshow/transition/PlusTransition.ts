@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -10,41 +13,45 @@
 
 declare var SlideShow: any;
 
-class PlusTransition extends SlideShow.Transition2d {
+class PlusTransition extends ClippingTransition {
 	constructor(transitionParameters: TransitionParameters) {
 		super(transitionParameters);
 	}
 
-	public getFragmentShader(): string {
-		return `#version 300 es
-                precision mediump float;
+	protected getMaskFunction(): string {
+		const transitionSubType = this.transitionFilterInfo.transitionSubtype;
+		if (transitionSubType === TransitionSubType.CORNERSOUT)
+			return `
+                  float getMaskValue(vec2 uv, float time) {
+                      vec2 center = vec2(0.5, 0.5);
 
-                uniform sampler2D leavingSlideTexture;
-                uniform sampler2D enteringSlideTexture;
-                uniform float time;
+                      vec2 dist = abs(uv - center);
 
-                in vec2 v_texCoord;
-                out vec4 outColor;
+                      float innerBound = 0.25 - time / 4.0;
+                      float outerBound = 0.25 + time / 4.0;
 
-                void main() {
-                    vec2 uv = v_texCoord;
-                    float progress = time;
+                      // dist >= innerBound && dist <= outerBound
+                      float mask =
+                          step(innerBound, dist.x) * step(-outerBound, -dist.x) *
+                          step(innerBound, dist.y) * step(-outerBound, -dist.y);
 
-                    vec2 center = vec2(0.5, 0.5);
+                      return mask;
+                  }
+          `;
+		else if (transitionSubType === TransitionSubType.CORNERSIN)
+			return `
+                  float getMaskValue(vec2 uv, float time) {
+                      vec2 center = vec2(0.5, 0.5);
 
-                    vec2 dist = abs(uv - center);
+                      vec2 dist = abs(uv - center);
 
-                    float size = (1.0 - progress) * 2.0;
+                      float size = 1.01 * (1.0 - time) / 2.0;
 
-                    float mask = step(dist.x, size / 5.0) + step(dist.y, size / 5.0);
+                      float mask = step(size, dist.x) * step(size, dist.y);
 
-                    mask = min(mask, 1.0);
-
-                    vec4 color1 = texture(leavingSlideTexture, uv);
-                    vec4 color2 = texture(enteringSlideTexture, uv);
-
-                    outColor = mix(color2, color1, mask);
-                }`;
+                      return mask;
+                  }
+          `;
 	}
 }
 

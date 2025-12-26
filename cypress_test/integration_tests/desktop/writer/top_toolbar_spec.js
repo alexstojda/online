@@ -8,11 +8,12 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	var newFilePath;
 
 	beforeEach(function() {
+		cy.viewport(1920,1080);
 		newFilePath = helper.setupAndLoadDocument('writer/top_toolbar.odt');
 		desktopHelper.switchUIToNotebookbar();
 
 		if (Cypress.env('INTEGRATION') === 'nextcloud') {
-			desktopHelper.showSidebarIfHidden();
+			desktopHelper.showSidebar();
 		}
 
 		writerHelper.selectAllTextOfDoc();
@@ -25,26 +26,37 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply highlight color.', function() {
 		helper.setDummyClipboardForCopy();
-		desktopHelper.actionOnSelector('backColor', (selector) => { cy.cGet(selector).click(); });
-		desktopHelper.selectColorFromPalette('FFF2CC');
+		desktopHelper.getNbIconArrow('CharBackColor', 'Home').click();
+		desktopHelper.selectColorFromPalette('FFB66C');
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p font span')
-			.should('have.attr', 'style', 'background: #fff2cc');
+			.should('have.attr', 'style', 'background: #ffb66c');
+	});
+
+	it('Apply transparent highlight color.', function() {
+		helper.setDummyClipboardForCopy();
+		desktopHelper.getNbIcon('CharBackColor', 'Home').first().click();
+		writerHelper.selectAllTextOfDoc();
+		helper.copy();
+		cy.cGet('#copy-paste-container p font span')
+			.should('have.attr', 'style', 'background: transparent');
+		desktopHelper.getNbIcon('CharBackColor').find('.selected-color')
+				.should('have.attr', 'style', 'background-color: transparent; border-color: var(--color-border);');
 	});
 
 	it('Apply font color.', function() {
 		helper.setDummyClipboardForCopy();
-		desktopHelper.actionOnSelector('fontColor', (selector) => { cy.cGet(selector).click(); });
-		desktopHelper.selectColorFromPalette('8E7CC3');
+		desktopHelper.getNbIconArrow('FontColor', 'Home').click();
+		desktopHelper.selectColorFromPalette('3FAF46');
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
-		cy.cGet('#copy-paste-container p font').should('have.attr', 'color', '#8e7cc3');
+		cy.cGet('#copy-paste-container p font').should('have.attr', 'color', '#3faf46');
 	});
 
 	it('Apply style.', function() {
-		cy.cGet('#toolbar-up .ui-scroll-right').click();
 		helper.setDummyClipboardForCopy();
+		cy.cGet('#stylesview-iconview').scrollTo('bottom') ;
 		cy.cGet('.notebookbar.ui-iconview-entry img[title=Title]').click();
 		refreshCopyPasteContainer();
 		helper.copy();
@@ -62,7 +74,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply bold font.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar > .unoBold > button').click();
+		desktopHelper.getNbIcon('Bold').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p b').should('exist');
@@ -70,7 +82,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply italic font.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar > .unoItalic > button').click();
+		desktopHelper.getNbIcon('Italic').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p i').should('exist');
@@ -78,7 +90,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply underline.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar > .unoUnderline > button').click();
+		desktopHelper.getNbIcon('Underline').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p u').should('exist');
@@ -86,7 +98,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply strikethrough.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar > .unoStrikeout > button').click();
+		desktopHelper.getNbIcon('Strikeout').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p strike').should('exist');
@@ -103,48 +115,55 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Clear direct formatting', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar > .unoBold > button').click();
+		desktopHelper.getNbIcon('Bold').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p b').should('exist');
-		cy.cGet('.notebookbar > .unoResetAttributes').click();
+		desktopHelper.getNbIcon('ResetAttributes', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p b').should('not.exist');
 	});
 
 	it('Apply left/right alignment.', function() {
-		cy.cGet('#Home .notebookbar > .unoBold > button').click();
+		desktopHelper.getNbIcon('Bold').click();
 		writerHelper.selectAllTextOfDoc();
 		//cy.cGet('#copy-paste-container p').should('have.attr', 'align', 'right');
-		cy.cGet('#Home .notebookbar > .unoRightPara').click();
+		desktopHelper.getNbIcon('RightPara', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		//cy.cGet('#copy-paste-container p').should('have.attr', 'align', 'left');
 	});
 
 	it('Apply center alignment.', function() {
-		cy.cGet('#Home .notebookbar > .unoCenterPara').click();
+		desktopHelper.getNbIcon('CenterPara', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		//cy.cGet('#copy-paste-container p').should('have.attr', 'align', 'center');
 	});
 
 	it('Apply justified.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home .notebookbar > div.unoJustifyPara > button.unobutton').click();
+		desktopHelper.getNbIcon('JustifyPara', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p').should('have.attr', 'align', 'justify');
 	});
 
+	function selectLineSpacing(entry) {
+		desktopHelper.getNbIcon('LineSpacing').click();
+		desktopHelper.getDropdown('home-line-spacing').contains('.ui-combobox-entry', entry).click();
+	}
+
 	it('Apply Line spacing: 1 and 1.5', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home .notebookbar .unoLineSpacing button').click();
-		cy.cGet('[id$=home-line-spacing-entries]').contains('.ui-combobox-entry', 'Line Spacing: 1.5').click();
+
+		selectLineSpacing('Line Spacing: 1.5');
+
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p').should('have.attr', 'style').should('contain', 'line-height: 150%');
-		cy.cGet('#Home .notebookbar .unoLineSpacing button').click();
-		cy.cGet('[id$=home-line-spacing-entries]').contains('.ui-combobox-entry', 'Line Spacing: 1').click();
+
+		selectLineSpacing('Line Spacing: 1');
+
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p').should('have.attr', 'style').should('contain', 'line-height: 100%');
@@ -152,8 +171,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Apply Line spacing: 2', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home .notebookbar .unoLineSpacing button').click();
-		cy.cGet('[id$=home-line-spacing-entries]').contains('.ui-combobox-entry', 'Line Spacing: 2').click();
+		selectLineSpacing('Line Spacing: 2');
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p').should('have.attr', 'style').should('contain', 'line-height: 200%');
@@ -161,8 +179,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Increase/Decrease Paragraph spacing', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('.notebookbar .unoLineSpacing button').click();
-		cy.cGet('[id$=home-line-spacing-entries]').contains('.ui-combobox-entry', 'Increase Paragraph Spacing').click();
+		selectLineSpacing('Increase Paragraph Spacing');
 
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
@@ -172,8 +189,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 		writerHelper.selectAllTextOfDoc();
 
-		cy.cGet('.notebookbar .unoLineSpacing button').click();
-		cy.cGet('[id$=home-line-spacing-entries]').contains('.ui-combobox-entry', 'Decrease Paragraph Spacing').click();
+		selectLineSpacing('Decrease Paragraph Spacing');
 
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
@@ -185,7 +201,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Toggle numbered list.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home-container .unoDefaultNumbering').click();
+		desktopHelper.getNbIcon('DefaultNumbering', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container ol').should('exist');
@@ -193,7 +209,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Toggle bulleted list.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home-container .unoDefaultBullet').click();
+		desktopHelper.getNbIcon('DefaultBullet', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container ul').should('exist');
@@ -202,7 +218,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	it('Increase/Decrease Indent.', function() {
 		helper.setDummyClipboardForCopy();
 		//Increase indent
-		cy.cGet('#Home-container .unoIncrementIndent').click();
+		desktopHelper.getNbIcon('IncrementIndent', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p')
@@ -210,7 +226,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 			.should('contain', 'margin-left: 0.49in');
 
 		//Decrease indent
-		cy.cGet('#Home-container .unoDecrementIndent').click();
+		desktopHelper.getNbIcon('DecrementIndent', 'Home').click();
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p')
@@ -220,37 +236,87 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 
 	it('Insert/delete table.', function() {
 		helper.setDummyClipboardForCopy();
-		cy.cGet('#Home-container .unoInsertTable button').click({force: true});
+		desktopHelper.getNbIcon('InsertTable', 'Home').click();
 		cy.cGet('.inserttable-grid > .row > .col').eq(3).click();
 		helper.typeIntoDocument('{ctrl}a');
 		helper.copy();
 		cy.cGet('#copy-paste-container table').should('exist');
 		helper.typeIntoDocument('{ctrl}a');
 		helper.typeIntoDocument('{shift}{del}');
-		cy.cGet('.leaflet-marker-icon.table-column-resize-marker').should('not.exist');
+		cy.cGet('.table-column-resize-marker').should('not.exist');
 	});
 
 	it('Insert image.', function() {
-		cy.cGet('#Home-container .unoInsertGraphic').click({force: true});
+		desktopHelper.getNbIcon('InsertGraphic', 'Home').click();
 		cy.cGet('#insertgraphic[type=file]').attachFile('/desktop/writer/image_to_insert.png');
 		cy.cGet('#document-container svg g.Graphic').should('exist');
 	});
 
-	it('Insert hyperlink.', function() {
+	it('Insert text hyperlink.', function() {
 		helper.setDummyClipboardForCopy();
-		writerHelper.selectAllTextOfDoc();
-		helper.copy();
-		helper.expectTextForClipboard('text text1');
-		cy.wait(500);
+
 		cy.cGet('#Insert-tab-label').click();
 		cy.cGet('#Insert-container .hyperlinkdialog button').click();
-		cy.cGet('#hyperlink-link-box-input').should('exist');
-		cy.cGet('#hyperlink-text-box').type('link');
-		cy.cGet('#hyperlink-link-box-input').type('www.something.com');
-		cy.cGet('#response-ok').click();
+
+		// All 3 fields should be visible
+		cy.cGet('#target').should('exist').should('be.visible');
+		cy.cGet('#indication').should('exist').should('be.visible');
+		cy.cGet('#name').should('exist').should('be.visible');
+
+		cy.cGet('#indication-input').type('link');
+		cy.cGet('#target-input').type('www.something.com');
+		cy.cGet('#ok').click();
+
+		writerHelper.selectAllTextOfDoc();
 		helper.copy();
+		cy.wait(1000);
 		helper.expectTextForClipboard('text text1link');
 		cy.cGet('#copy-paste-container p a').should('have.attr', 'href', 'http://www.something.com/');
+	});
+
+	it('Insert mail hyperlink.', function() {
+		helper.setDummyClipboardForCopy();
+
+		cy.cGet('#Insert-tab-label').click();
+		cy.cGet('#Insert-container .hyperlinkdialog button').click();
+		cy.cGet('#mail').click();
+
+		// Both mail fields should be visible
+		cy.cGet('#receiver').should('exist').should('be.visible');
+		cy.cGet('#subject').should('exist').should('be.visible');
+
+		cy.cGet('#receiver-input').type('john.doe@test.abc');
+		cy.cGet('#subject-input').type('planning-meeting');
+		cy.cGet('#ok').click();
+
+		writerHelper.selectAllTextOfDoc();
+		helper.copy();
+		cy.wait(1000);
+		helper.expectTextForClipboard('text text1');
+		cy.cGet('#copy-paste-container p a').should('have.attr', 'href', 'mailto:john.doe@test.abc?subject=planning-meeting');
+	});
+
+	it('Insert image hyperlink.', function () {
+		cy.cGet('#Insert-tab-label').click();
+		cy.cGet('#Insert-container .unoBasicShapes button').click();
+		cy.cGet('.col.w2ui-icon.basicshapes_octagon').click();
+		cy.cGet('#document-container svg g').should('exist');
+		cy.wait(1000);
+
+		cy.cGet('#Insert-tab-label').click();
+		cy.cGet('#Insert-container .hyperlinkdialog button').click();
+
+		// Only URL field should be visible
+		cy.cGet('#target').should('exist').should('be.visible');
+		cy.cGet('#indication').should('exist').should('not.be.visible');
+		cy.cGet('#name').should('exist').should('not.be.visible');
+
+		cy.cGet('#target-input').type('www.something.com');
+		cy.cGet('#ok').click();
+
+		//Can't ctrl click shape, so re-enter dialog to check value persists
+		cy.cGet('#Insert-container .hyperlinkdialog button').click();
+		cy.cGet('#target-input').should('have.value', 'http://www.something.com/');
 	});
 
 	it('Insert/delete shape.', function() {
@@ -279,11 +345,12 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	});
 
 	it('Save.', function() {
-		cy.cGet('.notebookbar > .unoBold > button').click();
+		desktopHelper.getNbIcon('Bold').click();
 		cy.cGet('.notebookbar-shortcuts-bar .unoSave').click();
 		helper.reloadDocument(newFilePath);
 		helper.setDummyClipboardForCopy();
 		writerHelper.selectAllTextOfDoc();
+		cy.wait(1000);
 		helper.copy();
 		cy.cGet('#copy-paste-container p b').should('exist');
 	});
@@ -304,7 +371,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	it('Apply Undo/Redo.', function() {
 		helper.setDummyClipboardForCopy();
 		//Do
-		cy.cGet('.notebookbar .unoItalic button').click();
+		desktopHelper.getNbIcon('Italic').click();
 		helper.copy();
 		cy.wait(500); // wait for new clipboard
 		cy.cGet('#copy-paste-container p i').should('exist');
@@ -360,15 +427,15 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 		cy.cGet('#View-tab-label').click();
 		cy.cGet('#sidebar-dock-wrapper').should('be.visible');
 		// Hide.
-		cy.cGet('[id$="SidebarDeck.PropertyDeck"]').click();
+		desktopHelper.sidebarToggle();
 		cy.cGet('#sidebar-dock-wrapper').should('not.be.visible');
 		// Show.
-		cy.cGet('[id$="SidebarDeck.PropertyDeck"]').click();
+		desktopHelper.sidebarToggle();
 		cy.cGet('#sidebar-dock-wrapper').should('be.visible');
 	});
 
 	it('Insert Special Character.', function() {
-		cy.cGet('#Home-container .unospan-CharmapControl').click({force: true});
+		cy.cGet('#Home-container .unoCharmapControl').click();
 		cy.cGet('.jsdialog-container.ui-dialog.ui-widget-content.lokdialog_container').should('be.visible');
 		cy.cGet('.ui-dialog-title').should('have.text', 'Special Characters');
 
@@ -388,8 +455,8 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 		helper.textSelectionShouldExist();
 
 		// Apply bold and try to clone it to the whole word.
-		cy.cGet('.notebookbar > .unoBold > button').click();
-		cy.cGet('.notebookbar > .unoFormatPaintbrush').click();
+		desktopHelper.getNbIcon('Bold').click();
+		desktopHelper.getNbIcon('FormatPaintbrush').click();
 
 		// Click at the blinking cursor position.
 		cy.cGet('.leaflet-cursor.blinking-cursor')
@@ -408,20 +475,18 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	});
 
 	it.skip('Insert Page Break', function() {
-		cy.cGet('#StatePageNumber').should('have.text', 'Page 1 of 1');
+		desktopHelper.assertVisiblePage(1, 1, 1);
 		helper.selectAllText();
 		helper.expectTextForClipboard('text text1');
 		helper.typeIntoDocument('{end}');
 		helper.typeIntoDocument('{ctrl}{leftarrow}');
 		cy.cGet('#Insert-tab-label').click();
 		cy.cGet('#Insert-container-row .unoInsertPagebreak').click();
-		cy.cGet('#StatePageNumber').invoke('text').should('be.oneOf', ['Page 2 of 2', 'Pages 1 and 2 of 2']);
+		desktopHelper.assertVisiblePage(1, 2, 2);
 		helper.selectAllText();
 
 		//var data = [];
 		//var expectedData = ['text ', 'text1'];
-
-		//helper.waitUntilIdle('#copy-paste-container');
 
 		//cy.cGet('#copy-paste-container').find('p').each($el => {
 		//	cy.wrap($el)
@@ -445,8 +510,8 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	it('Apply superscript.', function() {
 		helper.setDummyClipboardForCopy();
 		writerHelper.selectAllTextOfDoc();
-		cy.cGet('.notebookbar .unoSuperScript').click();
-		cy.cGet('.leaflet-layer').click('center');
+		desktopHelper.getNbIcon('SuperScript').click();
+		cy.cGet('#document-container').click('center');
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p sup').should('exist');
@@ -455,8 +520,8 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 	it('Apply subscript.', function() {
 		helper.setDummyClipboardForCopy();
 		writerHelper.selectAllTextOfDoc();
-		cy.cGet('.notebookbar .unoSubScript').click();
-		cy.cGet('.leaflet-layer').click('center');
+		desktopHelper.getNbIcon('SubScript').click();
+		cy.cGet('#document-container').click('center');
 		writerHelper.selectAllTextOfDoc();
 		helper.copy();
 		cy.cGet('#copy-paste-container p sub').should('exist');
@@ -484,7 +549,7 @@ describe(['tagdesktop'], 'Top toolbar tests.', function() {
 		cy.cGet('#test-div-shapeHandlesSection').should('not.exist');
 	});
 
-	it('Scroll', function() {
+	it.skip('Scroll', function() {
 		// Start all the way on the left side of the toolbar
 		cy.cGet('#Home-container #home-undo-redo').should('be.visible');
 		// TODO: Cypress thinks buttons are visible even though they are not

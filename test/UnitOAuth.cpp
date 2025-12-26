@@ -37,6 +37,7 @@ class UnitOAuth : public WopiTestServer
     )
     _phase;
 
+    inline static const std::string access_token_ttl_value = "123456";
     std::string _credential;
     bool _checkFileInfoCalled;
     bool _getFileCalled;
@@ -53,6 +54,18 @@ public:
     /// The actual assert of the authentication.
     void assertRequest(const Poco::Net::HTTPRequest& request)
     {
+        TST_LOG("URI: " << request.getURI());
+
+        LOK_ASSERT(request.getURI().find("access_token_ttl") != std::string::npos);
+        for (const auto& param : Poco::URI(request.getURI()).getQueryParameters())
+        {
+            if (param.first == "access_token_ttl")
+            {
+                LOK_ASSERT_EQUAL_STR(access_token_ttl_value, param.second);
+                break;
+            }
+        }
+
         // check that the request contains the Authorization: header
         try
         {
@@ -68,7 +81,7 @@ public:
             }
             else
             {
-                LOK_ASSERT_FAIL("Unexpected phase: " + toString(_phase));
+                LOK_ASSERT_FAIL("Unexpected phase: " << name(_phase));
             }
         }
         catch (const std::exception& ex)
@@ -108,7 +121,7 @@ public:
 
     bool onDocumentLoaded(const std::string& message) override
     {
-        LOG_TST("Doc (" << name(_phase) << "): [" << message << ']');
+        TST_LOG("Doc (" << name(_phase) << "): [" << message << ']');
 
         LOK_ASSERT_EQUAL_MESSAGE("CheckFileInfo was not invoked", true, _checkFileInfoCalled);
         _checkFileInfoCalled = false;
@@ -135,7 +148,8 @@ public:
                 WSD_CMD("closedocument");
                 TRANSITION_STATE(_phase, Phase::LoadingHeader);
                 _credential = "basic==";
-                initWebsocket("/wopi/files/1?access_header=Authorization: Basic " + _credential);
+                initWebsocket("/wopi/files/1?access_header=Authorization: Basic " + _credential +
+                              "&access_token_ttl=" + access_token_ttl_value);
                 WSD_CMD("load url=" + getWopiSrc());
                 break;
             case Phase::LoadingHeader:
@@ -144,7 +158,7 @@ public:
                 passTest("Finished all cases successfully");
                 break;
             default:
-                LOK_ASSERT_FAIL("Unexpected phase: " + toString(_phase));
+                LOK_ASSERT_FAIL("Unexpected phase: " << name(_phase));
         }
 
         return true;
@@ -158,7 +172,8 @@ public:
             {
                 TRANSITION_STATE(_phase, Phase::LoadToken);
                 _credential = "s3hn3ct0k3v";
-                initWebsocket("/wopi/files/0?access_token=" + _credential);
+                initWebsocket("/wopi/files/0?access_token=" + _credential +
+                              "&access_token_ttl=" + access_token_ttl_value);
 
                 WSD_CMD("load url=" + getWopiSrc());
             }
@@ -170,7 +185,8 @@ public:
             {
                 TRANSITION_STATE(_phase, Phase::LoadingHeader);
                 _credential = "basic==";
-                initWebsocket("/wopi/files/1?access_header=Authorization: Basic " + _credential);
+                initWebsocket("/wopi/files/1?access_header=Authorization: Basic " + _credential +
+                              "&access_token_ttl=" + access_token_ttl_value);
                 WSD_CMD("load url=" + getWopiSrc());
             }
             break;

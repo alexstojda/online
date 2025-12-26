@@ -1,13 +1,16 @@
-declare var L: any;
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
+/* global L */
 
 namespace cool {
 
 function PointConstruct(x: number, y: number, round?: boolean): Point {
-	return new L.Point(x, y, round);
+	return new cool.Point(x, y, round);
 }
 
 function toPoint(x: PointConvertable | number, y?: number, round?: boolean): Point {
-	return L.point(x, y, round);
+	return cool.Point.toPoint(x, y, round);
 }
 
 /// Bounds represents a rectangular area on the screen.
@@ -20,11 +23,21 @@ export class Bounds {
 		if (!a)
 			return;
 
-		var points = b ? [<PointConvertable>a, b] : <PointConvertable[]>a;
-
-		for (var i = 0, len = points.length; i < len; i++) {
-			this.extend(points[i]);
-		}
+		// Bounds construction is called very often so it's important to avoid object construction
+		// when possible. This is the reason for the amount of convolution here (that and ES6's lack
+		// of multiple constructors...)
+		if (b) {
+			this.min = a instanceof Point ? a.clone() : toPoint(<PointConvertable>a);
+			const maybeMax = b instanceof Point ? b.clone() : toPoint(b);
+			if (maybeMax.x >= this.min.x && maybeMax.y >= this.min.y)
+				this.max = maybeMax;
+			else {
+				this.max = this.min.clone();
+				this.extend(maybeMax);
+			}
+		} else
+			for (const point of <PointConvertable[]>a)
+				this.extend(point);
 	}
 
 	public static parse(rectString: string): Bounds {
@@ -103,6 +116,13 @@ export class Bounds {
 		this.max.y = Math.round(this.max.y);
 	}
 
+	public translate(x: number, y: number): void {
+		this.min.x += x;
+		this.min.y += y;
+		this.max.x += x;
+		this.max.y += y;
+	}
+
 	public getBottomLeft(): Point {
 		return PointConstruct(this.min.x, this.max.y);
 	}
@@ -126,19 +146,13 @@ export class Bounds {
 	public contains(obj: Bounds | PointConvertable): boolean {
 		var min, max;
 
-		var bounds: Bounds;
-		var point: Point;
-		if (Array.isArray(obj) || obj instanceof L.Point || obj instanceof SimplePoint) {
-			point = toPoint(<PointConvertable>obj);
+		if (Array.isArray(obj) || obj instanceof cool.Point || obj instanceof SimplePoint) {
+			var point: Point = toPoint(<PointConvertable>obj);
+			min = max = point;
 		} else {
-			bounds = Bounds.toBounds(obj);
-		}
-
-		if (bounds) {
+			var bounds: Bounds = Bounds.toBounds(obj);
 			min = bounds.min;
 			max = bounds.max;
-		} else {
-			min = max = point;
 		}
 
 		return (min.x >= this.min.x) &&
@@ -158,6 +172,31 @@ export class Bounds {
 		var yIntersects = (max2.y >= min.y) && (min2.y <= max.y);
 
 		return xIntersects && yIntersects;
+	}
+
+	public distanceTo(bounds: Bounds): number {
+		var min = this.min;
+		var max = this.max;
+		var min2 = bounds.min;
+		var max2 = bounds.max;
+		var xIntersects = (max2.x >= min.x) && (min2.x <= max.x);
+		var yIntersects = (max2.y >= min.y) && (min2.y <= max.y);
+
+		if (xIntersects) {
+			if (yIntersects) return 0;
+			if (max2.y < min.y) return min.y - max2.y;
+			return min2.y - max.y;
+		}
+
+		if (yIntersects) {
+			if (max2.x < min.x) return min.x - max2.x;
+			return min2.x - max.x;
+		}
+
+		var xdist = (min.x > max2.x) ? (min.x - max2.x) : (min2.x - max.x);
+		var ydist = (min.y > max2.y) ? (min.y - max2.y) : (min2.y - max.y);
+
+		return Math.sqrt(xdist * xdist + ydist * ydist);
 	}
 
 	// non-destructive, returns a new Bounds
@@ -208,7 +247,7 @@ export class Bounds {
 	}
 
 	public clamp(obj: Point | Bounds): Point | Bounds {
-		if (obj instanceof L.Point) {
+		if (obj instanceof cool.Point) {
 			return PointConstruct(
 				this.clampX((obj as Point).x),
 				this.clampY((obj as Point).y)
@@ -258,6 +297,3 @@ export class Bounds {
 }
 
 }
-
-L.Bounds = cool.Bounds;
-L.bounds = cool.Bounds.toBounds;

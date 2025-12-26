@@ -1,4 +1,6 @@
-declare var L: any;
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 
 /*
  * CPath is the base class for all vector paths like polygons and circles used to draw overlay
@@ -260,7 +262,14 @@ abstract class CPath extends CEventsHandler {
 
 	clickTolerance(): number {
 		// used when doing hit detection for Canvas layers
-		return (this.stroke ? this.weight / 2 : 0) + ((window as typeof window & { touch: any; }).touch.hasAnyTouchscreen() ? 10 : 0);
+		return (
+			(this.stroke ? this.weight / 2 : 0) +
+			((
+				window as typeof window & { touch: any }
+			).touch.currentlyUsingTouchscreen()
+				? 10
+				: 0)
+		);
 	}
 
 	setCursorType(cursorType: string) {

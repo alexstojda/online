@@ -22,7 +22,6 @@
 #include <Poco/AutoPtr.h>
 
 using Poco::Util::XMLConfiguration;
-using Poco::Util::AbstractConfiguration;
 
 static const std::string NET_POST_ALLOW_HOST = ".net.post_allow.host";
 static const std::string STORAGE_WOPI_HOST = ".storage.wopi.host";
@@ -51,7 +50,14 @@ static const std::map<std::string, std::string> specialAttribute {
 static std::vector<std::string> netPostAllow, netPostAllowDesc, wopiHost, wopiHostDesc, wopiHostAllow;
 static bool netPostAllowAdded, wopiHostAdded;
 
-void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &targetConfig, const std::string sourceLevel)
+static std::string getTargetKey(int id, const std::string& commonKeyPart)
+{
+    if (id == 0)
+        return commonKeyPart;
+    return commonKeyPart + "[" + std::to_string(id) + "]";
+}
+
+void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &targetConfig, const std::string& sourceLevel)
 {
     Poco::Util::AbstractConfiguration::Keys subKeys;
     sourceConfig.keys(sourceLevel, subKeys);
@@ -62,10 +68,11 @@ void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &target
     }
     if (subKeys.empty())
     {
-        const std::string sourceElement = sourceConfig.getString(sourceLevel);
+        std::string sourceElement = sourceConfig.getString(sourceLevel);
         // Need to handle keys pointing to multiple elements separately, refer to multiElems
-        const std::string commonKeyPart =
-                sourceLevel.find("[") != std::string::npos ? sourceLevel.substr(0, sourceLevel.find("[")) : sourceLevel;
+        const std::string commonKeyPart = sourceLevel.find('[') != std::string::npos
+                                              ? sourceLevel.substr(0, sourceLevel.find('['))
+                                              : sourceLevel;
         if (multiElems.find(commonKeyPart) != multiElems.end())
         {
             if (commonKeyPart == ".logging.file.property")
@@ -87,7 +94,7 @@ void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &target
                 int id = 0;
                 while (!foundKey)
                 {
-                    const std::string targetKey(id == 0 ? commonKeyPart : commonKeyPart + "[" + std::to_string(id) + "]");
+                    const std::string targetKey(getTargetKey(id, commonKeyPart));
                     if (!targetConfig.has(targetKey))
                     {
                         break;
@@ -108,12 +115,12 @@ void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &target
                 // Keep record of these configs for post processing
                 if (commonKeyPart == NET_POST_ALLOW_HOST)
                 {
-                    netPostAllow.push_back(sourceElement);
+                    netPostAllow.push_back(std::move(sourceElement));
                     netPostAllowDesc.push_back(sourceConfig.getString(sourceLevel + "[@desc]"));
                 }
                 else if (commonKeyPart == STORAGE_WOPI_HOST)
                 {
-                    wopiHost.push_back(sourceElement);
+                    wopiHost.push_back(std::move(sourceElement));
                     wopiHostDesc.push_back(sourceConfig.getString(sourceLevel + "[@desc]"));
                     wopiHostAllow.push_back(sourceConfig.getString(sourceLevel + "[@allow]"));
                 }
@@ -133,7 +140,7 @@ void MigrateLevel(const XMLConfiguration &sourceConfig, XMLConfiguration &target
                     }
                     id++;
                 }
-                const std::string targetKey(id == 0 ? commonKeyPart : commonKeyPart + "[" + std::to_string(id) + "]");
+                const std::string targetKey(getTargetKey(id, commonKeyPart));
                 std::cout << targetKey << ": added \"" << sourceElement << "\"." << std::endl;
 
                 targetConfig.setString(targetKey, sourceElement);
@@ -259,7 +266,8 @@ void PostProcess(XMLConfiguration &targetConfig)
     }
 }
 
-int MigrateConfig(std::string oldConfigFile, std::string newConfigFile, bool write) {
+int MigrateConfig(const std::string& oldConfigFile, const std::string& newConfigFile, bool write)
+{
     PreProcess();
     Poco::AutoPtr<XMLConfiguration> oldXMLConfig(new XMLConfiguration(oldConfigFile));
     Poco::AutoPtr<XMLConfiguration> newXMLConfig(new XMLConfiguration(newConfigFile));
@@ -269,3 +277,5 @@ int MigrateConfig(std::string oldConfigFile, std::string newConfigFile, bool wri
         newXMLConfig->save(newConfigFile);
     return 0;
 }
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

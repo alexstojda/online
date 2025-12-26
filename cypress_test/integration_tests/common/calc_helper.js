@@ -8,20 +8,33 @@ var helper = require('./helper');
 function clickFormulaBar() {
 	cy.log('>> clickFormulaBar - start');
 
-	// The inputbar_container is 100% width, which
-	// can extend behind the sidebar. So we can't
-	// rely on its width. Instead, we rely on the
-	// canvas, which is accurately sized.
-	// N.B. Setting the width of the inputbar_container
-	// is futile because it messes the size of the canvas.
-	helper.doIfOnMobile(function() {
-		helper.waitUntilIdle('#sc_input_window.formulabar');
-	});
-
 	cy.cGet('#sc_input_window.formulabar').focus();
 	cy.cGet('body').trigger('mouseover');
 
 	cy.log('<< clickFormulaBar - end');
+}
+
+// Click on the document at the specified offset from the origin of cell A1.
+function clickAtOffset(offsetX, offsetY, right=false) {
+	cy.log('>> clickAtOffset - start');
+	cy.log('Param - offsetX: ' + offsetX);
+	cy.log('Param - offsetY: ' + offsetY);
+
+	cy.cGet('#map').should('exist');
+	cy.cGet('#map').should('be.visible');
+	cy.cGet('#map')
+		.then(function(items) {
+			expect(items).to.have.lengthOf(1);
+			const XPos = items[0].getBoundingClientRect().left + 2 + offsetX;
+			const YPos = items[0].getBoundingClientRect().top + 2 + offsetY;
+			if (right) {
+				cy.cGet('body').rightclick(XPos, YPos);
+			} else {
+				cy.cGet('body').click(XPos, YPos);
+			}
+		});
+
+	cy.log('<< clickAtOffset - end');
 }
 
 // Click on the first cell of the sheet (A1), we use the document
@@ -29,7 +42,7 @@ function clickFormulaBar() {
 // start of the sheet.
 // Parameters:
 // firstClick - this is the first click on the cell. It matters on mobile only,
-//              becasue on mobile, the first click/tap selects the cell, the second
+//              because on mobile, the first click/tap selects the cell, the second
 //              one makes the document to step in cell editing.
 // dblClick - to do a double click or not. The result of double click is that the cell
 //            editing it triggered both on desktop and mobile.
@@ -39,13 +52,16 @@ function clickOnFirstCell(firstClick = true, dblClick = false, isA1 = true) {
 	cy.log('Param - dblClick: ' + dblClick);
 
 	// Use the tile's edge to find the first cell's position
-	cy.cGet('#map')
+	cy.cGet('#canvas-container').should('exist');
+	cy.wait(100);
+
+	cy.cGet('#canvas-container')
 		.then(function(items) {
 			expect(items).to.have.lengthOf(1);
-			var XPos = items[0].getBoundingClientRect().left + 10;
-			var YPos = items[0].getBoundingClientRect().top + 10;
+			const XPos = items[0].getBoundingClientRect().left + 60;
+			const YPos = items[0].getBoundingClientRect().top + 30;
 			if (dblClick)
-				cy.cGet('body').click(XPos, YPos).dblclick(XPos, YPos);
+				cy.cGet('body').dblclick(XPos, YPos);
 			else
 				cy.cGet('body').click(XPos, YPos);
 		});
@@ -56,16 +72,46 @@ function clickOnFirstCell(firstClick = true, dblClick = false, isA1 = true) {
 		cy.cGet('.cursor-overlay .blinking-cursor').should('be.visible');
 	}
 
-	if (isA1)
-		cy.cGet('input#addressInput-input').should('have.prop', 'value', 'A1');
+	if (isA1) {
+		cy.cGet(helper.addressInputSelector)
+			.should('have.prop', 'value', 'A1');
+	}
 
 	cy.log('<< clickOnFirstCell - end');
+}
+
+/*
+	This function assumes:
+	* The cell to be clicked is visible.
+	* Row and column width / height values are the same.
+	* Indexes are 1-based.
+*/
+function clickOnACell(currentColumnIndex, currentRowIndex, clickColumnIndex, clickRowIndex) {
+	cy.log('>> clickOnACell - start');
+	cy.log('Param - clickColumnIndex: ' + clickColumnIndex);
+	cy.log('Param - clickRowIndex: ' + clickRowIndex);
+
+	// Use the tile's edge to find the first cell's position
+	cy.cGet('#test-div-OwnCellCursor').should('exist');
+	cy.cGet('#test-div-OwnCellCursor')
+		.then(function(items) {
+			expect(items).to.have.lengthOf(1);
+			const clientRect = items[0].getBoundingClientRect();
+			const currentX = clientRect.left + parseInt(clientRect.width * 0.5);
+			const currentY = clientRect.top + parseInt(clientRect.height * 0.5);
+			const clickX = currentX + clientRect.width * (clickColumnIndex - currentColumnIndex);
+			const clickY = currentY + clientRect.height * (clickRowIndex - currentRowIndex);
+			cy.cGet('body').click(clickX, clickY);
+		});
+
+	cy.log('>> clickOnACell - end');
 }
 
 // Double click on the A1 cell.
 function dblClickOnFirstCell() {
 	cy.log('>> dblClickOnFirstCell - start');
 
+	helper.typeIntoInputField(helper.addressInputSelector, 'A1');
 	clickOnFirstCell(false, true);
 
 	cy.log('<< dblClickOnFirstCell - end');
@@ -73,7 +119,7 @@ function dblClickOnFirstCell() {
 
 // Type some text into the formula bar.
 // Parameters:
-// text - the text the method type into the formula bar's intput field.
+// text - the text the method type into the formula bar's input field.
 function typeIntoFormulabar(text) {
 	cy.log('>> typeIntoFormulabar - start');
 
@@ -120,7 +166,7 @@ function removeTextSelection() {
 
 				moveY += 1.0;
 				var regex = /A([0-9]+):(AMJ|XFD)\1$/;
-				return cy.cGet('input#addressInput-input')
+				return cy.cGet(helper.addressInputSelector)
 					.should('have.prop', 'value')
 					.then(function(value) {
 						return regex.test(value);
@@ -131,12 +177,30 @@ function removeTextSelection() {
 	cy.log('<< removeTextSelection - end');
 }
 
-// Select the enitre sheet, using the select all button
+// Click on rows header and select Hide rows from a context menu
+function hideSelectedRows() {
+	cy.log('>> hideSelectedRows - start');
+
+	cy.cGet('[id="test-div-row header"]')
+		.then(function(header) {
+			expect(header).to.have.lengthOf(1);
+			var rect = header[0].getBoundingClientRect();
+			var posX = (rect.right + rect.left) / 2.0;
+			var posY = (rect.top + rect.bottom) / 2.0;
+			cy.cGet('body').rightclick(posX, posY);
+			cy.cGet('body').contains('.context-menu-item', 'Hide Rows').click();
+			cy.cGet('.context-menu-list').should('not.be.visible');
+		});
+
+	cy.log('<< hideSelectedRows - end');
+}
+
+// Select the entire sheet using the "Select All" button
 // at the corner of the row and column headers.
-// An additional thing, what this method do is remove
-// preexisitng text selection. Otherwise with having the
-// text selection, select all would select only the content
-// of the currently edited cell instead of the whole table.
+// Additionally, this method removes any preexisting text selection.
+// Without this step, if there is an active text selection,
+// the "Select All" command would only select the content
+// of the currently edited cell instead of the entire table.
 function selectEntireSheet() {
 	cy.log('>> selectEntireSheet - start');
 
@@ -156,7 +220,7 @@ function selectEntireSheet() {
 	});
 
 	var regex = /^A1:(AMJ|XFD)1048576$/;
-	cy.cGet('input#addressInput-input')
+	cy.cGet(helper.addressInputSelector)
 		.should('have.prop', 'value')
 		.then(function(value) {
 			return regex.test(value);
@@ -182,7 +246,7 @@ function selectFirstColumn() {
 			cy.cGet('body').click(XPos, YPos);
 		});
 
-		cy.cGet('input#addressInput-input').should('have.prop', 'value', 'A1:A1048576');
+		cy.cGet(helper.addressInputSelector).should('have.prop', 'value', 'A1:A1048576');
 
 	cy.log('<< selectFirstColumn - end');
 }
@@ -234,7 +298,7 @@ function assertDataClipboardTable(expectedData) {
 function selectCellsInRange(range) {
 	cy.log('>> selectCellsInRange - start');
 
-	cy.cGet('#formulabar #addressInput-input')
+	cy.cGet(helper.addressInputSelector)
 		.clear()
 		.type(range + '{enter}');
 
@@ -244,27 +308,36 @@ function selectCellsInRange(range) {
 function openAutoFilterMenu(secondColumn) {
 	cy.log('>> openAutoFilterMenu - start');
 
-	let XPos = 95;
-	let YPos = 10;
+	// Get canvas contiainer first.
+	// Then get its coordinatates relative to window.
+	// Then calculate the position of the autofilter easier.
+	cy.cGet('#canvas-container').then(function(items) {
+		const clientRect = items[0].getBoundingClientRect();
+		let XPos = clientRect.left;
+		let YPos = clientRect.top;
 
-	if (secondColumn) {
-		XPos += 105;
-	}
-
-	cy.cGet('#map').then(function(items) { expect(items).to.have.lengthOf(1); });
-	cy.cGet('#map').click(XPos, YPos);
+		cy.cGet('body').click(XPos + 147 + (secondColumn ? 103 : 0), YPos + 25);
+	});
 
 	cy.log('<< openAutoFilterMenu - end');
 }
 
 function assertNumberofSheets(n) {
+	cy.log('>> assertNumberofSheets - start');
+
 	cy.cGet('button.spreadsheet-tab').should('have.length', n);
+
+	cy.log('>> assertNumberofSheets - end');
 }
 
 function selectOptionFromContextMenu(contextMenu) {
+	cy.log('>> selectOptionFromContextMenu - start');
+
 	cy.wait(1000);
 	cy.cGet('.spreadsheet-tab.spreadsheet-tab-selected').rightclick();
 	cy.cGet('body').contains('.context-menu-link', contextMenu).click();
+
+	cy.log('>> selectOptionFromContextMenu - end');
 }
 
 function selectOptionMobileWizard(menu) {
@@ -282,7 +355,9 @@ function selectOptionMobileWizard(menu) {
 		.click();
 }
 
+module.exports.clickAtOffset = clickAtOffset;
 module.exports.clickOnFirstCell = clickOnFirstCell;
+module.exports.clickOnACell = clickOnACell;
 module.exports.dblClickOnFirstCell = dblClickOnFirstCell;
 module.exports.clickFormulaBar = clickFormulaBar;
 module.exports.typeIntoFormulabar = typeIntoFormulabar;
@@ -296,3 +371,4 @@ module.exports.openAutoFilterMenu = openAutoFilterMenu;
 module.exports.assertNumberofSheets = assertNumberofSheets;
 module.exports.selectOptionFromContextMenu = selectOptionFromContextMenu;
 module.exports.selectOptionMobileWizard = selectOptionMobileWizard;
+module.exports.hideSelectedRows = hideSelectedRows;

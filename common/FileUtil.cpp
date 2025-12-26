@@ -11,48 +11,54 @@
 
 #include <config.h>
 
+#include <common/Anonymizer.hpp>
+#include <common/Log.hpp>
+#include <common/Unit.hpp>
+#include <common/Util.hpp>
+
 #include "FileUtil.hpp"
-
-#include <dirent.h>
-#include <exception>
-#include <ftw.h>
-#include <grp.h>
-#include <pwd.h>
-#include <stdexcept>
-#include <sys/time.h>
-#ifdef __linux__
-#include <sys/vfs.h>
-#elif defined IOS
-#import <Foundation/Foundation.h>
-#elif defined __FreeBSD__
-#include <sys/param.h>
-#include <sys/mount.h>
-#endif
-
-#include <fcntl.h>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <mutex>
-#include <string>
 
 #include <Poco/File.h>
 #include <Poco/Path.h>
 
-#include "Log.hpp"
-#include "Util.hpp"
-#include "Unit.hpp"
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <fcntl.h>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string>
 
 namespace FileUtil
 {
     std::string createRandomDir(const std::string& path)
     {
         std::string name = Util::rng::getFilename(64);
-        std::filesystem::create_directory(path + '/' + name);
+        createDirectory(path + '/' + name);
         return name;
+    }
+
+    // Handle short writes and EINTR
+    ssize_t writeBuffer(int to, const char *buffer, size_t size, const std::string& toPath)
+    {
+        size_t count = size;
+        const char *ptr = buffer;
+        while (count)
+        {
+            ssize_t written;
+            while ((written = writeToFD(to, ptr, count)) < 0 && errno == EINTR)
+                LOG_TRC("EINTR writing to " << anonymizeUrl(toPath));
+            if (written < 0)
+                return -1;
+            count -= written;
+            ptr += written;
+        }
+        return size;
     }
 
     bool copy(const std::string& fromPath, const std::string& toPath, bool log, bool throw_on_error)
@@ -60,7 +66,7 @@ namespace FileUtil
         int from = -1, to = -1;
         try
         {
-            from = open(fromPath.c_str(), O_RDONLY);
+            from = openFileAsFD(fromPath, O_RDONLY);
             if (from < 0)
                 throw std::runtime_error("Failed to open src " + anonymizeUrl(fromPath));
 
@@ -68,7 +74,7 @@ namespace FileUtil
             if (fstat(from, &st) != 0)
                 throw std::runtime_error("Failed to fstat src " + anonymizeUrl(fromPath));
 
-            to = open(toPath.c_str(), O_CREAT | O_TRUNC | O_WRONLY, st.st_mode);
+            to = openFileAsFD(toPath, O_CREAT | O_TRUNC | O_WRONLY, st.st_mode);
             if (to < 0)
                 throw std::runtime_error("Failed to open dest " + anonymizeUrl(toPath));
 
@@ -79,11 +85,11 @@ namespace FileUtil
 
             char buffer[64 * 1024];
 
-            int n;
             off_t bytesIn = 0;
             do
             {
-                while ((n = ::read(from, buffer, sizeof(buffer))) < 0 && errno == EINTR)
+                ssize_t n;
+                while ((n = readFromFD(from, buffer, sizeof(buffer))) < 0 && errno == EINTR)
                     LOG_TRC("EINTR reading from " << anonymizeUrl(fromPath));
                 if (n < 0)
                     throw std::runtime_error("Failed to read from " + anonymizeUrl(fromPath)
@@ -93,20 +99,13 @@ namespace FileUtil
                 if (n == 0) // EOF
                     break;
                 assert (off_t(sizeof (buffer)) >= n);
-                // Handle short writes and EINTR
-                for (int j = 0; j < n;)
+
+                if (writeBuffer(to, buffer, n, toPath) < 0)
                 {
-                    int written;
-                    while ((written = ::write(to, buffer + j, n - j)) < 0 && errno == EINTR)
-                        LOG_TRC("EINTR writing to " << anonymizeUrl(toPath));
-                    if (written < 0)
-                    {
-                        throw std::runtime_error("Failed to write " + std::to_string(n)
-                                                 + " bytes to " + anonymizeUrl(toPath) + " at "
-                                                 + std::to_string(bytesIn) + " bytes into "
-                                                 + anonymizeUrl(fromPath));
-                    }
-                    j += written;
+                    throw std::runtime_error("Failed to write " + std::to_string(n)
+                                             + " bytes to " + anonymizeUrl(toPath) + " at "
+                                             + std::to_string(bytesIn) + " bytes into "
+                                             + anonymizeUrl(fromPath));
                 }
             } while (true);
             if (bytesIn != st.st_size)
@@ -114,8 +113,8 @@ namespace FileUtil
                 LOG_WRN("Unusual: file " << anonymizeUrl(fromPath) << " changed size "
                         "during copy from " << st.st_size << " to " << bytesIn);
             }
-            close(from);
-            close(to);
+            closeFD(from);
+            closeFD(to);
             return true;
         }
         catch (const std::exception& ex)
@@ -125,33 +124,14 @@ namespace FileUtil
                 << anonymizeUrl(toPath) << ": " << ex.what();
             const std::string err = oss.str();
             LOG_ERR(err);
-            close(from);
-            close(to);
-            unlink(toPath.c_str());
+            closeFD(from);
+            closeFD(to);
+            unlinkFile(toPath);
             if (throw_on_error)
                 throw std::runtime_error(err);
         }
 
         return false;
-    }
-
-    std::string getSysTempDirectoryPath()
-    {
-        // Don't const to allow for automatic move on return.
-        std::string path = std::filesystem::temp_directory_path();
-
-        if (!path.empty())
-            return path;
-
-        // Sensible fallback, though shouldn't be needed.
-        const char *tmp = getenv("TMPDIR");
-        if (!tmp)
-            tmp = getenv("TEMP");
-        if (!tmp)
-            tmp = getenv("TMP");
-        if (!tmp)
-            tmp = "/tmp";
-        return tmp;
     }
 
     std::string createRandomTmpDir(std::string root)
@@ -163,7 +143,7 @@ namespace FileUtil
 
         // Don't const to allow for automatic move on return.
         std::string newTmp = root + "/cool-" + Util::rng::getFilename(16);
-        if (::mkdir(newTmp.c_str(), S_IRWXU) < 0)
+        if (makeDirectory(newTmp) < 0)
         {
             LOG_SYS("Failed to create random temp directory [" << newTmp << ']');
             return root;
@@ -171,7 +151,7 @@ namespace FileUtil
         return newTmp;
     }
 
-    std::string createTmpDir(std::string dirName, std::string root)
+    std::string createTmpDir(const std::string& dirName, std::string root)
     {
         if (root.empty())
             root = getSysTempDirectoryPath();
@@ -180,159 +160,12 @@ namespace FileUtil
 
         // Don't const to allow for automatic move on return.
         std::string newTmp = root + '/' + dirName;
-        if (::mkdir(newTmp.c_str(), S_IRWXU) < 0)
+        if (makeDirectory(newTmp) < 0)
         {
             LOG_SYS("Failed to create temp directory [" << newTmp << ']');
             return root;
         }
         return newTmp;
-    }
-
-#if 1 // !HAVE_STD_FILESYSTEM
-    static int nftw_cb(const char *fpath, const struct stat*, int type, struct FTW*)
-    {
-        if (type == FTW_DP)
-        {
-            rmdir(fpath);
-        }
-        else if (type == FTW_F || type == FTW_SL)
-        {
-            unlink(fpath);
-        }
-
-        // Always continue even when things go wrong.
-        return 0;
-    }
-#endif
-
-    void removeFile(const std::string& path, const bool recursive)
-    {
-        LOG_DBG("Removing [" << path << "] " << (recursive ? "recursively." : "only."));
-
-// Amazingly filesystem::remove_all silently fails to work on some
-// systems. No real need to be using experimental API here either.
-#if 0 // HAVE_STD_FILESYSTEM
-        std::error_code ec;
-        if (recursive)
-            std::filesystem::remove_all(path, ec);
-        else
-            std::filesystem::remove(path, ec);
-
-        // Already removed or we don't care about failures.
-        (void) ec;
-#else
-        try
-        {
-            struct stat sb;
-            errno = 0;
-            if (!recursive || stat(path.c_str(), &sb) == -1 || S_ISREG(sb.st_mode))
-            {
-                // Non-recursive directories and files that exist.
-                if (errno != ENOENT)
-                    Poco::File(path).remove(recursive);
-            }
-            else
-            {
-                // Directories only.
-                nftw(path.c_str(), nftw_cb, 128, FTW_DEPTH | FTW_PHYS);
-            }
-        }
-        catch (const std::exception& e)
-        {
-            // Don't complain if already non-existant.
-            if (FileUtil::Stat(path).exists())
-            {
-                // Error only if it still exists.
-                LOG_ERR("Failed to remove ["
-                        << path << "] " << (recursive ? "recursively: " : "only: ") << e.what());
-            }
-        }
-#endif
-    }
-
-    /// Remove directories only, which must be empty for this to work.
-    static int nftw_rmdir_cb(const char* fpath, const struct stat*, int type, struct FTW*)
-    {
-        if (type == FTW_DP)
-        {
-            rmdir(fpath);
-        }
-
-        // Always continue even when things go wrong.
-        return 0;
-    }
-
-    void removeEmptyDirTree(const std::string& path)
-    {
-        LOG_DBG("Removing empty directories at [" << path << "] recursively");
-
-        nftw(path.c_str(), nftw_rmdir_cb, 128, FTW_DEPTH | FTW_PHYS);
-    }
-
-    std::string realpath(const char* path)
-    {
-        char* resolved = ::realpath(path, nullptr);
-        if (resolved)
-        {
-            std::string real = resolved;
-            free(resolved);
-            return real;
-        }
-
-        LOG_SYS("Failed to get the realpath of [" << path << ']');
-        return path;
-    }
-
-    bool isEmptyDirectory(const char* path)
-    {
-        DIR* dir = opendir(path);
-        if (dir == nullptr)
-            return errno != EACCES; // Assume it's not empty when EACCES.
-
-        int count = 0;
-        while (readdir(dir) && ++count < 3)
-            ;
-
-        closedir(dir);
-        return count <= 2; // Discounting . and ..
-    }
-
-    bool isWritable(const char* path)
-    {
-        if (access(path, W_OK) == 0)
-            return true;
-
-        LOG_INF("No write access to path [" << path << "]: " << strerror(errno));
-        return false;
-    }
-
-    bool updateTimestamps(const std::string& filename, timespec tsAccess, timespec tsModified)
-    {
-        // The timestamp is in seconds and microseconds.
-        timeval timestamps[2]
-                          {
-                              {
-                                  tsAccess.tv_sec,
-#ifdef IOS
-                                  (__darwin_suseconds_t)
-#endif
-                                  (tsAccess.tv_nsec / 1000)
-                              },
-                              {
-                                  tsModified.tv_sec,
-#ifdef IOS
-                                  (__darwin_suseconds_t)
-#endif
-                                  (tsModified.tv_nsec / 1000)
-                              }
-                          };
-        if (utimes(filename.c_str(), timestamps) != 0)
-        {
-            LOG_SYS("Failed to update the timestamp of [" << filename << ']');
-            return false;
-        }
-
-        return true;
     }
 
     bool copyAtomic(const std::string& fromPath, const std::string& toPath, bool preserveTimestamps)
@@ -366,11 +199,13 @@ namespace FileUtil
 
     bool compareFileContents(const std::string& rhsPath, const std::string& lhsPath)
     {
-        std::ifstream rhs(rhsPath, std::ifstream::binary | std::ifstream::ate);
+        std::ifstream rhs;
+        openFileToIFStream(rhsPath, rhs, std::ifstream::binary | std::ifstream::ate);
         if (rhs.fail())
             return false;
 
-        std::ifstream lhs(lhsPath, std::ifstream::binary | std::ifstream::ate);
+        std::ifstream lhs;
+        openFileToIFStream(lhsPath, lhs, std::ifstream::binary | std::ifstream::ate);
         if (lhs.fail())
             return false;
 
@@ -384,9 +219,35 @@ namespace FileUtil
                           std::istreambuf_iterator<char>(lhs.rdbuf()));
     }
 
+    void copyDirectoryRecursive(const std::string& srcDir, const std::string& destDir, bool log)
+    {
+        namespace fs = std::filesystem;
+        try
+        {
+            for (const auto& entry : fs::recursive_directory_iterator(srcDir))
+            {
+                // Calculate relative path from source
+                const auto relativePath = fs::relative(entry.path(), srcDir);
+                const auto targetPath = fs::path(destDir) / relativePath;
+
+                // Create directory with writable permissions (default)
+                if (entry.is_directory())
+                    fs::create_directories(targetPath);
+                else if (entry.is_regular_file())
+                    FileUtil::copy(entry.path().string(), targetPath.string(), log, false);
+            }
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERR("Failed to copy srcDir[" << srcDir << "to destDir[" << destDir
+                                             << "] with error[" << ex.what() << ']');
+        }
+    }
+
     std::unique_ptr<std::vector<char>> readFile(const std::string& path, int maxSize)
     {
         auto data = std::make_unique<std::vector<char>>(maxSize);
+        data->resize(0);
         return (readFile(path, *data, maxSize) >= 0) ? std::move(data) : nullptr;
     }
 
@@ -427,7 +288,54 @@ namespace FileUtil
         return rootPath.toString();
     }
 
+    std::pair<std::string, std::string> buildPathsToJail(bool usingMountNamespaces, bool noCapsForKit,
+                                                         std::string localJailRoot, std::string jailDir)
+    {
+        std::string localDir = FileUtil::buildLocalPathToJail(
+            usingMountNamespaces, std::move(localJailRoot), jailDir);
+
+        // This is the location of the file as seen by the kit, the location as
+        // seen inside the jail. Ideally (and typically) noCaps is false, and
+        // the path inside the jail is simply 'jailDir'. But if noCaps is true,
+        // then chroot isn't possible and the jail is forced to work with the
+        // same paths as used outside the jail.
+        if (noCapsForKit)
+            jailDir = localDir;
+
+        return std::make_pair(localDir, jailDir);
+    }
+
+    ssize_t read(int fd, void* buf, size_t nbytes)
+    {
+        char* p = static_cast<char*>(buf);
+
+        while (nbytes)
+        {
+            ssize_t n = readFromFD(fd, p, nbytes);
+            if (n < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+
+                return -1; // Error.
+            }
+
+            if (n == 0) // EOF.
+                break;
+
+            assert(n >= 0 && "Expected a positive read byte-count");
+            assert(static_cast<size_t>(n) <= nbytes && "Unexpectedly read more than requested");
+
+            nbytes -= n;
+            p += n;
+        }
+
+        return p - static_cast<char*>(buf);
+    }
+
 } // namespace FileUtil
+
+#if !MOBILEAPP
 
 namespace
 {
@@ -460,6 +368,8 @@ namespace
     static std::set<fs, fsComparator> filesystems;
 
 } // anonymous namespace
+
+#endif
 
 namespace FileUtil
 {
@@ -494,7 +404,7 @@ namespace FileUtil
         if (cacheLastCheck)
         {
             // Don't check more often than once a minute
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastCheck).count() < 60)
+            if ((now - lastCheck) < std::chrono::minutes(1))
                 return lastResult;
 
             lastCheck = now;
@@ -520,7 +430,7 @@ namespace FileUtil
     {
         assert(!path.empty());
 
-        if (!Util::isMobileApp())
+        if constexpr (!Util::isMobileApp())
         {
             bool hookResult = true;
             if (UnitBase::get().filterCheckDiskSpace(path, hookResult))
@@ -528,67 +438,26 @@ namespace FileUtil
         }
 
         // we should be able to run just OK with 5GB for production or 1GB for development
-#if defined(__linux__) || defined(__FreeBSD__) || defined(IOS)
 #if ENABLE_DEBUG
         constexpr int64_t gb(1);
 #else
         constexpr int64_t gb(5);
 #endif
         constexpr int64_t ENOUGH_SPACE = gb*1024*1024*1024;
-#endif
 
-#if defined(__linux__) || defined(__FreeBSD__)
-        struct statfs sfs;
-        if (statfs(path.c_str(), &sfs) == -1)
-            return true;
-
-        const int64_t freeBytes = static_cast<int64_t>(sfs.f_bavail) * sfs.f_bsize;
-
-        LOG_INF("Filesystem [" << path << "] has " << (freeBytes / 1024 / 1024) <<
-                " MB free (" << (sfs.f_bavail * 100. / sfs.f_blocks) << "%).");
-
-        if (freeBytes > ENOUGH_SPACE)
-            return true;
-
-        if (static_cast<double>(sfs.f_bavail) / sfs.f_blocks <= 0.05)
-            return false;
-#elif defined IOS
-        NSDictionary *atDict = [[NSFileManager defaultManager] attributesOfFileSystemForPath:@"/" error:NULL];
-        long long freeSpace = [[atDict objectForKey:NSFileSystemFreeSize] longLongValue];
-        long long totalSpace = [[atDict objectForKey:NSFileSystemSize] longLongValue];
-
-        if (freeSpace > ENOUGH_SPACE)
-            return true;
-
-        if (static_cast<double>(freeSpace) / totalSpace <= 0.05)
-            return false;
-#endif
+        return platformDependentCheckDiskSpace(path, ENOUGH_SPACE);
 
         return true;
     }
 
-    namespace {
-        bool AnonymizeUserData = false;
-        std::uint64_t AnonymizationSalt = 82589933;
-    }
-
-    void setUrlAnonymization(bool anonymize, const std::uint64_t salt)
-    {
-        AnonymizeUserData = anonymize;
-        AnonymizationSalt = salt;
-    }
-
     /// Anonymize the basename of filenames, preserving the path and extension.
-    std::string anonymizeUrl(const std::string& url)
-    {
-        return AnonymizeUserData ? Util::anonymizeUrl(url, AnonymizationSalt) : url;
-    }
+    std::string anonymizeUrl(const std::string& url) { return Anonymizer::anonymizeUrl(url); }
 
     /// Anonymize user names and IDs.
     /// Will use the Obfuscated User ID if one is provided via WOPI.
     std::string anonymizeUsername(const std::string& username)
     {
-        return AnonymizeUserData ? Util::anonymize(username, AnonymizationSalt) : username;
+        return Anonymizer::anonymize(username);
     }
 
     std::string extractFileExtension(const std::string& path)
@@ -596,181 +465,6 @@ namespace FileUtil
         return Util::splitLast(path, '.', true).second;
     }
 
-    void lslr(const std::string& path)
-    {
-        std::cout << path << ":\n";
-
-        DIR* dir = opendir(path.c_str());
-        if (dir == nullptr)
-        {
-            std::cerr << "lslr: fail to open: " << dir << " error: " << std::strerror(errno) << std::endl;
-            return;
-        }
-
-        struct sb
-        {
-            mode_t _mode;
-            nlink_t _nlink;
-            std::string _uid;
-            std::string _gid;
-            off_t _size;
-            time_t _mtime;
-            std::string _name;
-
-            sb(mode_t mode, nlink_t nlink, std::string uid, std::string gid, off_t size, time_t mtime, std::string name)
-                : _mode(mode)
-                , _nlink(nlink)
-                , _uid(std::move(uid))
-                , _gid(std::move(gid))
-                , _size(size)
-                , _mtime(mtime)
-                , _name(std::move(name))
-            {
-            }
-        };
-
-        std::vector<sb> entries;
-        std::vector<std::string> subdirs;
-        size_t nlink_len = 0;
-        size_t size_len = 0;
-        size_t uid_len = 0;
-        size_t gid_len = 0;
-        size_t blocks = 0;
-
-        while (const dirent* f = readdir(dir))
-        {
-            std::string fullpath(path);
-            if (!fullpath.ends_with("/"))
-                fullpath.append("/");
-            fullpath.append(f->d_name);
-
-            struct stat statbuf;
-            if (lstat(fullpath.c_str(), &statbuf) != 0)
-            {
-                std::cerr << "lslr: fail to lstat: " << fullpath << " error: " << std::strerror(errno) << std::endl;
-                continue;
-            }
-
-            size_len = std::max(size_len, std::to_string(statbuf.st_size).size());
-            nlink_len = std::max(nlink_len, std::to_string(statbuf.st_nlink).size());
-
-            std::string uid;
-            struct passwd *pwd = getpwuid(statbuf.st_uid);
-            if (pwd && pwd->pw_name)
-                uid = pwd->pw_name;
-            else
-                uid = std::to_string(statbuf.st_uid);
-            uid_len = std::max(uid_len, uid.size());
-
-            std::string gid;
-            struct group *grp = getgrgid(statbuf.st_gid);
-            if (grp && grp->gr_name)
-                gid = grp->gr_name;
-            else
-                gid = std::to_string(statbuf.st_gid);
-
-            entries.emplace_back(statbuf.st_mode, statbuf.st_nlink, uid, gid, statbuf.st_size, statbuf.st_mtime, f->d_name);
-
-            if (strcmp(f->d_name, ".") != 0 && strcmp(f->d_name, "..") != 0 && (statbuf.st_mode & S_IFMT) == S_IFDIR)
-                subdirs.push_back(fullpath);
-
-            blocks += statbuf.st_blocks;
-        }
-
-        std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs)
-                  { return strcasecmp(lhs._name.c_str(), rhs._name.c_str()) < 0; });
-        std::sort(subdirs.begin(), subdirs.end(), [](const auto& lhs, const auto& rhs)
-                  { return strcasecmp(lhs.c_str(), rhs.c_str()) < 0; });
-
-        closedir(dir);
-
-        // turn 512 blocks into ls-alike default 1024 byte blocks
-        std::cout << "total " << (blocks + 1) / 2 << "\n";
-
-        for (const auto& entry : entries)
-        {
-            bool symbolic_link = false;
-
-            switch (entry._mode & S_IFMT)
-            {
-                case S_IFREG:
-                    std::cout << '-';
-                    break;
-                case S_IFBLK:
-                    std::cout << 'b';
-                    break;
-                case S_IFCHR:
-                    std::cout << 'c';
-                    break;
-                case S_IFDIR:
-                    std::cout << 'd';
-                    break;
-                case S_IFLNK:
-                    std::cout << 'l';
-                    symbolic_link = true;
-                    break;
-                case S_IFIFO:
-                    std::cout << 'p';
-                    break;
-                case S_IFSOCK:
-                    std::cout << 's';
-                    break;
-                default:
-                    std::cout << '?';
-                    break;
-                break;
-            }
-
-            std::cout << ((entry._mode & S_IRUSR) ? "r" : "-");
-            std::cout << ((entry._mode & S_IWUSR) ? "w" : "-");
-            std::cout << ((entry._mode & S_IXUSR) ? "x" : "-");
-            std::cout << ((entry._mode & S_IRGRP) ? "r" : "-");
-            std::cout << ((entry._mode & S_IWGRP) ? "w" : "-");
-            std::cout << ((entry._mode & S_IXGRP) ? "x" : "-");
-            std::cout << ((entry._mode & S_IROTH) ? "r" : "-");
-            std::cout << ((entry._mode & S_IWOTH) ? "w" : "-");
-            std::cout << ((entry._mode & S_IXOTH) ? "x" : "-");
-
-            std::cout << " " << std::right << std::setw(nlink_len) << entry._nlink;
-
-            std::cout << " " << std::left << std::setw(uid_len) << entry._uid;
-
-            std::cout << " " << std::left << std::setw(gid_len) << entry._gid;
-
-            std::cout << " " << std::right << std::setw(size_len) << entry._size;
-
-            struct tm tm;
-            std::cout << " " << std::put_time(localtime_r(&entry._mtime, &tm), "%F %R");
-
-            std::cout << " " << entry._name;
-
-            if (symbolic_link)
-            {
-                std::string fullpath(path);
-                fullpath.append("/").append(entry._name);
-
-                const std::size_t size = entry._size;
-                std::vector<char> target(size + 1);
-                char* target_data = target.data();
-                const ssize_t read = readlink(fullpath.c_str(), target_data, size);
-                if (read <= 0 || static_cast<std::size_t>(read) > size)
-                    std::cerr << "lslr: fail to read: " << fullpath << " error: " << std::strerror(errno) << std::endl;
-                else
-                {
-                    target_data[read] = '\0';
-                    std::cout << " -> " << target.data();
-                }
-            }
-
-            std::cout << "\n";
-        }
-
-        for (const auto& subdir : subdirs)
-        {
-            std::cout << "\n";
-            lslr(subdir);
-        }
-    }
 } // namespace FileUtil
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */

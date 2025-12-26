@@ -14,9 +14,8 @@
  */
 
 #include <config.h>
-#include <config_version.h>
 
-#ifndef __FreeBSD__
+#if HAVE_LIBCAP
 #include <sys/capability.h>
 #endif
 #include <sys/types.h>
@@ -30,6 +29,7 @@
 #include <map>
 #include <thread>
 #include <chrono>
+#include <utility>
 
 #include <Poco/Path.h>
 #include <Poco/URI.h>
@@ -49,37 +49,51 @@
 #include <common/SigUtil.hpp>
 #include <common/security.h>
 #include <common/ConfigUtil.hpp>
+#include <common/Uri.hpp>
 #include <common/Watchdog.hpp>
 #include <kit/DeltaSimd.h>
 
-static bool NoCapsForKit = false;
-static bool NoSeccomp = false;
+namespace
+{
+
+bool NoCapsForKit = false;
+bool NoSeccomp = false;
 #if ENABLE_DEBUG
-static bool SingleKit = false;
+bool SingleKit = false;
 #endif
 
-static std::string UserInterface;
+int parentPid;
 
-static bool DisplayVersion = false;
-static std::string UnitTestLibrary;
-static std::string LogLevel;
-static std::string LogDisabledAreas;
-static std::string LogLevelStartup;
-static std::atomic<unsigned> ForkCounter(0);
+std::string ForKitIdent;
+
+std::string UserInterface;
+
+bool DisplayVersion = false;
+std::string UnitTestLibrary;
+std::string LogLevel;
+std::string LogDisabledAreas;
+std::string LogLevelStartup;
+std::atomic<unsigned> ForkCounter(0);
+std::vector<std::string> SubForKitRequests;
 
 /// The [child pid -> jail path] map.
-static std::map<pid_t, std::string> childJails;
+std::map<pid_t, std::string> childJails;
 /// The jails that need cleaning up. This should be small.
-static std::vector<std::string> cleanupJailPaths;
+std::vector<std::string> cleanupJailPaths;
+/// The [subforkit pid -> subforkit id] map.
+std::map<pid_t, std::string> subForKitPids;
 
 /// The Main polling main-loop of this (single threaded) process
-static std::unique_ptr<SocketPoll> ForKitPoll;
+std::unique_ptr<SocketPoll> ForKitPoll;
+
+} // namespace
 
 extern "C" { void dump_forkit_state(void); /* easy for gdb */ }
 
 void dump_forkit_state()
 {
-    std::ostringstream oss;
+    std::ostringstream oss(Util::makeDumpStateStream());
+    oss << "Start ForKit " << getpid() << " Dump State:\n";
 
     oss << "Forkit: " << ForkCounter << " forks\n"
         << "  LogLevel: " << LogLevel << "\n"
@@ -95,9 +109,13 @@ void dump_forkit_state()
         << "  MasterLocation: " << MasterLocation
         << "\n";
 
+    oss << "\nMalloc info [" << getpid() << "]: \n\t"
+        << Util::replace(Util::getMallocInfo(), "\n", "\n\t") << '\n';
+    oss << "\nEnd ForKit " << getpid() << " Dump State.\n";
+
     const std::string msg = oss.str();
     fprintf(stderr, "%s", msg.c_str());
-    LOG_TRC(msg);
+    LOG_WRN(msg);
 }
 
 class ServerWSHandler;
@@ -111,9 +129,9 @@ class ServerWSHandler final : public WebSocketHandler
     std::string _socketName;
 
 public:
-    ServerWSHandler(const std::string& socketName) :
-        WebSocketHandler(/* isClient = */ true, /* isMasking */ false),
-        _socketName(socketName)
+    explicit ServerWSHandler(std::string socketName)
+        : WebSocketHandler(/* isClient = */ true, /* isMasking */ false)
+        , _socketName(std::move(socketName))
     {
     }
 
@@ -146,13 +164,20 @@ protected:
             const int count = std::stoi(tokens[1]);
             if (count > 0)
             {
-                LOG_INF("Setting to spawn " << tokens[1] << " child" << (count == 1 ? "" : "ren") << " per request.");
+                LOG_INF("Setting to spawn " << count << " child" << (count == 1 ? "" : "ren")
+                                            << " per request");
                 ForkCounter = count;
             }
             else
             {
-                LOG_WRN("Cannot spawn " << tokens[1] << " children as requested.");
+                LOG_WRN("Cannot spawn [" << tokens[1] << "] children as requested");
             }
+        }
+        else if (tokens.size() == 2 && tokens.equals(0, "addforkit"))
+        {
+            std::string ident = tokens[1];
+            LOG_INF("Setting to spawn subForKit with ident [" << ident << "] per request.");
+            SubForKitRequests.emplace_back(ident);
         }
         else if (tokens.size() == 2 && tokens.equals(0, "setloglevel"))
         {
@@ -189,19 +214,22 @@ protected:
 
     void onDisconnect() override
     {
-        if (Util::isMobileApp())
+        if constexpr (Util::isMobileApp())
             return;
         LOG_ERR("ForKit connection lost without exit arriving from wsd. Setting TerminationFlag");
         SigUtil::setTerminationFlag();
     }
 };
 
-#ifndef __FreeBSD__
-static bool haveCapability(cap_value_t capability)
+namespace
 {
-    cap_t caps = cap_get_proc();
 
-    if (caps == nullptr)
+#if HAVE_LIBCAP
+bool haveCapability(cap_value_t capability)
+{
+    using ScopedCaps = std::unique_ptr<std::remove_pointer<cap_t>::type, int (*)(void*)>;
+    ScopedCaps caps(cap_get_proc(), cap_free);
+    if (!caps)
     {
         LOG_SFL("cap_get_proc() failed");
         return false;
@@ -210,7 +238,7 @@ static bool haveCapability(cap_value_t capability)
     char *cap_name = cap_to_name(capability);
     cap_flag_value_t value;
 
-    if (cap_get_flag(caps, capability, CAP_EFFECTIVE, &value) == -1)
+    if (cap_get_flag(caps.get(), capability, CAP_EFFECTIVE, &value) == -1)
     {
         if (cap_name)
         {
@@ -251,7 +279,7 @@ static bool haveCapability(cap_value_t capability)
     return true;
 }
 
-static bool haveCorrectCapabilities()
+bool haveCorrectCapabilities()
 {
     bool result = true;
 
@@ -266,15 +294,15 @@ static bool haveCorrectCapabilities()
     return result;
 }
 #else
-static bool haveCorrectCapabilities()
+bool haveCorrectCapabilities()
 {
     // chroot() can only be called by root
     return getuid() == 0;
 }
-#endif // __FreeBSD__
+#endif // HAVE_LIBCAP
 
 /// Check if some previously forked kids have died.
-static void cleanupChildren()
+void cleanupChildren(const std::string& childRoot)
 {
     if (Util::isKitInProcess())
         return;
@@ -282,25 +310,64 @@ static void cleanupChildren()
     pid_t exitedChildPid;
     int status = 0;
     int segFaultCount = 0;
+    int killedCount = 0;
+    int oomKilledCount = 0;
+
+    siginfo_t info;
+    memset(&info, 0, sizeof(info)); // Make sure no stale fields remain
 
     // Reap quickly without doing slow cleanup so WSD can spawn more rapidly.
-    while ((exitedChildPid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0)
+    while (waitid(P_ALL, -1, &info, WEXITED | WNOHANG) == 0)
     {
-        const auto it = childJails.find(exitedChildPid);
-        if (it != childJails.end())
+        if (info.si_pid == 0)
         {
-            if (WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV ||
-                                        WTERMSIG(status) == SIGBUS ||
-                                        WTERMSIG(status) == SIGABRT))
-            {
-                ++segFaultCount;
+            // WNOHANG special case
+            break;
+        }
 
-                std::string noteCrashFile(it->second + "/tmp/kit-crashed");
-                int noteCrashFD = open(noteCrashFile.c_str(), O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR);
-                if (noteCrashFD < 0)
-                    LOG_ERR("Couldn't create file: " << noteCrashFile << " due to error: " << strerror(errno));
+        exitedChildPid = info.si_pid;
+        status = info.si_status;
+        if (const auto it = childJails.find(exitedChildPid); it != childJails.end())
+        {
+            if (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED)
+            {
+                if (status == SIGSEGV || status == SIGBUS ||
+                    status == SIGABRT)
+                {
+                    ++segFaultCount;
+
+                    std::string noteCrashFile(it->second + "/tmp/kit-crashed");
+                    int noteCrashFD = open(noteCrashFile.c_str(), O_CREAT | O_TRUNC | O_WRONLY,
+                                           S_IRUSR | S_IWUSR);
+                    if (noteCrashFD < 0)
+                        LOG_SYS("Couldn't create file: " << noteCrashFile);
+                    else
+                        close(noteCrashFD);
+                }
+                else if (status == SIGKILL)
+                {
+                    // TODO differentiate with docker
+                    if (info.si_code == SI_KERNEL)
+                    {
+                        ++oomKilledCount;
+                        LOG_WRN("Child " << exitedChildPid << " was killed by OOM, with status "
+                                         << status);
+                    }
+                    else
+                    {
+                        ++killedCount;
+                        LOG_WRN("Child " << exitedChildPid << " was killed, with status "
+                                         << status);
+                    }
+                }
                 else
-                    close(noteCrashFD);
+                {
+                    LOG_ERR("Child " << exitedChildPid << " has terminated, with signal " << status);
+                }
+            }
+            else if (info.si_code == CLD_EXITED && status != 0)
+            {
+                LOG_ERR("Child " << exitedChildPid << " has exited, with status " << status);
             }
 
             LOG_INF("Child " << exitedChildPid << " has exited, will remove its jail [" << it->second << "].");
@@ -312,9 +379,21 @@ static void cleanupChildren()
                 LOG_WRN("No live Kits exist, and we are not terminating yet.");
             }
         }
+        else if (const auto subit = subForKitPids.find(exitedChildPid); subit != subForKitPids.end())
+        {
+            LOG_INF("SubForKit " << exitedChildPid << " [" << subit->second
+                    << "] has exited with status " << status << ".");
+
+            // remove subforkit settings dir now
+            Poco::Path sharedPresets(childRoot, JailUtil::CHILDROOT_TMP_SHARED_PRESETS_PATH);
+            std::string presetsPath = Poco::Path(sharedPresets, Uri::encode(subit->second)).toString();
+            FileUtil::removeFile(presetsPath, true);
+
+            subForKitPids.erase(subit);
+        }
         else
         {
-            LOG_ERR("Unknown child " << exitedChildPid << " has exited");
+            LOG_ERR("Unknown child " << exitedChildPid << " has exited, with status: " << status);
         }
     }
 
@@ -328,12 +407,14 @@ static void cleanupChildren()
                                           << childJails.size() << " left: " << oss.str());
     }
 
-    if (segFaultCount)
+    if (segFaultCount || killedCount || oomKilledCount)
     {
         if (WSHandler)
         {
             std::stringstream stream;
-            stream << "segfaultcount " << segFaultCount << '\n';
+            stream << "segfaultcount=" << segFaultCount << ' ' << "killedcount=" << killedCount
+                    << ' ' << "oomkilledcount=" << oomKilledCount << '\n';
+
             int ret = WSHandler->sendMessage(stream.str());
             if (ret == -1)
             {
@@ -348,16 +429,16 @@ static void cleanupChildren()
 
     // Now delete the jails.
     auto i = cleanupJailPaths.size();
-    while (i-- > 0)
+    while (i > 0)
     {
+        --i;
         const std::string path = cleanupJailPaths[i];
 
-        // don't delete jails where there was a crash until it ~3 minutes old
-        std::string noteCrashFile(path + "/tmp/kit-crashed");
-        auto noteStat = FileUtil::Stat(noteCrashFile);
+        // Don't delete jails where there was a crash until it's ~3 minutes old.
+        const FileUtil::Stat noteStat(path + "/tmp/kit-crashed");
         if (noteStat.good())
         {
-            time_t modifiedTimeSec = noteStat.modifiedTimeMs() / 1000;
+            const time_t modifiedTimeSec = noteStat.modifiedTimeMs() / 1000;
             if (time(nullptr) < modifiedTimeSec + 180)
                 continue;
         }
@@ -376,17 +457,79 @@ void sleepForDebugger()
     Util::sleepFromEnvIfSet("Kit", "SLEEPKITFORDEBUGGER");
 }
 
-static int createLibreOfficeKit(const std::string& childRoot,
-                                const std::string& sysTemplate,
-                                const std::string& loTemplate,
-                                bool useMountNamespaces,
-                                bool queryVersion = false)
+int forkKit(const std::function<void()>& childFunc, const std::string& childProcessName,
+            const std::function<void(pid_t)>& parentFunc)
+{
+    pid_t pid = 0;
+
+    /* We are about to fork, but not exec. After a fork the child has
+       only one thread, but a copy of the watchdog object.
+
+       Stop the watchdog thread before fork, let the child discard
+       its copy of the watchdog that is now in a discardable state,
+       and allow it to create a new one on next SocketPoll ctor */
+    const bool hasWatchDog(SocketPoll::PollWatchdog);
+    if (hasWatchDog)
+        SocketPoll::PollWatchdog->joinThread();
+
+    Log::preFork();
+
+    pid = fork();
+    if (!pid)
+    {
+        sleepForDebugger();
+
+        // Child
+        Log::postFork();
+
+        // sort out thread local variables to get logging right from
+        // as early as possible.
+        Util::setThreadName(childProcessName);
+
+        // Close the pipe from coolwsd
+        close(0);
+
+        // Close the ForKit main-loop's sockets
+        if (ForKitPoll)
+            ForKitPoll->closeAllSockets();
+        // else very first kit process spawned
+
+        SigUtil::setSigChildHandler(nullptr);
+
+        // Throw away inherited watchdog, which will let a new one for this
+        // child be created on demand
+        SocketPoll::PollWatchdog.reset();
+
+        UnitKit::get().postFork();
+
+        childFunc();
+    }
+    else
+    {
+        if (hasWatchDog)
+        {
+            // restart parent watchdog if there was one
+            SocketPoll::PollWatchdog->startThread();
+        }
+
+        // Parent
+        parentFunc(pid);
+
+        UnitKit::get().launchedKit(pid);
+    }
+
+    return pid;
+}
+
+int createLibreOfficeKit(const std::string& childRoot, const std::string& sysTemplate,
+                         const std::string& loTemplate, const std::string& configId,
+                         bool useMountNamespaces, bool queryVersion = false)
 {
     // Generate a jail ID to be used for in the jail path.
-    const std::string jailId = Util::rng::getFilename(16);
+    std::string jailId = Util::rng::getFilename(16);
 
     // Update the dynamic files as necessary.
-    JailUtil::SysTemplate::updateDynamicFiles(sysTemplate);
+    const bool sysTemplateIncomplete = !JailUtil::SysTemplate::updateDynamicFiles(sysTemplate);
 
     // Used to label the spare kit instances
     static size_t spareKitId = 0;
@@ -395,88 +538,150 @@ static int createLibreOfficeKit(const std::string& childRoot,
                                                       << spareKitId << '.');
     const auto startForkingTime = std::chrono::steady_clock::now();
 
-    pid_t pid = 0;
+    pid_t childPid = 0;
     if (Util::isKitInProcess())
     {
-        std::thread([childRoot, jailId, sysTemplate, loTemplate, queryVersion] {
+        std::thread([childRoot, jailId = std::move(jailId), configId, sysTemplate,
+                     loTemplate, queryVersion, sysTemplateIncomplete] {
             sleepForDebugger();
-            lokit_main(childRoot, jailId, sysTemplate, loTemplate, true, true,
-                       false, queryVersion, DisplayVersion, spareKitId);
+            lokit_main(childRoot, jailId, configId, sysTemplate, loTemplate, true,
+                       true, false, queryVersion, DisplayVersion,
+                       sysTemplateIncomplete, spareKitId);
         })
             .detach();
     }
     else
     {
-        /* We are about to fork, but not exec. After a fork the child has
-           only one thread, but a copy of the watchdog object.
-
-           Stop the watchdog thread before fork, let the child discard
-           its copy of the watchdog that is now in a discardable state,
-           and allow it to create a new one on next SocketPoll ctor */
-        const bool hasWatchDog(SocketPoll::PollWatchdog);
-        if (hasWatchDog)
-            SocketPoll::PollWatchdog->joinThread();
-
-        pid = fork();
-        if (!pid)
+        auto childFunc = [childRoot, jailId, configId, sysTemplate,
+                          loTemplate, useMountNamespaces,
+                          queryVersion, sysTemplateIncomplete]()
         {
-            sleepForDebugger();
+            lokit_main(childRoot, jailId, configId, sysTemplate, loTemplate,
+                       NoCapsForKit, NoSeccomp, useMountNamespaces, queryVersion,
+                       DisplayVersion, sysTemplateIncomplete, spareKitId);
+        };
 
-            // Child
-            Log::postFork();
-
-            // sort out thread local variables to get logging right from
-            // as early as possible.
-            Util::setThreadName("kit_spare_" + Util::encodeId(spareKitId, 3));
-
-            // Close the pipe from coolwsd
-            close(0);
-
-            // Close the ForKit main-loop's sockets
-            if (ForKitPoll)
-                ForKitPoll->closeAllSockets();
-            // else very first kit process spawned
-
-            SigUtil::setSigChildHandler(nullptr);
-
-            // Throw away inherited watchdog, which will let a new one for this
-            // child be created on demand
-            SocketPoll::PollWatchdog.reset();
-
-            UnitKit::get().postFork();
-
-            lokit_main(childRoot, jailId, sysTemplate, loTemplate, NoCapsForKit, NoSeccomp,
-                       useMountNamespaces, queryVersion, DisplayVersion, spareKitId);
-        }
-        else
+        auto parentFunc = [childRoot, jailId = std::move(jailId)](int pid)
         {
-            if (hasWatchDog)
-            {
-                // restart parent watchdog if there was one
-                SocketPoll::PollWatchdog->startThread();
-            }
-
             // Parent
             if (pid < 0)
             {
-                LOG_SYS("Fork failed");
+                LOG_SYS("Fork failed for kit");
             }
             else
             {
                 LOG_INF("Forked kit [" << pid << ']');
                 childJails[pid] = childRoot + jailId;
             }
+        };
 
-            UnitKit::get().launchedKit(pid);
-        }
+        std::string processName = "kit_spare_" + Util::encodeId(spareKitId, 3);
+        childPid = forkKit(childFunc, processName, parentFunc);
     }
 
     const auto duration = (std::chrono::steady_clock::now() - startForkingTime);
     const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
     LOG_TRC("Forking child took " << durationMs);
 
-    return pid;
+    return childPid;
 }
+
+int createSubForKit(const std::string& subForKitIdent, const std::string& childRoot,
+                    const std::string& sysTemplate, const std::string& loTemplate,
+                    bool useMountNamespaces)
+{
+    static size_t subForKitId = 0;
+    ++subForKitId;
+    LOG_DBG("Forking a forkit process with subForKitId: " << subForKitIdent <<
+            " as subForKit #" << subForKitId << ".");
+    const auto startForkingTime = std::chrono::steady_clock::now();
+
+    pid_t childPid = 0;
+
+    auto childFunc = [childRoot, sysTemplate, loTemplate,
+                      subForKitIdent, useMountNamespaces]()
+    {
+        // reset parent of this subforkit to its forkit parent, main loop
+        // detects a parentPid != getppid() as a cue to exit
+        parentPid = getppid();
+
+        ForKitIdent = subForKitIdent;
+
+        // reset this global counter for this new subForKit
+        ForkCounter = 0;
+
+        // Apply core configmgr xcu settings to this forkit for its coolkits to inherit
+        {
+            Poco::Path sharedPresets(childRoot, JailUtil::CHILDROOT_TMP_SHARED_PRESETS_PATH);
+            Poco::Path presetsPath = Poco::Path(sharedPresets, Uri::encode(subForKitIdent)).toString();
+            assert(loKitPtr);
+            loKitPtr->pClass->setOption(loKitPtr, "addconfig", Poco::URI(presetsPath).toString().c_str());
+        }
+
+        LOG_INF("SubForKit process is ready. Parent: " << parentPid);
+
+        // launch first coolkit child of this subForKit
+        const pid_t forKitPid = createLibreOfficeKit(childRoot, sysTemplate,
+                                                     loTemplate, ForKitIdent,
+                                                     useMountNamespaces);
+        if (forKitPid < 0)
+        {
+            LOG_FTL("Failed to create a kit process.");
+            Util::forcedExit(EX_SOFTWARE);
+        }
+
+        std::string pathAndQuery(FORKIT_URI);
+        pathAndQuery.append("?configid=");
+        pathAndQuery.append(ForKitIdent);
+
+        ForKitPoll->createWakeups();
+
+        if (!ForKitPoll->insertNewUnixSocket(MasterLocation, pathAndQuery, WSHandler))
+        {
+            LOG_SFL("Failed to connect to WSD. Will exit.");
+            Util::forcedExit(EX_SOFTWARE);
+        }
+    };
+
+    auto parentFunc = [subForKitIdent](int pid)
+    {
+        // Parent
+        if (pid < 0)
+        {
+            LOG_SYS("Fork failed for subForKit");
+        }
+        else
+        {
+            LOG_INF("Forked subForKit [" << pid << ']');
+            subForKitPids[pid] = subForKitIdent;
+        }
+    };
+
+    std::string processName = "subforkit_" + Util::encodeId(subForKitId, 3);
+    childPid = forkKit(childFunc, processName, parentFunc);
+
+    const auto duration = (std::chrono::steady_clock::now() - startForkingTime);
+    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    LOG_TRC("Forking subForKit took " << durationMs);
+
+    return childPid;
+}
+
+void createSubForKits(const std::string& childRoot, const std::string& sysTemplate,
+                      const std::string& loTemplate, bool useMountNamespaces)
+{
+    std::vector<std::string> subForKitRequests = std::move(SubForKitRequests);
+    for (const auto& subForKitIdent : subForKitRequests)
+    {
+        if (createSubForKit(subForKitIdent, childRoot, sysTemplate, loTemplate,
+                            useMountNamespaces) < 0)
+        {
+            LOG_ERR("Failed to create a subForKit process for ident: " << subForKitIdent);
+        }
+    }
+}
+
+} // namespace
 
 void forkLibreOfficeKit(const std::string& childRoot,
                         const std::string& sysTemplate,
@@ -484,7 +689,7 @@ void forkLibreOfficeKit(const std::string& childRoot,
                         bool useMountNamespaces)
 {
     // Cleanup first, to reduce disk load.
-    cleanupChildren();
+    cleanupChildren(childRoot);
 
     if (ForkCounter > 0)
     {
@@ -494,7 +699,8 @@ void forkLibreOfficeKit(const std::string& childRoot,
         const size_t retry = count * 2;
         for (size_t i = 0; ForkCounter > 0 && i < retry; ++i)
         {
-            if (ForkCounter-- <= 0 || createLibreOfficeKit(childRoot, sysTemplate, loTemplate, useMountNamespaces) < 0)
+            if (ForkCounter-- <= 0 || createLibreOfficeKit(childRoot, sysTemplate, loTemplate,
+                                                           ForKitIdent, useMountNamespaces) < 0)
             {
                 LOG_ERR("Failed to create a kit process.");
                 ++ForkCounter;
@@ -513,7 +719,7 @@ static void printArgumentHelp()
 }
 
 extern "C" {
-    static void wakeupPoll(uint32_t /*pid*/)
+    static void wakeupPoll(int /*pid*/)
     {
         if (ForKitPoll)
             ForKitPoll->wakeup();
@@ -603,7 +809,7 @@ int forkit_main(int argc, char** argv)
     // * the user is 'cool' (privileged user)
     // * the user is 'root', and --disable-cool-user-checking was provided
     // Alternatively allow running in non-privileged mode (with --nocaps), if:
-    // * the user is a non-priviled user, the binary is not privileged
+    // * the user is a non-privileged user, the binary is not privileged
     //   either (no caps set), and --disable-cool-user-checking was provided
 
     Util::sleepFromEnvIfSet("Forkit", "SLEEPFORDEBUGGER");
@@ -611,7 +817,8 @@ int forkit_main(int argc, char** argv)
     if (!Util::isKitInProcess())
     {
         // Already set by COOLWSD.cpp in kit in process
-        SigUtil::setFatalSignals("forkit startup of " COOLWSD_VERSION " " COOLWSD_VERSION_HASH);
+        SigUtil::setFatalSignals("forkit startup of " + Util::getCoolVersion() + ' ' +
+                                 Util::getCoolVersionHash());
     }
     else
     {
@@ -641,9 +848,23 @@ int forkit_main(int argc, char** argv)
     {
         logProperties["path"] = std::string(logFilename);
     }
+    const bool logToFileUICmd = std::getenv("COOL_LOGFILE_UICMD");
+    const char* logFilenameUICmd = std::getenv("COOL_LOGFILENAME_UICMD");
+    std::map<std::string, std::string> logPropertiesUICmd;
+    if (logToFileUICmd && logFilenameUICmd)
+    {
+        logPropertiesUICmd["path"] = std::string(logFilenameUICmd);
+    }
 
     LogLevelStartup = logLevelStartup ? logLevelStartup : "trace";
-    Log::initialize("frk", LogLevelStartup, logColor != nullptr, logToFile, logProperties);
+    Log::initialize("frk", LogLevelStartup, logColor != nullptr, logToFile, logProperties, logToFileUICmd, logPropertiesUICmd);
+
+    if (logToFileUICmd)
+    {
+        const bool mergeUiCmd = std::getenv("COOL_LOG_UICMD_MERGE");
+        const bool logTimeEndOfMergedUiCmd = std::getenv("COOL_LOG_UICMD_END_TIME");
+        Log::setUILogMergeInfo(mergeUiCmd, logTimeEndOfMergedUiCmd);
+    }
 
     LogLevel = logLevel ? logLevel : "trace";
     if (LogLevel != LogLevelStartup)
@@ -697,8 +918,7 @@ int forkit_main(int argc, char** argv)
         else if (std::strstr(cmd, "--rlimits") == cmd)
         {
             eq = std::strchr(cmd, '=');
-            const std::string rlimits = std::string(eq+1);
-            StringVector tokens = StringVector::tokenize(rlimits, ';');
+            StringVector tokens = StringVector::tokenize(std::string(eq+1), ';');
             for (const auto& cmdLimit : tokens)
             {
                 const std::pair<std::string, std::string> pair = Util::split(tokens.getParam(cmdLimit), ':');
@@ -752,6 +972,15 @@ int forkit_main(int argc, char** argv)
             if (UserInterface != "classic" && UserInterface != "notebookbar")
                 UserInterface = "notebookbar";
         }
+
+        else if (std::strstr(cmd, "--libversions") == cmd)
+        {
+            std::cout << Util::getVersionJSON(false, "") << std::endl;
+            std::cerr << "Note: Library versions are compile-time versions, so they are accurate "
+                         "when these libraries are statically linked (as in production builds)."
+                      << std::endl;
+            std::exit(EX_OK);
+        }
     }
 
     if (sysTemplate.empty() || loTemplate.empty() || childRoot.empty())
@@ -788,7 +1017,7 @@ int forkit_main(int argc, char** argv)
     }
 
     if (Util::ThreadCounter().count() != 1)
-        LOG_ERR("forkit has more than a single thread after pre-init");
+        LOG_ERR("forkit has more than a single thread after pre-init" << Util::ThreadCounter().count());
 
     // Link the network and system files in sysTemplate, if possible.
     JailUtil::SysTemplate::setupDynamicFiles(sysTemplate);
@@ -799,9 +1028,9 @@ int forkit_main(int argc, char** argv)
     if (!Util::isKitInProcess())
     {
         // Parse the configuration.
-        const auto conf = std::getenv("COOL_CONFIG");
-        config::initialize(std::string(conf ? conf : std::string()));
-        EnableExperimental = config::getBool("experimental_features", false);
+        char* const conf = std::getenv("COOL_CONFIG");
+        ConfigUtil::initialize(std::string(conf ? conf : std::string()));
+        EnableExperimental = ConfigUtil::getBool("experimental_features", false);
     }
 
     Util::setThreadName("forkit");
@@ -811,7 +1040,8 @@ int forkit_main(int argc, char** argv)
     // We must have at least one child, more are created dynamically.
     // Ask this first child to send version information to master process and trace startup.
     ::setenv("COOL_TRACE_STARTUP", "1", 1);
-    const pid_t forKitPid = createLibreOfficeKit(childRoot, sysTemplate, loTemplate, useMountNamespaces, true);
+    const pid_t forKitPid = createLibreOfficeKit(childRoot, sysTemplate, loTemplate,
+                                                 ForKitIdent, useMountNamespaces, true);
     if (forKitPid < 0)
     {
         LOG_FTL("Failed to create a kit process.");
@@ -847,7 +1077,7 @@ int forkit_main(int argc, char** argv)
         Util::forcedExit(EX_SOFTWARE);
     }
 
-    const int parentPid = getppid();
+    parentPid = getppid();
     LOG_INF("ForKit process is ready. Parent: " << parentPid);
 
     while (!SigUtil::getShutdownRequestFlag())
@@ -868,9 +1098,13 @@ int forkit_main(int argc, char** argv)
 #if ENABLE_DEBUG
         if (!SingleKit)
 #endif
-            // new kits are launched primarily after a 'spawn' message
             if (!Util::isKitInProcess() && !SigUtil::getTerminationFlag())
+            {
+                // new kits are launched primarily after a 'spawn' message
                 forkLibreOfficeKit(childRoot, sysTemplate, loTemplate, useMountNamespaces);
+                // new sub forkits are launched after an 'addforkit' message
+                createSubForKits(childRoot, sysTemplate, loTemplate, useMountNamespaces);
+            }
     }
 
     const int returnValue = UnitBase::uninit();

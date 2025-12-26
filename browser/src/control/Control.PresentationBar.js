@@ -12,25 +12,26 @@
  * JSDialog.PresentationBar - buttons for adding/removing slides
  */
 
-/* global JSDialog _ _UNO */
+/* global JSDialog _ _UNO app */
 
 class PresentationBar {
 
 	constructor(map) {
 		this.map = map;
-		this.parentContainer = L.DomUtil.get('presentation-toolbar');
-		this.builder = new L.control.jsDialogBuilder(
+		this.parentContainer = window.L.DomUtil.get('presentation-toolbar');
+		this.builder = new window.L.control.jsDialogBuilder(
 			{
 				mobileWizard: this,
 				map: this.map,
-				cssClass: 'jsdialog'
+				cssClass: 'jsdialog',
+				suffix: 'presentation-toolbar',
 			});
 
 		this.create();
 
 		map.on('wopiprops', this.onWopiProps, this);
 		map.on('doclayerinit', this.onDocLayerInit, this);
-		map.on('updatepermission', this.onUpdatePermission, this);
+		app.events.on('updatepermission', this.onUpdatePermission.bind(this));
 		map.on('commandstatechanged', this.onCommandStateChanged, this);
 
 		if (this.map.getDocType() === 'presentation') {
@@ -90,7 +91,7 @@ class PresentationBar {
 			}
 		];
 
-		this.parentContainer.innerHTML = '';
+		this.parentContainer.replaceChildren();
 		this.builder.build(this.parentContainer, data);
 
 		if (this.map.getDocType() === 'drawing') {
@@ -153,7 +154,7 @@ class PresentationBar {
 	onUpdatePermission(e) {
 		var presentationButtons = ['insertpage', 'duplicatepage', 'deletepage'];
 
-		if (e.perm === 'edit') {
+		if (e.detail.perm === 'edit') {
 			presentationButtons.forEach((id) => { this.enableItem(id, true); });
 
 			presentationButtons.forEach((id) => {
@@ -200,15 +201,14 @@ class PresentationBar {
 		if (this.map.getDocType() !== 'presentation')
 			return;
 
-		if (!this.map._docLayer.isHiddenSlide(this.map.getCurrentPartNumber()))
+		if (!app.impress.isSlideHidden(this.map.getCurrentPartNumber())) {
 			this.showItem('showslide', false);
-		else
-			this.showItem('showslide', true);
-
-		if (this.map._docLayer.isHiddenSlide(this.map.getCurrentPartNumber()))
 			this.showItem('hideslide', false);
-		else
+		}
+		else {
+			this.showItem('showslide', true);
 			this.showItem('hideslide', true);
+		}
 	}
 }
 

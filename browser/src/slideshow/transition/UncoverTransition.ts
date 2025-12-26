@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -25,8 +27,7 @@ class UncoverTransition extends Transition2d {
 	}
 
 	public start(): void {
-		const transitionSubType =
-			stringToTransitionSubTypeMap[this.slideInfo.transitionSubtype];
+		const transitionSubType = this.transitionFilterInfo.transitionSubtype;
 
 		if (transitionSubType == TransitionSubType.FROMTOP) {
 			this.direction = UncoverSubType.FROMTOP;

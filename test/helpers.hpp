@@ -11,20 +11,19 @@
 
 #pragma once
 
-#include "Unit.hpp"
-#include <test/lokassert.hpp>
-#include <test/testlog.hpp>
-
-#include <Socket.hpp>
 #include <Common.hpp>
+#include <JsonUtil.hpp>
+#include <Socket.hpp>
 #include <WebSocketSession.hpp>
 #include <common/ConfigUtil.hpp>
+#include <common/Unit.hpp>
 #include <common/Util.hpp>
+#include <test/lokassert.hpp>
+#include <test/testlog.hpp>
 #include <tools/COOLWebSocket.hpp>
 #include <wsd/TileDesc.hpp>
 
 #include <Poco/BinaryReader.h>
-#include <JsonUtil.hpp>
 #include <Poco/Net/HTTPClientSession.h>
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Net/HTTPResponse.h>
@@ -37,6 +36,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -75,7 +75,37 @@ std::string genRandomString(const size_t size)
     for (size_t i = 0; i < size; ++i)
     {
         // Sensible characters only, avoiding 0x7f DEL
-        text += static_cast<char>('!' + Util::rng::getNext() % 94);
+        char c = static_cast<char>('!' + Util::rng::getNext() % 94);
+
+        // remove markdown-indicators for now
+        switch (c)
+        {
+            // headings
+            case '#':
+            // ordered list
+            case '.':
+            // unordered list
+            case '-':
+            case '*':
+            // links
+            case '[':
+            case ']':
+            // code
+            case '`':
+            // italic
+            // bold
+            case '_':
+            // strikethrough
+            case '~':
+            // block quote
+            case '>':
+            // table
+            case '|':
+                i--;
+                break;
+            default:
+                text += c;
+        }
     }
 
     return text;
@@ -177,7 +207,6 @@ inline void getDocumentPathAndURL(const std::string& docFilename, std::string& d
 {
     const std::string testname = prefix;
 
-
     std::replace(prefix.begin(), prefix.end(), ' ', '_');
     documentPath = getTempFileCopyPath(TDOC, docFilename, prefix);
     std::string encodedUri;
@@ -190,7 +219,8 @@ inline void getDocumentPathAndURL(const std::string& docFilename, std::string& d
 inline
 void sendTextFrame(COOLWebSocket& socket, const std::string& string, const std::string& testname)
 {
-    TST_LOG("Sending " << string.size() << " bytes: " << COOLProtocol::getAbbreviatedMessage(string));
+    TST_LOG("Sending " << string.size()
+                       << " bytes: " << COOLProtocol::getAbbreviatedMessage(string));
     socket.sendFrame(string.data(), string.size());
 }
 
@@ -268,7 +298,13 @@ pocoGetRetry(const Poco::URI& uri, int retry = 3,
         try
         {
             LOG_INF("pocoGet #" << attempt << ": " << uri.toString());
-            return pocoGet(uri);
+            auto res = pocoGet(uri);
+            if (!res.first)
+            {
+                throw std::runtime_error("Server unavilable");
+            }
+
+            return res;
         }
         catch (const std::exception& ex)
         {
@@ -360,11 +396,11 @@ inline bool haveSsl()
 }
 
 /// Return a fully-qualified URI, with schema, to the test loopback server.
-inline std::string const& getTestServerURI(std::string proto = "http")
+inline std::string const& getTestServerURI(const std::string& proto = "http")
 {
     static std::string serverURI(
-        (haveSsl() && config::isSslEnabled() ? proto + "s://127.0.0.1:" : proto + "://127.0.0.1:")
-        + std::to_string(ClientPortNumber));
+        proto + ((haveSsl() && ConfigUtil::isSslEnabled()) ? "s://127.0.0.1:" : "://127.0.0.1:") +
+        std::to_string(ClientPortNumber));
 
     return serverURI;
 }
@@ -401,8 +437,9 @@ getResponseMessage(COOLWebSocket& ws, const std::string& prefix, const std::stri
                 {
                     if (COOLProtocol::matchPrefix(prefix, message))
                     {
-                        TST_LOG('[' << prefix <<  "] Matched " <<
-                                COOLWebSocket::getAbbreviatedFrameDump(response.data(), bytes, flags));
+                        TST_LOG('[' << prefix << "] Matched "
+                                    << COOLWebSocket::getAbbreviatedFrameDump(response.data(),
+                                                                              bytes, flags));
                         return response;
                     }
                 }
@@ -425,8 +462,9 @@ getResponseMessage(COOLWebSocket& ws, const std::string& prefix, const std::stri
                         throw std::runtime_error(message);
                     }
 
-                    TST_LOG('[' << prefix <<  "] Ignored " <<
-                            COOLWebSocket::getAbbreviatedFrameDump(response.data(), bytes, flags));
+                    TST_LOG('[' << prefix << "] Ignored "
+                                << COOLWebSocket::getAbbreviatedFrameDump(response.data(), bytes,
+                                                                          flags));
                 }
             }
         }
@@ -434,7 +472,7 @@ getResponseMessage(COOLWebSocket& ws, const std::string& prefix, const std::stri
     }
     catch (const Poco::Net::WebSocketException& exc)
     {
-        TST_LOG('[' << prefix <<  "] ERROR in helpers::getResponseMessage: " << exc.message());
+        TST_LOG('[' << prefix << "] ERROR in helpers::getResponseMessage: " << exc.message());
     }
 
     return std::vector<char>();
@@ -481,6 +519,27 @@ getResponseStringAny(const std::shared_ptr<http::WebSocketSession>& ws,
 
     return std::string(response.data(), response.size());
 }
+
+inline std::vector<std::string> getAllResponsesTimed(const std::shared_ptr<http::WebSocketSession>& ws,
+                                                     const std::string& prefix, const std::string& testname,
+                                                     const std::chrono::milliseconds timeoutMs
+                                                     = std::chrono::seconds(5))
+{
+    std::vector<std::string> responses;
+
+    auto endTime = std::chrono::steady_clock::now() + timeoutMs;
+    std::chrono::steady_clock::time_point now;
+    while ((now = std::chrono::steady_clock::now()) < endTime)
+    {
+        auto response = helpers::getResponseString(ws, prefix, testname,
+                                                   std::chrono::duration_cast<std::chrono::milliseconds>(endTime - now));
+        if (response.length() > 0)
+            responses.push_back(response);
+    }
+
+    return responses;
+}
+
 
 inline std::string assertResponseString(const std::shared_ptr<http::WebSocketSession>& ws,
                                         const std::string& prefix, const std::string& testname,
@@ -584,12 +643,14 @@ connectLOKit(const std::shared_ptr<SocketPoll>& socketPoll, const Poco::URI& uri
             auto ws = http::WebSocketSession::create(uri.toString());
 
             TST_LOG("Connection to " << uri.toString() << " is "
-                                     << (ws->secure() ? "secure" : "plain"));
+                                     << (ws->secure() ? "secure" : "plain")
+                                     << ", requesting: " << url);
 
             http::Request req(url);
             ws->asyncRequest(req, socketPoll);
 
-            TST_LOG("Connected to " << uri.toString() << ", waiting for progress: id:find response");
+            TST_LOG("Requested " << url << " from " << uri.toString()
+                                 << ", waiting for progress: id:find response");
             std::string msg;
             if (!(msg = getResponseString(ws, "progress:", testname)).empty() &&
                 COOLProtocol::matchPrefix("progress:", msg) &&
@@ -666,7 +727,7 @@ inline std::shared_ptr<http::WebSocketSession> loadDocAndGetSession(
 }
 
 inline std::shared_ptr<http::WebSocketSession>
-loadDocAndGetSession(std::shared_ptr<SocketPoll> socketPoll, const std::string& docFilename,
+loadDocAndGetSession(const std::shared_ptr<SocketPoll>& socketPoll, const std::string& docFilename,
                      const Poco::URI& uri, const std::string& testname, bool isView = true,
                      bool isAssert = true)
 {
@@ -674,7 +735,7 @@ loadDocAndGetSession(std::shared_ptr<SocketPoll> socketPoll, const std::string& 
     {
         std::string documentPath, documentURL;
         getDocumentPathAndURL(docFilename, documentPath, documentURL, testname);
-        return loadDocAndGetSession(std::move(socketPoll), uri, documentURL, testname, isView, isAssert);
+        return loadDocAndGetSession(socketPoll, uri, documentURL, testname, isView, isAssert);
     }
     catch (const std::exception& ex)
     {
@@ -702,15 +763,16 @@ void parseDocSize(const std::string& message, const std::string& type,
                   int& part, int& parts, int& width, int& height, int& viewid,
                   const std::string& testname)
 {
-    StringVector tokens(StringVector::tokenize(message, ' '));
+    Poco::JSON::Parser parser;
+    Poco::Dynamic::Var statusJsonVar = parser.parse(message);
+    const Poco::SharedPtr<Poco::JSON::Object>& statusJsonObject = statusJsonVar.extract<Poco::JSON::Object::Ptr>();
 
-    // Expected format is something like 'type= parts= current= width= height='.
-    const std::string text = tokens[0].substr(std::string("type=").size());
-    parts = std::stoi(tokens[1].substr(std::string("parts=").size()));
-    part = std::stoi(tokens[2].substr(std::string("current=").size()));
-    width = std::stoi(tokens[3].substr(std::string("width=").size()));
-    height = std::stoi(tokens[4].substr(std::string("height=").size()));
-    viewid = std::stoi(tokens[5].substr(std::string("viewid=").size()));
+    const std::string text = statusJsonObject->get("type").toString();
+    parts = std::stoi(statusJsonObject->get("partscount").toString());
+    part = std::stoi(statusJsonObject->get("selectedpart").toString());
+    width = std::stoi(statusJsonObject->get("width").toString());
+    height = std::stoi(statusJsonObject->get("height").toString());
+    viewid = std::stoi(statusJsonObject->get("viewid").toString());
     LOK_ASSERT_EQUAL(type, text);
     LOK_ASSERT(parts > 0);
     LOK_ASSERT(part >= 0);
@@ -725,7 +787,7 @@ inline std::vector<char> getTileMessage(const std::shared_ptr<http::WebSocketSes
     return getResponseMessage(ws, "tile", testname);
 }
 
-enum SpecialKey { skNone=0, skShift=0x1000, skCtrl=0x2000, skAlt=0x4000 };
+enum SpecialKey : std::uint16_t { skNone=0, skShift=0x1000, skCtrl=0x2000, skAlt=0x4000 };
 
 inline int getCharChar(char ch, SpecialKey specialKeys)
 {
@@ -856,17 +918,18 @@ inline bool svgMatch(const std::string& testname, const std::vector<char>& respo
     const std::vector<char> expectedSVG = helpers::readDataFromFile(templateFile);
     if (expectedSVG != response)
     {
-        TST_LOG_BEGIN("Svg mismatch: response is\n");
+        std::ostringstream oss;
+        oss << "Svg mismatch: response is\n";
         if(response.empty())
-            TST_LOG_APPEND("<empty>");
+            oss << "<empty>";
         else
-            TST_LOG_APPEND(std::string(response.data(), response.size()));
-        TST_LOG_APPEND("\nvs. expected (from '" << templateFile << "' :\n");
-        TST_LOG_APPEND(std::string(expectedSVG.data(), expectedSVG.size()));
+            oss << std::string(response.data(), response.size());
+        oss << "\nvs. expected (from '" << templateFile << "' :\n";
+        oss << std::string(expectedSVG.data(), expectedSVG.size());
         std::string newName = templateFile;
         newName += ".new";
-        TST_LOG_APPEND("Updated template writing to: " << newName << '\n');
-        TST_LOG_END;
+        oss << "Updated template writing to: " << newName << '\n';
+        TST_LOG(oss.str());
 
         FILE *of = fopen(Poco::Path(TDOC, newName).toString().c_str(), "w");
         LOK_ASSERT(of != nullptr);
@@ -976,8 +1039,13 @@ inline std::string getAllText(const std::shared_ptr<http::WebSocketSession>& soc
         std::string text = getResponseString(socket, prefix, testname);
         if (!text.empty())
         {
-            if (expected.empty() || (prefix + expected) == text)
+            if (expected.empty())
                 return text;
+            else if ((prefix + expected) == text)
+                return text;
+            else
+                LOG_DBG("text selection mismatch text received: '" << text <<
+                        "' is not what is expected: '" << prefix << expected << "'");
         }
     }
 

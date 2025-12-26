@@ -14,12 +14,24 @@ Summary:        Collabora Online WebSocket Daemon
 License:        EULA
 Source0:        coolwsd-@PACKAGE_VERSION@.tar.gz
 BuildRequires:  libcap-devel pam-devel rsync
-Requires:       collaboraoffice collaboraoffice-ure collaboraofficebasis-core collaboraofficebasis-writer collaboraofficebasis-impress collaboraofficebasis-graphicfilter collaboraofficebasis-en-US collaboraofficebasis-calc collaboraofficebasis-ooofonts collaboraofficebasis-images collaboraofficebasis-draw collaboraofficebasis-extension-pdf-import collaboraofficebasis-ooolinguistic collaboraofficebasis-math
-Requires(post): coreutils grep sed cpio /usr/sbin/setcap
+Requires:       collaboraoffice >= 25.04.0, collaboraoffice-ure >= 25.04.0, collaboraofficebasis-core >= 25.04.0, collaboraofficebasis-writer >= 25.04.0, collaboraofficebasis-impress >= 25.04.0, collaboraofficebasis-graphicfilter >= 25.04.0, collaboraofficebasis-en-US >= 25.04.0, collaboraofficebasis-calc >= 25.04.0, collaboraofficebasis-ooofonts >= 25.04.0, collaboraofficebasis-images >= 25.04.0, collaboraofficebasis-draw >= 25.04.0, collaboraofficebasis-extension-pdf-import >= 25.04.0, collaboraofficebasis-ooolinguistic >= 25.04.0, collaboraofficebasis-math >= 25.04.0
+Requires(post): coreutils grep sed cpio
 Provides: loolwsd
 Obsoletes: loolwsd collaboraoffice-dict-br collaboraoffice-dict-et collaboraoffice-dict-gd collaboraoffice-dict-gu collaboraoffice-dict-hi collaboraoffice-dict-lt collaboraoffice-dict-lv collaboraoffice-dict-ro collaboraoffice-dict-sr collaboraoffice-dict-te collaboraofficebasis-as collaboraofficebasis-bn-IN collaboraofficebasis-ast collaboraofficebasis-br collaboraofficebasis-ca-valencia collaboraofficebasis-cy collaboraofficebasis-et collaboraofficebasis-ga collaboraofficebasis-gd collaboraofficebasis-gu collaboraofficebasis-hi collaboraofficebasis-km collaboraofficebasis-kn collaboraofficebasis-lt collaboraofficebasis-lv collaboraofficebasis-ml collaboraofficebasis-mr collaboraofficebasis-nn collaboraofficebasis-or collaboraofficebasis-pa-IN collaboraofficebasis-ro collaboraofficebasis-sr collaboraofficebasis-sr-Latn collaboraofficebasis-ta collaboraofficebasis-te
 
+%define _source_filedigest_algorithm 8
+%define _binary_filedigest_algorithm 8
+%define _source_payload w2.xzdio
+%define _binary_payload w2.xzdio
+
 %description
+
+%package deprecated
+Summary: Collabora Online WebSocket Daemon Deprecated Utilities
+Requires: %{name} = %{version}-%{release}
+Requires(post): /usr/sbin/setcap
+
+%description deprecated
 
 %prep
 %setup -n coolwsd-@PACKAGE_VERSION@
@@ -29,7 +41,6 @@ Obsoletes: loolwsd collaboraoffice-dict-br collaboraoffice-dict-et collaboraoffi
 	--enable-silent-rules \
 	--with-lokit-path=bundled/include \
 	--with-lo-path=/opt/collaboraoffice \
-	--disable-setcap \
 	--disable-tests \
 %if 0%{?config_options:1}
 	%{config_options}
@@ -56,29 +67,25 @@ echo "account    required     pam_unix.so" >>  %{buildroot}/etc/pam.d/coolwsd
 /usr/bin/loolwsd
 /usr/bin/coolwsd-systemplate-setup
 /usr/bin/loolwsd-systemplate-setup
-/usr/bin/coolforkit
-/usr/bin/coolforkitns
+/usr/bin/coolforkit-ns
 /usr/bin/coolconvert
 /usr/bin/coolconfig
 /usr/bin/loolconfig
 /usr/bin/coolstress
-/usr/bin/coolmount
 /usr/share/coolwsd/discovery.xml
 /usr/share/coolwsd/favicon.ico
 /usr/share/coolwsd/browser
-/usr/share/doc/coolwsd/README.md
 /usr/share/doc/coolwsd/README.vars
 /usr/share/doc/coolwsd/metrics.txt
 /usr/share/doc/coolwsd/protocol.txt
-/usr/share/doc/coolwsd/reference.md
 /usr/share/doc/coolwsd/THIRDPARTYLICENSES
+/usr/share/doc/coolwsd/collabora-online-sbom.spdx.json
 /usr/share/man/man1/coolwsd.1.gz
-/usr/share/man/man1/coolforkit.1.gz
+/usr/share/man/man1/coolforkit-ns.1.gz
 /usr/share/man/man1/coolconvert.1.gz
 /usr/share/man/man1/coolconfig.1.gz
 /usr/share/man/man1/coolstress.1.gz
 /usr/share/man/man1/coolwsd-systemplate-setup.1.gz
-/usr/share/man/man1/coolmount.1.gz
 /usr/lib/systemd/system/coolwsd.service
 
 %config(noreplace) /etc/pam.d/coolwsd
@@ -90,13 +97,18 @@ echo "account    required     pam_unix.so" >>  %{buildroot}/etc/pam.d/coolwsd
 
 %doc README.md
 
+%files deprecated
+%defattr(-,root,root,-)
+/usr/bin/coolforkit-caps
+/usr/bin/coolmount
+/usr/share/man/man1/coolforkit-caps.1.gz
+/usr/share/man/man1/coolmount.1.gz
+
 %pre
 getent group cool >/dev/null || groupadd -r cool
 getent passwd cool >/dev/null || useradd -g cool -r cool -d /opt/cool -s /bin/bash
 
 %post
-setcap cap_fowner,cap_chown,cap_sys_chroot=ep /usr/bin/coolforkit
-setcap cap_sys_admin=ep /usr/bin/coolmount
 if [ -f /etc/loolwsd/loolwsd.xml ]; then /usr/bin/coolconfig migrateconfig --write; fi
 # compatibility with older systemd versions
 SYSTEMD_VERSION=$(busctl --system get-property org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager Version | grep -Eo [0-9]{3} | head -n 1)
@@ -123,10 +135,11 @@ if [ $COOLWSD_IS_ACTIVE == "1" ]; then systemctl stop coolwsd; fi
 lokitroot=/opt/collaboraoffice
 coolparent=`cd ${lokitroot} && cd .. && /bin/pwd`
 
-rm -rf ${coolparent}/cool
-mkdir -p ${coolparent}/cool/child-roots
+rm -rf ${coolparent}/cool || true
+mkdir -p ${coolparent}/cool/child-roots ${coolparent}/cool/cache
 chown cool:cool ${coolparent}/cool
 chown cool:cool ${coolparent}/cool/child-roots
+chown cool:cool ${coolparent}/cool/cache
 
 fc-cache ${lokitroot}/share/fonts/truetype
 coolwsd-systemplate-setup ${coolparent}/cool/systemplate ${lokitroot} >/dev/null 2>&1
@@ -134,6 +147,9 @@ coolconfig generate-proof-key >/dev/null 2>&1
 
 if [ $COOLWSD_IS_ACTIVE == "1" ]; then systemctl start coolwsd; fi
 
+%post deprecated
+setcap cap_fowner,cap_chown,cap_sys_chroot=ep /usr/bin/coolforkit-caps
+setcap cap_sys_admin=ep /usr/bin/coolmount
 
 %preun
 if [ $1 -eq 0 ]; then
@@ -147,6 +163,8 @@ if [ $1 -eq 0 ]; then
 fi
 
 %changelog
+* Mon Aug 12 2024 Caolán McNamara
+- split out a deprecated subpackage of the helpers not needed with namespaces
 * Mon Aug 03 2015 Mihai Varga
 - added the cronjob
 * Tue May 19 2015 Tor Lillqvist

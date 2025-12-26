@@ -19,6 +19,8 @@
 #include "wopi/CheckFileInfo.hpp"
 #include <Storage.hpp>
 
+#include <istream>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -31,23 +33,28 @@ public:
         : _id(std::move(id))
         , _requestDetails(requestDetails)
         , _socket(socket)
+        , _logFD(socket->getFD())
     {
     }
 
-    void handleRequest(const std::shared_ptr<TerminatingPoll>& poll,
+    void handleRequest(std::istream & message, const std::shared_ptr<TerminatingPoll>& poll,
                        SocketDisposition& disposition);
 
 private:
-    inline void logPrefix(std::ostream& os) const { os << '#' << _socket->getFD() << ": "; }
+    inline void logPrefix(std::ostream& os) const { os << '#' << _logFD << ": "; }
 
     void checkFileInfo(const std::shared_ptr<TerminatingPoll>& poll, const Poco::URI& uri,
-                       int redirectionLimit);
-    void download(const std::shared_ptr<TerminatingPoll>& poll, const std::string& url,
+                       std::optional<std::string> const & postBody, int redirectionLimit);
+    void transfer(const std::shared_ptr<TerminatingPoll>& poll, const std::string& url,
+                  std::optional<std::string> const & postBody,
                   const Poco::URI& uriPublic, int redirectionLimit);
 
     const std::string _id;
     const RequestDetails _requestDetails;
-    const std::shared_ptr<StreamSocket> _socket;
+    const std::weak_ptr<StreamSocket> _socket;
     std::shared_ptr<http::Session> _httpSession;
-    std::unique_ptr<CheckFileInfo> _checkFileInfo;
+    std::shared_ptr<CheckFileInfo> _checkFileInfo;
+    int _logFD;
 };
+
+/* vim:set shiftwidth=4 softtabstop=4 expandtab: */

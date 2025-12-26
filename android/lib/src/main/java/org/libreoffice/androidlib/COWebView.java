@@ -11,6 +11,9 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
+
+import androidx.annotation.NonNull;
 
 public class COWebView extends WebView {
     private Context mContext;
@@ -18,18 +21,28 @@ public class COWebView extends WebView {
     public COWebView(Context context) {
         super(context);
         mContext = context;
+        setWebViewClient(new COWebViewClient());
     }
 
     public COWebView(Context context, AttributeSet attrs) {
         super(context, attrs);
+        setWebViewClient(new COWebViewClient());
     }
 
     public COWebView(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
+        setWebViewClient(new COWebViewClient());
     }
 
     public COWebView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
+        setWebViewClient(new COWebViewClient());
+    }
+
+    @NonNull
+    @Override
+    public COWebViewClient getWebViewClient() {
+        return (COWebViewClient) super.getWebViewClient();
     }
 
     /*

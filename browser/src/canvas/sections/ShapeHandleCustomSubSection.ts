@@ -14,27 +14,24 @@
 */
 
 class ShapeHandleCustomSubSection extends CanvasSectionObject {
-    processingOrder: number = L.CSections.DefaultForDocumentObjects.processingOrder;
-	drawingOrder: number = L.CSections.DefaultForDocumentObjects.drawingOrder + 1; // Handle events before the parent section.
-	zIndex: number = L.CSections.DefaultForDocumentObjects.zIndex;
+    processingOrder: number = app.CSections.DefaultForDocumentObjects.processingOrder;
+	drawingOrder: number = app.CSections.DefaultForDocumentObjects.drawingOrder + 1; // Handle events before the parent section.
+	zIndex: number = app.CSections.DefaultForDocumentObjects.zIndex;
     documentObject: boolean = true;
 
 	constructor (parentHandlerSection: ShapeHandlesSection, sectionName: string, size: number[], documentPosition: cool.SimplePoint, ownInfo: any) {
-        super();
+        super(sectionName);
 
         this.size = size;
-		this.name = sectionName;
 
 		this.sectionProperties.position = documentPosition.clone();
 		this.sectionProperties.parentHandlerSection = parentHandlerSection;
 		this.sectionProperties.ownInfo = ownInfo;
-		this.sectionProperties.previousCursorStyle = null;
 
 		this.sectionProperties.mousePointerType = 'grab';
-		this.sectionProperties.mapPane = (<HTMLElement>(document.querySelectorAll('.leaflet-map-pane')[0]));
 	}
 
-	onDraw(frameCount?: number, elapsedTime?: number, subsetBounds?: cool.Bounds): void {
+	onDraw(frameCount?: number, elapsedTime?: number): void {
 		this.context.fillStyle = 'yellow';
 		this.context.strokeStyle = 'black';
 		this.context.beginPath();
@@ -48,33 +45,16 @@ class ShapeHandleCustomSubSection extends CanvasSectionObject {
 		this.setPosition(this.sectionProperties.position.pX, this.sectionProperties.position.pY);
 	}
 
-	onMouseEnter(point: number[], e: MouseEvent) {
-		app.map.dontHandleMouse = true;
-		this.sectionProperties.previousCursorStyle = this.sectionProperties.mapPane.style.cursor;
-		this.sectionProperties.mapPane.style.cursor = this.sectionProperties.mousePointerType;
-		this.stopPropagating();
-		e.stopPropagation();
-		this.containerObject.requestReDraw();
+	onMouseEnter(point: cool.SimplePoint, e: MouseEvent) {
+		this.context.canvas.style.cursor = this.sectionProperties.mousePointerType;
 	}
 
-	onMouseLeave(point: number[], e: MouseEvent) {
-		app.map.dontHandleMouse = false;
-		this.sectionProperties.mapPane.style.cursor = this.sectionProperties.previousCursorStyle;
-		this.stopPropagating();
-		e.stopPropagation();
-		this.containerObject.requestReDraw();
-	}
-
-	onMouseDown(point: Array<number>, e: MouseEvent): void {
-		(window as any).IgnorePanning = true;
-	}
-
-	onMouseUp(point: number[], e: MouseEvent): void {
+	onMouseUp(point: cool.SimplePoint, e: MouseEvent): void {
 		if (this.containerObject.isDraggingSomething()) {
 			const parameters = {
 				HandleNum: { type: 'long', value: this.sectionProperties.ownInfo.id },
-				NewPosX: { type: 'long', value: Math.round((point[0] + this.position[0]) * app.pixelsToTwips) },
-				NewPosY: { type: 'long', value: Math.round((point[1] + this.position[1]) * app.pixelsToTwips) }
+				NewPosX: { type: 'long', value: Math.round((point.pX + this.position[0]) * app.pixelsToTwips) },
+				NewPosY: { type: 'long', value: Math.round((point.pY + this.position[1]) * app.pixelsToTwips) }
 			};
 
 			app.map.sendUnoCommand('.uno:MoveShapeHandle', parameters);
@@ -82,11 +62,9 @@ class ShapeHandleCustomSubSection extends CanvasSectionObject {
 			this.stopPropagating();
 			e.stopPropagation();
 		}
-
-		(window as any).IgnorePanning = false;
 	}
 
-	onMouseMove(point: Array<number>, dragDistance: Array<number>, e: MouseEvent) {
+	onMouseMove(point: cool.SimplePoint, dragDistance: Array<number>, e: MouseEvent) {
 		if (this.containerObject.isDraggingSomething()) {
 			this.stopPropagating();
 			e.stopPropagation();

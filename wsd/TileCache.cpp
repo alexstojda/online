@@ -38,9 +38,9 @@ using namespace COOLProtocol;
 TileCache::TileCache(std::string docURL, const std::chrono::system_clock::time_point& modifiedTime,
                      bool dontCache)
     : _docURL(std::move(docURL))
-    , _dontCache(dontCache)
     , _cacheSize(0)
     , _maxCacheSize(1024 * 1024)
+    , _dontCache(dontCache)
 {
 #ifndef BUILDING_TESTS
     LOG_INF("TileCache ctor for uri [" << COOLWSD::anonymizeUrl(_docURL) <<
@@ -73,8 +73,12 @@ void TileCache::clear()
 /// rendering latency.
 struct TileCache::TileBeingRendered
 {
-    explicit TileBeingRendered(const TileDesc& tile, const std::chrono::steady_clock::time_point &now)
-        : _startTime(now), _tile(tile) { }
+    explicit TileBeingRendered(const TileDesc& tile,
+                               const std::chrono::steady_clock::time_point now)
+        : _startTime(now)
+        , _tile(tile)
+    {
+    }
 
     const TileDesc& getTile() const { return _tile; }
 
@@ -85,14 +89,13 @@ struct TileCache::TileBeingRendered
     void setVersion(int version) { _tile.setVersion(version); }
 
     std::chrono::steady_clock::time_point getStartTime() const { return _startTime; }
-    std::chrono::milliseconds getElapsedTimeMs(const std::chrono::steady_clock::time_point* now
-                                               = nullptr) const
+    std::chrono::milliseconds
+    getElapsedTimeMs(const std::chrono::steady_clock::time_point now) const
     {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            (now ? *now : std::chrono::steady_clock::now()) - _startTime);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - _startTime);
     }
 
-    bool isStale(const std::chrono::steady_clock::time_point* now = nullptr) const
+    bool isStale(const std::chrono::steady_clock::time_point now) const
     {
         return getElapsedTimeMs(now) > std::chrono::milliseconds(COMMAND_TIMEOUT_MS);
     }
@@ -108,12 +111,12 @@ private:
 };
 
 size_t TileCache::countTilesBeingRenderedForSession(const std::shared_ptr<ClientSession>& session,
-                                                    const std::chrono::steady_clock::time_point &now)
+                                                    const std::chrono::steady_clock::time_point now)
 {
     size_t count = 0;
     for (auto& it : _tilesBeingRendered)
     {
-        if (it.second->isStale(&now))
+        if (it.second->isStale(now))
             continue;
 
         for (auto& s : it.second->getSubscribers())
@@ -133,7 +136,7 @@ bool TileCache::hasTileBeingRendered(const TileDesc& tileDesc, const std::chrono
         return false;
 
     /// did we stall ? if so re-issue.
-    return !now ? true : !it->second->isStale(now);
+    return !now ? true : !it->second->isStale(*now);
 }
 
 std::shared_ptr<TileCache::TileBeingRendered> TileCache::findTileBeingRendered(const TileDesc& tileDesc)
@@ -219,8 +222,9 @@ void TileCache::saveTileAndNotify(const TileDesc& desc, const char *data, const 
         // else zero sized
 
         // Remove subscriptions.
-        LOG_DBG("STATISTICS: tile " << desc.getVersion() << " internal roundtrip " <<
-                tileBeingRendered->getElapsedTimeMs());
+        LOG_DBG("STATISTICS: tile "
+                << desc.getVersion() << " internal roundtrip "
+                << tileBeingRendered->getElapsedTimeMs(std::chrono::steady_clock::now()));
         forgetTileBeingRendered(desc, tileBeingRendered);
     }
     else
@@ -277,19 +281,25 @@ Blob TileCache::lookupCachedStream(StreamType type, const std::string& name)
     return Blob();
 }
 
-void TileCache::invalidateTiles(int part, int mode, int x, int y, int width, int height, int normalizedViewId)
+bool TileCache::invalidateTiles(int part, int mode, int x, int y, int width, int height, CanonicalViewId canonicalViewId)
 {
     LOG_TRC("Removing invalidated tiles: part: " << part << ", mode: " << mode <<
             ", x: " << x << ", y: " << y <<
             ", width: " << width <<
             ", height: " << height <<
-            ", viewid: " << normalizedViewId);
+            ", viewid: " << canonicalViewId);
 
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
+    if (_cache.empty())
+    {
+        LOG_TRC("Removing invalidated tiles: cache was empty");
+        return false;
+    }
+
     for (auto it = _cache.begin(); it != _cache.end();)
     {
-        if (intersectsTile(it->first, part, mode, x, y, width, height, normalizedViewId))
+        if (intersectsTile(it->first, part, mode, x, y, width, height, canonicalViewId))
         {
             // FIXME: only want to keep as invalid keyframes in the view area(s)
             it->second->invalidate();
@@ -307,16 +317,18 @@ void TileCache::invalidateTiles(int part, int mode, int x, int y, int width, int
             ++it;
         }
     }
+
+    return true;
 }
 
-void TileCache::invalidateTiles(const std::string& tiles, int normalizedViewId)
+bool TileCache::invalidateTiles(const std::string& tiles, CanonicalViewId canonicalViewId)
 {
     int part = 0, mode = 0;
     TileWireId wireId = 0;
     const Util::Rectangle invalidateRect = TileCache::parseInvalidateMsg(tiles, part, mode, wireId);
 
-    invalidateTiles(part, mode, invalidateRect.getLeft(), invalidateRect.getTop(),
-                    invalidateRect.getWidth(), invalidateRect.getHeight(), normalizedViewId);
+    return invalidateTiles(part, mode, invalidateRect.getLeft(), invalidateRect.getTop(),
+                    invalidateRect.getWidth(), invalidateRect.getHeight(), canonicalViewId);
 }
 
 Util::Rectangle TileCache::parseInvalidateMsg(const std::string& tiles, int &part, int &mode, TileWireId &wireId)
@@ -399,7 +411,7 @@ Util::Rectangle TileCache::parseInvalidateMsg(const std::string& tiles, int &par
 std::string TileCache::cacheFileName(const TileDesc& tile)
 {
     std::ostringstream oss;
-    oss << tile.getNormalizedViewId() << '_' << tile.getPart() << '_' << tile.getEditMode() << '_'
+    oss << tile.getCanonicalViewId() << '_' << tile.getPart() << '_' << tile.getEditMode() << '_'
         << tile.getWidth() << 'x' << tile.getHeight() << '.'
         << tile.getTilePosX() << ',' << tile.getTilePosY() << '.'
         << tile.getTileWidth() << 'x' << tile.getTileHeight() << ".png";
@@ -415,7 +427,7 @@ bool TileCache::parseCacheFileName(const std::string& fileName, int& part, int& 
            == 8;
 }
 
-bool TileCache::intersectsTile(const TileDesc &tileDesc, int part, int mode, int x, int y, int width, int height, int normalizedViewId)
+bool TileCache::intersectsTile(const TileDesc &tileDesc, int part, int mode, int x, int y, int width, int height, CanonicalViewId canonicalViewId)
 {
     if (part != -1 && tileDesc.getPart() != part)
         return false;
@@ -423,7 +435,7 @@ bool TileCache::intersectsTile(const TileDesc &tileDesc, int part, int mode, int
     if (mode != tileDesc.getEditMode())
         return false;
 
-    if (normalizedViewId != tileDesc.getNormalizedViewId())
+    if (canonicalViewId != tileDesc.getCanonicalViewId())
         return false;
 
     const int left = std::max(x, tileDesc.getTilePosX());
@@ -435,8 +447,9 @@ bool TileCache::intersectsTile(const TileDesc &tileDesc, int part, int mode, int
 }
 
 // FIXME: to be further simplified when we centralize tile messages.
-bool TileCache::subscribeToTileRendering(const TileDesc& tile, const std::shared_ptr<ClientSession>& subscriber,
-                                         const std::chrono::steady_clock::time_point &now)
+bool TileCache::subscribeToTileRendering(const TileDesc& tile,
+                                         const std::shared_ptr<ClientSession>& subscriber,
+                                         const std::chrono::steady_clock::time_point now)
 {
     ASSERT_CORRECT_THREAD_OWNER(_owner);
 
@@ -444,7 +457,7 @@ bool TileCache::subscribeToTileRendering(const TileDesc& tile, const std::shared
 
     if (tileBeingRendered)
     {
-        if (tileBeingRendered->isStale(&now))
+        if (tileBeingRendered->isStale(now))
             LOG_DBG("Painting stalled; need to re-issue on tile " << tile.debugName());
 
         for (const auto &s : tileBeingRendered->getSubscribers())
@@ -479,7 +492,7 @@ bool TileCache::subscribeToTileRendering(const TileDesc& tile, const std::shared
 Tile TileCache::findTile(const TileDesc &desc)
 {
     const auto it = _cache.find(desc);
-    if (it != _cache.end() && it->first.getNormalizedViewId() == desc.getNormalizedViewId())
+    if (it != _cache.end())
     {
         LOG_TRC("Found cache tile: " << desc.serialize() << " of size " << it->second);
         return it->second;
@@ -558,6 +571,7 @@ void TileCache::ensureCacheSize()
         WidSize(TileWireId w, size_t s) : _wid(w), _size(s) {}
     };
     std::vector<WidSize> wids;
+    wids.reserve(_cache.size());
     for (const auto& it : _cache)
         wids.emplace_back(it.first.getWireId(), itemCacheSize(it.second));
 
@@ -632,13 +646,14 @@ void TileCache::saveDataToStreamCache(StreamType type, const std::string &fileNa
 
     Blob blob = std::make_shared<BlobData>(size);
     std::memcpy(blob->data(), data, size);
-    _streamCache[type][fileName] = blob;
+    _streamCache[type][fileName] = std::move(blob);
 }
 
 void TileCache::TileBeingRendered::dumpState(std::ostream& os)
 {
-    os << "    " << _tile.serialize() << ' ' << std::setw(4) << getElapsedTimeMs()
-       << _subscribers.size() << " subscribers\n";
+    os << "    " << _tile.serialize() << ' ' << std::setw(4)
+       << getElapsedTimeMs(std::chrono::steady_clock::now()) << _subscribers.size()
+       << " subscribers\n";
     for (const auto& it : _subscribers)
     {
         std::shared_ptr<ClientSession> session = it.lock();
@@ -653,14 +668,18 @@ void TileCache::TileBeingRendered::dumpState(std::ostream& os)
 void TileCache::dumpState(std::ostream& os)
 {
     os << "\n  TileCache:";
-    os << "\n    num: " << _cache.size() << " size: " << _cacheSize << " bytes\n";
+    os << "\n    num: " << _cache.size() << ", size: " << _cacheSize << " (" << _maxCacheSize
+       << ") bytes\n";
+    size_t totalSize = 0;
+    size_t totalCapacity = 0;
     for (const auto& it : _cache)
     {
-        os << "    " << std::setw(4) << it.first.getWireId()
-           << '\t' << std::setw(6) << it.second->size() << " bytes"
-           << "\t'" << it.first.serialize() << " ";
+        totalSize += it.second->size();
+        totalCapacity += it.second->data().capacity();
+        os << "    " << std::setw(4) << it.first.getWireId() << '\t' << std::setw(6)
+           << it.second->size() << " bytes" << "\t'" << it.first.serialize() << " ";
         it.second->dumpState(os);
-        os << "\n";
+        os << '\n';
     }
 
     int type = 0;
@@ -668,20 +687,26 @@ void TileCache::dumpState(std::ostream& os)
     {
         size_t num = 0;
         size_t size = 0;
+        size_t capacity = 0;
         for (const auto& it : i)
         {
             num++;
             size += it.second->size();
+            capacity += it.second->capacity();
         }
 
-        os << "    stream cache: " << type++ << " num: " << num << " size: " << size << " bytes\n";
+        totalSize += size;
+        totalCapacity += capacity;
+        os << "    stream cache: " << type++ << ", num: " << num << ", size: " << size << " ("
+           << capacity << ") bytes\n";
         for (const auto& it : i)
         {
-            os << "    " << it.first
-               << '\t' << std::setw(6) << it.second->size() << " bytes\n";
+            os << "    " << it.first << '\t' << std::setw(6) << it.second->size() << " ("
+               << std::setw(6) << it.second->capacity() << ") bytes\n";
         }
     }
 
+    os << "    total size: " << totalSize << ", total capacity: " << totalCapacity << " bytes\n";
     os << "    tiles being rendered " << _tilesBeingRendered.size() << '\n';
     for (const auto& it : _tilesBeingRendered)
         it.second->dumpState(os);

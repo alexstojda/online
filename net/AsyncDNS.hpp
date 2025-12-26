@@ -20,10 +20,15 @@
 #include <string>
 #include <thread>
 
+#include <net/NetUtil.hpp>
+
+class UnitWSD;
+
 namespace net
 {
 
 class DNSResolver;
+class HostEntry;
 
 class AsyncDNS
 {
@@ -36,13 +41,14 @@ public:
 
     static void dumpState(std::ostream& os);
 
-    typedef std::function<void(const std::string& hostName, const std::string& exception)> DNSThreadFn;
-    typedef std::function<std::string()> DNSThreadDumpStateFn;
+    using DNSThreadFn = std::function<void(const HostEntry& hostEntry)>;
+    using DNSThreadDumpStateFn = std::function<std::string()>;
 
-    static void canonicalHostName(const std::string& addressToCheck, const DNSThreadFn& cb,
-                                  const DNSThreadDumpStateFn& dumpState);
+    static void lookup(std::string searchEntry, DNSThreadFn cb,
+                       const DNSThreadDumpStateFn& dumpState);
 
 private:
+    UnitWSD* const _unitWsd;
     std::atomic<bool> _exit;
     std::unique_ptr<DNSResolver> _resolver;
     std::unique_ptr<std::thread> _thread;
@@ -53,14 +59,22 @@ private:
         std::string query;
         AsyncDNS::DNSThreadFn cb;
         AsyncDNS::DNSThreadDumpStateFn dumpState;
-        // for now just canonicalHostName lookups
+
+        Lookup()
+        {
+        }
+        Lookup(const std::string& q, const AsyncDNS::DNSThreadFn& c, const AsyncDNS::DNSThreadDumpStateFn& d)
+            : query(q),
+            cb(c),
+            dumpState(d)
+        {
+        }
     };
     std::queue<Lookup> _lookups;
     Lookup _activeLookup;
 
     void resolveDNS();
-    void addLookup(const std::string& lookup, const DNSThreadFn& cb,
-                   const DNSThreadDumpStateFn& dumpState);
+    void addLookup(std::string lookup, DNSThreadFn cb, const DNSThreadDumpStateFn& dumpState);
 
     void startThread();
     void joinThread();

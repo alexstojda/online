@@ -14,9 +14,11 @@
 #include "Authorization.hpp"
 #include "Log.hpp"
 #include "StringVector.hpp"
+#include <common/Uri.hpp>
 
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/URI.h>
+
 
 void Authorization::authorizeURI(Poco::URI& uri) const
 {
@@ -45,7 +47,10 @@ void Authorization::authorizeRequest(Poco::Net::HTTPRequest& request) const
     switch (_type)
     {
         case Type::Token:
-            request.set("Authorization", "Bearer " + _data);
+            if (!_noHeader)
+            {
+                request.set("Authorization", "Bearer " + _data);
+            }
             break;
         case Type::Header:
         {
@@ -90,22 +95,29 @@ void Authorization::authorizeRequest(Poco::Net::HTTPRequest& request) const
 
 Authorization Authorization::create(const Poco::URI& uri)
 {
-    // prefer the access_token
+    bool noHeader = false;
+    Authorization::Type type = Authorization::Type::None;
     std::string decoded;
     for (const auto& param : uri.getQueryParameters())
     {
+        // prefer the access_token
         if (param.first == "access_token")
         {
-            Poco::URI::decode(param.second, decoded);
-            return Authorization(Authorization::Type::Token, decoded);
+            decoded = Uri::decode(param.second);
+            type = Authorization::Type::Token;
+        } else if (param.first == "access_header" && type == Authorization::Type::None) {
+            decoded = Uri::decode(param.second);
+            type = Authorization::Type::Header;
+        } else if (param.first == "no_auth_header") {
+            std::string value = Uri::decode(param.second);
+            if (value == "1" || value == "true") {
+                noHeader = true;
+            }
         }
-
-        if (param.first == "access_header")
-            Poco::URI::decode(param.second, decoded);
     }
 
     if (!decoded.empty())
-        return Authorization(Authorization::Type::Header, decoded);
+        return Authorization(type, std::move(decoded), noHeader);
 
     return Authorization();
 }

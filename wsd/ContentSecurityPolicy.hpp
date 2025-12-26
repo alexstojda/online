@@ -30,6 +30,12 @@ public:
     {
     }
 
+    /// Construct a CSP from a CSP string.
+    ContentSecurityPolicy(const std::string& csp)
+    {
+        merge(csp);
+    }
+
     /// Given a CSP string, merge it with the existing values.
     void merge(const std::string& csp)
     {
@@ -42,14 +48,23 @@ public:
             {
                 LOG_TRC("Merging CSP directive [" << token << ']');
                 const auto parts = Util::split(token);
-                appendDirective(parts.first, parts.second);
+                appendDirective(std::string(parts.first), std::string(parts.second));
             }
+        }
+    }
+
+    /// Given a CSP object, merge it with the existing values.
+    void merge(const ContentSecurityPolicy& csp)
+    {
+        LOG_TRC("Merging CSP object");
+        for (const auto& directive : csp._directives) {
+            appendDirective(directive.first, directive.second);
         }
     }
 
     /// Append the given URL to a directive.
     /// @value must be space-delimited and cannot have semicolon.
-    void appendDirectiveUrl(std::string directive, std::string url)
+    void appendDirectiveUrl(std::string directive, const std::string& url)
     {
         appendDirective(std::move(directive), Util::trimURI(url));
     }
@@ -72,6 +87,17 @@ public:
             LOG_TRC("Appending CSP directive [" << directive << "] = [" << value << ']');
             _directives[directive].append(' ' + value);
         }
+    }
+
+    /// Return an individual policy.
+    std::string getDirective(const std::string& directive) const
+    {
+        auto csp = _directives.find(directive);
+        if (csp == _directives.end())
+        {
+            return "";
+        }
+        return csp->second;
     }
 
     /// Returns the value of the CSP header.

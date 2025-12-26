@@ -16,22 +16,25 @@
 #include <config.h>
 
 #include <Poco/URI.h>
-#include <sysexits.h> // EX_OK
 
+#include <sysexits.h>
 #include <sys/wait.h>
+
 #include <sys/types.h>
 
+#include <common/Anonymizer.hpp>
 #include <common/Seccomp.hpp>
 #include <common/JsonUtil.hpp>
 #include <common/TraceEvent.hpp>
+#include <common/Uri.hpp>
 
 #include "Kit.hpp"
-#include "KitQueue.hpp"
 #include "ChildSession.hpp"
+#include "SigUtil.hpp"
+#include "Util.hpp"
 #include "KitWebSocket.hpp"
 
 using Poco::Exception;
-using Poco::URI;
 
 void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
 {
@@ -53,7 +56,17 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
                 tokens.startsWith(token, "name") || tokens.startsWith(token, "url"))
                 continue;
 
-            log << tokens.getParam(token) << ' ';
+            std::string tokenStr = tokens.getParam(token);
+
+            std::string::size_type pos = tokenStr.find("\"Author\":{\"type\":\"string\",\"value\":\"");
+            if (pos != std::string::npos) {
+                auto start = tokenStr.find("\"value\":\"", pos) + 9;
+                auto end = tokenStr.find("\"", start);
+                std::string value = tokenStr.substr(start, end - start);
+                tokenStr.replace(start, end - start, Anonymizer::anonymize(value));
+            }
+
+            log << tokenStr << ' ';
         }
     });
 
@@ -67,16 +80,16 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
         const std::string& sessionId = tokens[1];
         _docKey = tokens[2];
         const std::string& docId = tokens[3];
-        const std::string fileId = Util::getFilenameFromURL(_docKey);
-        Util::mapAnonymized(fileId, fileId); // Identity mapping, since fileId is already obfuscated
+        const std::string url = Uri::decode(_docKey);
+        const std::string fileId = Uri::getFilenameFromURL(url);
+        Anonymizer::mapAnonymized(fileId,
+                                  fileId); // Identity mapping, since fileId is already obfuscated
 
-        std::string url;
-        URI::decode(_docKey, url);
-#ifndef IOS
-        Util::setThreadName("kit" SHARED_DOC_THREADNAME_SUFFIX + docId);
-#endif
         if (!_document)
         {
+#ifndef IOS
+            Util::setThreadName("kit" SHARED_DOC_THREADNAME_SUFFIX + docId);
+#endif
             _document = std::make_shared<Document>(
                 _loKit, _jailId, _docKey, docId, url,
                 std::static_pointer_cast<WebSocketHandler>(shared_from_this()), _mobileAppDocId);
@@ -87,7 +100,7 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
             // We can do this only after creating the Document object.
             TraceEvent::emitOneRecordingIfEnabled(
                 std::string("{\"name\":\"process_name\",\"ph\":\"M\",\"args\":{\"name\":\"") +
-                "Kit-" + docId + "\"},\"pid\":" + std::to_string(getpid()) +
+                "Kit-" + docId + "\"},\"pid\":" + std::to_string(Util::getProcessId()) +
                 ",\"tid\":" + std::to_string(Util::getThreadId()) + "},\n");
         }
 
@@ -97,10 +110,9 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
             LOG_DBG("CreateSession failed.");
         }
     }
-
-    else if (tokens.equals(0, "exit"))
+    else if (!Util::isFuzzing() && tokens.equals(0, "exit"))
     {
-        if (!Util::isMobileApp())
+        if constexpr (!Util::isMobileApp())
         {
             LOG_INF("Terminating immediately due to parent 'exit' command.");
             flushTraceEventRecordings();
@@ -141,7 +153,7 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
             LOG_WRN("No document while processing " << tokens[0] << " request.");
         }
     }
-    else if (tokens.size() == 3 && tokens.equals(0, "setconfig"))
+    else if (!Util::isFuzzing() && tokens.size() == 3 && tokens.equals(0, "setconfig"))
     {
 #if !MOBILEAPP && !defined(BUILDING_TESTS)
         // Currently only rlimit entries are supported.
@@ -151,11 +163,11 @@ void KitWebSocketHandler::handleMessage(const std::vector<char>& data)
         }
 #endif
     }
-    else if (tokens.equals(0, "setloglevel"))
+    else if (!Util::isFuzzing() && tokens.equals(0, "setloglevel"))
     {
         Log::setLevel(tokens[1]);
     }
-    else
+    else if constexpr (!Util::isFuzzing())
     {
         LOG_ERR("Bad or unknown token [" << tokens[0] << ']');
     }
@@ -188,7 +200,7 @@ void KitWebSocketHandler::onDisconnect()
         return;
     }
 
-    if (!Util::isMobileApp())
+    if constexpr (!Util::isMobileApp())
     {
         //FIXME: We could try to recover.
         LOG_ERR("Kit for DocBroker ["
@@ -218,6 +230,9 @@ void BgSaveChildWebSocketHandler::onDisconnect()
 {
     LOG_TRC("Disconnected background web socket to parent kit");
     UnitKit::get().preBackgroundSaveExit();
+#if !MOBILEAPP
+    Document::shutdownBackgroundWatchdog();
+#endif
     Util::forcedExit(EX_OK);
 }
 
@@ -257,24 +272,38 @@ void BgSaveParentWebSocketHandler::reportFailedSave(const std::string &reason)
 
 void BgSaveParentWebSocketHandler::handleMessage(const std::vector<char>& data)
 {
-    LOG_DBG(_socketName << ": recv from parent [" <<
-            COOLProtocol::getAbbreviatedMessage(data));
-
     const StringVector tokens = StringVector::tokenize(data.data(), data.size());
 
-    // Should pass only:
-    // "error:", "forcedtracevent", "unocommandresult:"
-    // "statusindicator[start|finish|setvalue]"
-
-    // Badly don't want modified state coming from the background processx
-    if (tokens[1] == "statechanged:")
+    // Only accept messages that make sense
+    if (tokens[1] != "error:" &&
+        tokens[1] != "jsdialog:" &&
+        tokens[1] != "progress:" &&
+        tokens[1] != "traceevent:" &&
+        tokens[1] != "forcedtraceevent:" &&
+        tokens[1] != "unocommandresult:")
     {
-        LOG_TRC("Don't send un-wanted message to parent: " << COOLProtocol::getAbbreviatedMessage(data));
+        LOG_TRC("Ignore un-wanted message from bg child: " <<
+                COOLProtocol::getAbbreviatedMessage(data));
         return;
     }
 
+    LOG_DBG(_socketName << ": recv from bg child [" <<
+            COOLProtocol::getAbbreviatedMessage(data));
+
     if (tokens[1] == "jsdialog:")
     {
+        Poco::JSON::Object::Ptr object;
+        if (JsonUtil::parseJSON(tokens.cat(' ', 2), object) &&
+            (object->get("jsontype").toString() == "notebookbar" ||
+             object->get("jsontype").toString() == "sidebar" ||
+             object->get("jsontype").toString() == "formulabar"))
+            // white-listing to avoid popup & dialog & other interactive errors
+        {
+            LOG_DBG("Unexpected but benign jsdialog message from bgsave process " <<
+                    COOLProtocol::getAbbreviatedMessage(data));
+            return;
+        }
+
         terminateSave("Unexpected jsdialog message: " +
                       COOLProtocol::getAbbreviatedMessage(data));
         return;
@@ -295,8 +324,10 @@ void BgSaveParentWebSocketHandler::handleMessage(const std::vector<char>& data)
             object->get("commandName").toString() == ".uno:Save")
         {
             if (object->get("success").toString() == "true")
+            {
                 _document->notifySyntheticUnmodifiedState();
-
+                _session->saveLogUiBackground();
+            }
             else
             {
                 _document->updateModifiedOnFailedBgSave();
@@ -312,19 +343,14 @@ void BgSaveParentWebSocketHandler::onDisconnect()
 {
     LOG_TRC("Disconnected background web socket to child " << _childPid);
 
+#if !MOBILEAPP
     // reap and de-zombify children.
-    int status = -1;
-    if (waitpid(_childPid, &status, WUNTRACED | WNOHANG) > 0)
-    {
-        LOG_TRC("Child " << _childPid << " terminated with status " << status);
-        if (WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV ||
-                                    WTERMSIG(status) == SIGBUS ||
-                                    WTERMSIG(status) == SIGABRT))
-            reportFailedSave("crashed with status " + std::to_string(WTERMSIG(status)));
-    }
-    else
+    const auto [ret, sig] = SigUtil::reapZombieChild(_childPid, /*sighandler=*/false);
+    if (sig)
+        reportFailedSave(std::string("crashed with status ") + SigUtil::signalName(sig));
+    else if (ret <= 0)
         LOG_WRN("Background save process disconnected but not terminated " << _childPid);
-
+#endif
     if (!_saveCompleted)
         reportFailedSave("terminated without saving");
 }

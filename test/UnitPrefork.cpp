@@ -14,7 +14,14 @@
 #include <Unit.hpp>
 #include <wsd/COOLWSD.hpp>
 
-const int NumToPrefork = 20;
+#if CODE_COVERAGE
+// Multiple instances can deadlock in __gcov_dump().
+constexpr int NumToPrefork = 1;
+#else
+constexpr int NumToPrefork = 20;
+#endif // CODE_COVERAGE
+
+using namespace std::literals;
 
 // Inside the WSD process
 class UnitPrefork : public UnitWSD
@@ -27,7 +34,7 @@ public:
         : UnitWSD("UnitPrefork")
         , _childSockets(0)
     {
-        setTimeout(std::chrono::seconds(60));
+        setTimeout(60s);
     }
 
     virtual void configure(Poco::Util::LayeredConfiguration& config) override

@@ -1,3 +1,5 @@
+/* -*- js-indent-level: 8 -*- */
+
 /*
  * Copyright the Collabora Online contributors.
  *
@@ -18,15 +20,13 @@ enum FadeSubType {
 
 class FadeTransition extends SlideShow.Transition2d {
 	private effectTransition: number = 0;
-	private slideInfo: SlideInfo;
 
 	constructor(transitionParameters: TransitionParameters) {
 		super(transitionParameters);
 	}
 
 	public start(): void {
-		const transitionSubType =
-			stringToTransitionSubTypeMap[this.slideInfo.transitionSubtype];
+		const transitionSubType = this.transitionFilterInfo.transitionSubtype;
 
 		this.effectTransition = FadeSubType.FADEOVERBLACK; // default
 
@@ -34,11 +34,10 @@ class FadeTransition extends SlideShow.Transition2d {
 			this.effectTransition = FadeSubType.SMOOTHLY;
 		} else if (
 			transitionSubType == TransitionSubType.FADEOVERCOLOR &&
-			this.slideInfo.transitionDirection
+			this.transitionFilterInfo.fadeColor &&
+			this.transitionFilterInfo.fadeColor.toUpperCase() === '#FFFFFF'
 		) {
 			this.effectTransition = FadeSubType.FADEOVERWHITE;
-		} else {
-			this.effectTransition = FadeSubType.FADEOVERBLACK;
 		}
 
 		this.startTransition();
@@ -68,14 +67,14 @@ class FadeTransition extends SlideShow.Transition2d {
 					vec4 color1 = texture(enteringSlideTexture, v_texCoord);
 					vec4 transitionColor;
 
-					if (effectType == 1) {
+					if (effectType == 0) {
 						// Fade through black
 						transitionColor = vec4(0.0, 0.0, 0.0, 1.0);
-					} else if (effectType == 2) {
+					} else if (effectType == 1) {
 						// Fade through white
 						transitionColor = vec4(1.0, 1.0, 1.0, 1.0);
 					}
-					if (effectType == 3) {
+					if (effectType == 2) {
 						// Smooth fade
 						float smoothTime = smoothstep(0.0, 1.0, time);
 						outColor = mix(color0, color1, smoothTime);

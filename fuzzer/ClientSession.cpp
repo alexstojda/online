@@ -1,7 +1,17 @@
-#include <iostream>
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4; fill-column: 100 -*- */
+/*
+ * Copyright the Collabora Online contributors.
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
 
 #include "config.h"
 
+#include <common/Anonymizer.hpp>
 #include "ClientSession.hpp"
 #include <fuzzer/Common.hpp>
 
@@ -23,7 +33,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     Poco::URI uriPublic;
     std::string docKey = "/fuzz/fuzz.odt";
     auto docBroker = std::make_shared<DocumentBroker>(DocumentBroker::ChildType::Interactive, uri,
-                                                      uriPublic, docKey, 0, nullptr);
+                                                      uriPublic, docKey, "", 0);
 
     std::shared_ptr<ProtocolHandlerInterface> ws;
     std::string id;
@@ -51,7 +61,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     Admin::instance().poll(std::chrono::microseconds(0));
 
     // Make sure the anon map does not grow forever, leading to OOM.
-    Util::clearAnonymized();
+    Anonymizer::clear();
     return 0;
 }
 

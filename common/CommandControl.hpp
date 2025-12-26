@@ -11,13 +11,17 @@
 
 #pragma once
 
+#include <common/ConfigUtil.hpp>
+#include <common/Log.hpp>
+#include <common/RegexUtil.hpp>
+#include <common/Util.hpp>
+
+#include <Poco/Exception.h>
+#include <Poco/URI.h>
+#include <Poco/Util/LayeredConfiguration.h>
+
 #include <string>
 #include <unordered_set>
-#include "ConfigUtil.hpp"
-#include <Poco/Util/LayeredConfiguration.h>
-#include <Poco/URI.h>
-#include <Poco/Exception.h>
-#include <Log.hpp>
 
 namespace CommandControl
 {
@@ -32,13 +36,13 @@ class LockManager
     static void generateLockedCommandList();
 
 public:
-    LockManager();
+    LockManager() = delete;
     static const std::unordered_set<std::string>& getLockedCommandList();
     static const std::string getLockedCommandListString();
 
     // Allow/deny Locked hosts
-    static Util::RegexListMatcher readOnlyWopiHosts;
-    static Util::RegexListMatcher disabledCommandWopiHosts;
+    static RegexUtil::RegexListMatcher readOnlyWopiHosts;
+    static RegexUtil::RegexListMatcher disabledCommandWopiHosts;
     static std::map<std::string, std::string> unlockLinkMap;
     static std::string unlockLink;
     static bool lockHostEnabled;
@@ -48,7 +52,7 @@ public:
     static bool isLockedUser() { return _isLockedUser; }
     static bool isLockReadOnly()
     {
-        return config::getBool("feature_lock.is_lock_readonly", false) || isHostReadOnly();
+        return ConfigUtil::getBool("feature_lock.is_lock_readonly", false) || isHostReadOnly();
     }
     static bool isHostReadOnly() { return _isHostReadOnly; };
     static bool isLockedReadOnlyUser() { return isLockedUser() && isLockReadOnly(); }
@@ -62,49 +66,49 @@ public:
     static void setTranslationPath(const std::string& lockedDialogLang);
     static std::string getUnlockTitle()
     {
-        if (config::has(translationPath + ".unlock_title"))
-            return config::getString(translationPath + ".unlock_title", "");
-        return config::getString("feature_lock.unlock_title", "");
+        if (ConfigUtil::has(translationPath + ".unlock_title"))
+            return ConfigUtil::getString(translationPath + ".unlock_title", "");
+        return ConfigUtil::getString("feature_lock.unlock_title", "");
     }
     static std::string getUnlockLink()
     {
         if (!unlockLink.empty())
             return unlockLink;
-        return config::getString("feature_lock.unlock_link", "");
+        return ConfigUtil::getString("feature_lock.unlock_link", "");
     }
     static std::string getUnlockDescription()
     {
-        if (config::has(translationPath + ".unlock_description"))
-            return config::getString(translationPath + ".unlock_description", "");
-        return config::getString("feature_lock.unlock_description", "");
+        if (ConfigUtil::has(translationPath + ".unlock_description"))
+            return ConfigUtil::getString(translationPath + ".unlock_description", "");
+        return ConfigUtil::getString("feature_lock.unlock_description", "");
     }
     static std::string getWriterHighlights()
     {
-        if (config::has(translationPath + ".writer_unlock_highlights"))
-            return config::getString(translationPath + ".writer_unlock_highlights", "");
-        return config::getString("feature_lock.writer_unlock_highlights", "");
+        if (ConfigUtil::has(translationPath + ".writer_unlock_highlights"))
+            return ConfigUtil::getString(translationPath + ".writer_unlock_highlights", "");
+        return ConfigUtil::getString("feature_lock.writer_unlock_highlights", "");
     }
     static std::string getCalcHighlights()
     {
-        if (config::has(translationPath + ".calc_unlock_highlights"))
-            return config::getString(translationPath + ".calc_unlock_highlights", "");
-        return config::getString("feature_lock.calc_unlock_highlights", "");
+        if (ConfigUtil::has(translationPath + ".calc_unlock_highlights"))
+            return ConfigUtil::getString(translationPath + ".calc_unlock_highlights", "");
+        return ConfigUtil::getString("feature_lock.calc_unlock_highlights", "");
     }
     static std::string getImpressHighlights()
     {
-        if (config::has(translationPath + ".impress_unlock_highlights"))
-            return config::getString(translationPath + ".impress_unlock_highlights", "");
-        return config::getString("feature_lock.impress_unlock_highlights", "");
+        if (ConfigUtil::has(translationPath + ".impress_unlock_highlights"))
+            return ConfigUtil::getString(translationPath + ".impress_unlock_highlights", "");
+        return ConfigUtil::getString("feature_lock.impress_unlock_highlights", "");
     }
     static std::string getDrawHighlights()
     {
-        if (config::has(translationPath + ".draw_unlock_highlights"))
-            return config::getString(translationPath + ".draw_unlock_highlights", "");
-        return config::getString("feature_lock.draw_unlock_highlights", "");
+        if (ConfigUtil::has(translationPath + ".draw_unlock_highlights"))
+            return ConfigUtil::getString(translationPath + ".draw_unlock_highlights", "");
+        return ConfigUtil::getString("feature_lock.draw_unlock_highlights", "");
     }
-    static const Poco::URI getUnlockImageUri()
+    static Poco::URI getUnlockImageUri()
     {
-        const std::string unlockImageUrl = config::getString("feature_lock.unlock_image", "");
+        const std::string unlockImageUrl = ConfigUtil::getString("feature_lock.unlock_image", "");
         if (!unlockImageUrl.empty())
         {
             try
@@ -123,7 +127,7 @@ public:
     static void mapUnlockLink(const std::string& host, const std::string& path);
     static void setUnlockLink(const std::string& host)
     {
-        unlockLink = Util::getValue(unlockLinkMap, host);
+        unlockLink = RegexUtil::getValue(unlockLinkMap, host);
     }
 };
 

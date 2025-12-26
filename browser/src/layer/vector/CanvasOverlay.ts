@@ -1,3 +1,6 @@
+// @ts-strict-ignore
+/* -*- js-indent-level: 8 -*- */
+
 // OverlayTransform is used by CanvasOverlay to apply transformations
 // to points/bounds before drawing is done.
 // The reason why we cannot use canvasRenderingContext2D.transform() is it
@@ -90,11 +93,10 @@ class TransformationsList {
 
 // CanvasOverlay handles CPath rendering and mouse events handling via overlay-section of the main canvas.
 // where overlays like cell-cursors, cell-selections, edit-cursors are instances of CPath or its subclasses.
-class CanvasOverlay extends app.definitions.canvasSectionObject {
-	name: string = L.CSections.Overlays.name;
-	processingOrder: number = L.CSections.Overlays.processingOrder;
-	drawingOrder: number = L.CSections.Overlays.drawingOrder;
-	zIndex: number = L.CSections.Overlays.zIndex;
+class CanvasOverlay extends CanvasSectionObject {
+	processingOrder: number = app.CSections.Overlays.processingOrder;
+	drawingOrder: number = app.CSections.Overlays.drawingOrder;
+	zIndex: number = app.CSections.Overlays.zIndex;
 	anchor: string[] = ['top', 'left'];
 	boundToSection: string = 'tiles';
 
@@ -106,7 +108,7 @@ class CanvasOverlay extends app.definitions.canvasSectionObject {
 	private transformList: TransformationsList;
 
 	constructor(mapObject: any, canvasContext: CanvasRenderingContext2D) {
-		super();
+		super(app.CSections.Overlays.name);
 		this.map = mapObject;
 		this.ctx = canvasContext;
 		this.tsManager = this.map.getTileSectionMgr();
@@ -115,10 +117,6 @@ class CanvasOverlay extends app.definitions.canvasSectionObject {
 		this.paths = new Map<number, CPath>();
 		this.transformList = new TransformationsList();
 		this.updateCanvasBounds();
-	}
-
-	onInitialize(): void {
-		return;
 	}
 
 	onResize(): void {
@@ -133,8 +131,8 @@ class CanvasOverlay extends app.definitions.canvasSectionObject {
 		this.draw();
 	}
 
-	onMouseMove(position: Array<number>): void {
-		var mousePos = new cool.Point(position[0], position[1]);
+	onMouseMove(position: cool.SimplePoint): void {
+		var mousePos = new cool.Point(position.pX, position.pY);
 		var overlaySectionBounds = this.bounds.clone();
 		var splitPos = this.tsManager.getSplitPos();
 		if (this.isCalcRTL()) {
@@ -464,10 +462,6 @@ class CanvasOverlay extends app.definitions.canvasSectionObject {
 			this.ctx.globalAlpha = path.fillOpacity;
 			this.ctx.fillStyle = path.fillColor || path.color;
 
-			if (path.fillGradient) {
-				this.setBoxGradient(path);
-			}
-
 			this.ctx.fill(path.fillRule || 'evenodd');
 		}
 
@@ -481,74 +475,6 @@ class CanvasOverlay extends app.definitions.canvasSectionObject {
 			this.ctx.stroke();
 		}
 
-	}
-
-	setBoxGradient(path: CPath) {
-		const splitPos = this.tsManager.getSplitPos();
-		let selectionBackgroundGradient = null;
-
-		if (this.tsManager._inZoomAnim) {
-			splitPos.x *= this.tsManager._zoomFrameScale;
-			splitPos.y *= this.tsManager._zoomFrameScale;
-		}
-
-		// last row geometry data will be a good for setting deafult raw height
-		const spanlist = this.map._docLayer.sheetGeometry.getRowsGeometry()._visibleSizes._spanlist;
-		const rowData = spanlist[spanlist.length - 1];
-
-		// Create a linear gradient based on the extracted color stops
-		// get raw data from sheet geometry. use index = 1
-		const deafultRowSize = rowData.data.sizecore;
-		// gradient width shoulb be half a default row hight.
-		const gradientWidth: number = Math.ceil(deafultRowSize / 2);
-		const isVertSplitter = path.name === 'vert-pane-splitter' ? true : false;
-		//adjust horizontal position for RTL mode
-		splitPos.x = this.isCalcRTL() ? (this.size[0] - splitPos.x) : splitPos.x;
-		// Create a linear gradient based on the extracted color stops
-		selectionBackgroundGradient = this.createSplitLineGradient(splitPos, path, gradientWidth, isVertSplitter);
-
-		this.ctx.fillStyle = selectionBackgroundGradient;
-
-		const bounds = path.getBounds();
-
-		if (isVertSplitter) {
-			this.ctx.fillRect(0, splitPos.y, bounds.max.x, splitPos.y + gradientWidth);
-		} else {
-			let x: number = splitPos.x; // Assuming x is a number
-			if (this.isCalcRTL()) {
-				x = splitPos.x - gradientWidth;
-			}
-			this.ctx.fillRect(x, 0, gradientWidth, bounds.max.y);
-		}
-	}
-
-	createSplitLineGradient(splitPos: any, path: CPath, gradientWidth: number, isVertSplitter: boolean) {
-		let linearGradient = null;
-		const colorStops = [
-			{ colorCode: path.fillColor, offset: 0 },
-			{ colorCode: 'rgba(240, 240, 240, 0)', offset: 1 },
-		];
-
-		if (isVertSplitter) {
-			linearGradient = this.context.createLinearGradient(0, splitPos.y, 0, splitPos.y + gradientWidth);
-		} else {
-			let x0 = splitPos.x;
-			let x1 = splitPos.x + gradientWidth;
-			if (this.isCalcRTL()) {
-				x0 = splitPos.x - gradientWidth;
-				x1 = splitPos.x;
-			}
-			linearGradient = this.context.createLinearGradient(x0, 0, x1, 0);
-		}
-
-		// Add color stops to the gradient
-		for (let i = 0; i < colorStops.length; i++) {
-			// set offset with colorcode & handle special case for horizontal line in RTL mode
-			const offset = (!isVertSplitter && this.isCalcRTL()) ? colorStops[colorStops.length - i - 1].offset : colorStops[i].offset;
-			linearGradient.addColorStop(offset, colorStops[i].colorCode);
-		}
-
-		return linearGradient;
 	}
 
 	bringToFront(path: CPath) {

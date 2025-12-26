@@ -38,7 +38,7 @@ struct TileDescCacheCompareEq final
                l.getTilePosY() == r.getTilePosY() &&
                l.getTileWidth() == r.getTileWidth() &&
                l.getTileHeight() == r.getTileHeight() &&
-               l.getNormalizedViewId() == r.getNormalizedViewId() &&
+               l.getCanonicalViewId() == r.getCanonicalViewId() &&
                l.getEditMode() == r.getEditMode();
     }
 };
@@ -57,7 +57,7 @@ struct TileDescCacheHasher final
         hash = (hash << 5) + hash + t.getTilePosY();
         hash = (hash << 5) + hash + t.getTileWidth();
         hash = (hash << 5) + hash + t.getTileHeight();
-        hash = (hash << 5) + hash + t.getNormalizedViewId();
+        hash = (hash << 5) + hash + to_underlying(t.getCanonicalViewId());
 
         return hash;
     }
@@ -146,10 +146,10 @@ struct TileData
     bool isValid() const { return _valid; }
     void invalidate() { _valid = false; }
 
-    bool _valid; // not true - waiting for a new tile if in view.
     std::vector<TileWireId> _wids;
     std::vector<size_t> _offsets; // offset of the start of data
     BlobData _deltas; // first item is a key-frame, followed by deltas at _offsets
+    bool _valid; // not true - waiting for a new tile if in view.
 
     size_t size() const
     {
@@ -205,7 +205,7 @@ struct TileData
             os << "deltas: ";
             for (size_t i = 0; i < _wids.size(); ++i)
             {
-                os << i << ": " << _wids[i] << " -> " << _offsets[i] << " ";
+                os << i << ": " << _wids[i] << " -> " << _offsets[i] << ' ';
             }
             os << (tooLarge() ? "too-large " : "");
         }
@@ -236,8 +236,9 @@ public:
 
     /// Subscribes if no subscription exists and returns true.
     /// Otherwise returns false to signify a subscription already exists.
-    bool subscribeToTileRendering(const TileDesc& tile, const std::shared_ptr<ClientSession>& subscriber,
-                                  const std::chrono::steady_clock::time_point& now);
+    bool subscribeToTileRendering(const TileDesc& tile,
+                                  const std::shared_ptr<ClientSession>& subscriber,
+                                  std::chrono::steady_clock::time_point now);
 
     /// Cancels all tile requests by the given subscriber.
     std::string cancelTiles(const std::shared_ptr<ClientSession>& subscriber);
@@ -247,7 +248,8 @@ public:
 
     void saveTileAndNotify(const TileDesc& tile, const char* data, size_t size);
 
-    enum StreamType {
+    enum StreamType : std::uint8_t
+    {
         Font,
         Style,
         CmdValues,
@@ -268,8 +270,9 @@ public:
     /// Return the data if we have it, or nothing.
     Blob lookupCachedStream(StreamType type, const std::string& name);
 
-    // The tiles parameter is an invalidatetiles: message as sent by the child process
-    void invalidateTiles(const std::string& tiles, int normalizedViewId);
+    /// The tiles parameter is an invalidatetiles: message as sent by the child process
+    /// returns true if cache wasn't empty
+    bool invalidateTiles(const std::string& tiles, CanonicalViewId canonicalViewId);
 
     /// Parse invalidateTiles message to rectangle and associated attributes of the invalidated area
     static Util::Rectangle parseInvalidateMsg(const std::string& tiles, int &part, int &mode, TileWireId &wid);
@@ -279,7 +282,7 @@ public:
                                  const std::shared_ptr<TileCache::TileBeingRendered>& tileBeingRendered);
 
     size_t countTilesBeingRenderedForSession(const std::shared_ptr<ClientSession>& session,
-                                             const std::chrono::steady_clock::time_point& now);
+                                             std::chrono::steady_clock::time_point now);
     bool hasTileBeingRendered(const TileDesc& tileDesc, const std::chrono::steady_clock::time_point *now = nullptr) const;
 
     int getTileBeingRenderedVersion(const TileDesc& tileDesc);
@@ -299,7 +302,9 @@ private:
     void ensureCacheSize();
     static size_t itemCacheSize(const Tile &tile);
 
-    void invalidateTiles(int part, int mode, int x, int y, int width, int height, int normalizedViewId);
+    /// Removes the invalid tiles from the cache
+    /// returns true if cache wasn't empty
+    bool invalidateTiles(int part, int mode, int x, int y, int width, int height, CanonicalViewId canonicalViewId);
 
     /// Lookup tile in our cache.
     Tile findTile(const TileDesc &desc);
@@ -311,23 +316,14 @@ private:
 
     /// Extract location from fileName, and check if it intersects with [x, y, width, height].
     static bool intersectsTile(const TileDesc &tileDesc, int part, int mode, int x, int y,
-                               int width, int height, int normalizedViewId);
+                               int width, int height, CanonicalViewId canonicalViewId);
 
     Tile saveDataToCache(const TileDesc& desc, const char* data, size_t size);
     void saveDataToStreamCache(StreamType type, const std::string& fileName, const char* data,
                                size_t size);
 
-    const std::string _docURL;
-
-    std::thread::id _owner;
-
-    const bool _dontCache;
-
-    /// Approximate size of tilecache in bytes
-    size_t _cacheSize;
-
-    /// Maximum (high watermark) size of the tilecache in bytes
-    size_t _maxCacheSize;
+    // old-style file-name to data grab-bag.
+    std::map<std::string, Blob> _streamCache[static_cast<int>(StreamType::Last)];
 
     // FIXME: should we have a tile-desc to WID map instead and a simpler lookup ?
     std::unordered_map<TileDesc, Tile,
@@ -338,21 +334,29 @@ private:
                        TileDescCacheHasher,
                        TileDescCacheCompareEq> _tilesBeingRendered;
 
-    // old-style file-name to data grab-bag.
-    std::map<std::string, Blob> _streamCache[static_cast<int>(StreamType::Last)];
+    const std::string _docURL;
+
+    std::thread::id _owner;
+
+    /// Approximate size of tilecache in bytes
+    size_t _cacheSize;
+
+    /// Maximum (high watermark) size of the tilecache in bytes
+    size_t _maxCacheSize;
+
+    const bool _dontCache;
 };
 
 /// Tracks view-port area tiles to track which we last
 /// sent to avoid re-sending an existing delta causing grief
-class ClientDeltaTracker final {
-public:
+class ClientDeltaTracker final
+{
     // FIXME: could be a simple 2d TileWireId array for better packing.
     std::unordered_set<TileDesc,
                        TileDescCacheHasher,
                        TileDescCacheCompareEq> _cache;
-    ClientDeltaTracker() {
-    }
 
+public:
     // FIXME: only need to store this for the current viewports
     void updateViewPort( /* ... */ )
     {
@@ -372,8 +376,8 @@ public:
         const TileWireId curSeq = desc.getWireId();
         TileWireId last = it->getWireId();
         // id is not included in the hash.
-        auto pDesc = const_cast<TileDesc *>(&(*it));
-        pDesc->setWireId(curSeq);
+        auto descPointer = const_cast<TileDesc *>(&(*it));
+        descPointer->setWireId(curSeq);
         return last;
     }
 
@@ -383,8 +387,8 @@ public:
         if (it == _cache.end())
             return;
         // id is not included in the hash.
-        auto pDesc = const_cast<TileDesc *>(&(*it));
-        pDesc->setWireId(0);
+        auto descPointer = const_cast<TileDesc *>(&(*it));
+        descPointer->setWireId(0);
     }
 };
 

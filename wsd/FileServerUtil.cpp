@@ -18,12 +18,14 @@
 
 #include <cctype>
 
+#include <common/base64.hpp>
+
 PreProcessedFile::PreProcessedFile(std::string filename, const std::string& data)
     : _filename(std::move(filename))
     , _size(data.length())
 {
-    std::size_t pos = 0; //< The current position to search from.
-    std::size_t lastpos = 0; //< The last position in a literal string.
+    std::size_t pos = 0; ///< The current position to search from.
+    std::size_t lastpos = 0; ///< The last position in a literal string.
 
     do
     {
@@ -158,9 +160,9 @@ std::string PreProcessedFile::substitute(const std::unordered_map<std::string, s
                     // Leave original variable as-is.
                     if (seg.first == SegmentType::Variable)
                     {
-                        recon.append("%");
+                        recon.push_back('%');
                         recon.append(seg.second);
-                        recon.append("%");
+                        recon.push_back('%');
                     }
                     else if (seg.first == SegmentType::CommentedVariable)
                     {
@@ -371,9 +373,9 @@ std::string FileServerRequestHandler::checkFileInfoToJSON(const std::string& che
 
 namespace
 {
-bool isValidCss(const std::string& token)
+constexpr bool isValidCss(const std::string_view token)
 {
-    const std::string forbidden = "<>{}&|\\\"^`'$[]";
+    constexpr std::string_view forbidden = "<>{}&|\\\"^`'$[]";
     for (auto c: token)
     {
         if (c < 0x20 || c >= 0x7F || forbidden.find(c) != std::string::npos)
@@ -393,34 +395,43 @@ std::string FileServerRequestHandler::cssVarsToStyle(const std::string& cssVars)
         return previousStyle;
 
     std::ostringstream styleOSS;
-    styleOSS << "<style>:root {";
+    styleOSS << ":root {";
     StringVector tokens(StringVector::tokenize(cssVars, ';'));
     for (const auto& token : tokens)
     {
-        StringVector keyValue(StringVector::tokenize(tokens.getParam(token), '='));
+        const std::string param = tokens.getParam(token);
+        StringVector keyValue(StringVector::tokenize(param, '='));
         if (keyValue.size() < 2)
         {
-            LOG_ERR("Skipping the token [" << tokens.getParam(token) << "] since it does not have '='");
+            static bool warnedOnce = false;
+            if (!warnedOnce)
+            {
+                warnedOnce = true;
+                LOG_ERR("Skipping the token ["
+                        << param << "] since it "
+                        << (param.ends_with('=') ? "is empty" : "does not have '='"));
+            }
+
             continue;
         }
         else if (keyValue.size() > 2)
         {
-            LOG_ERR("Skipping the token [" << tokens.getParam(token) << "] since it has more than one '=' pair");
+            LOG_ERR("Skipping the token [" << param << "] since it has more than one '=' pair");
             continue;
         }
 
-        if (!isValidCss(tokens.getParam(token)))
+        if (!isValidCss(param))
         {
-            LOG_WRN("Skipping the token [" << tokens.getParam(token) << "] since it contains forbidden characters");
+            LOG_WRN("Skipping the token [" << param << "] since it contains forbidden characters");
             continue;
         }
 
         styleOSS << keyValue[0] << ':' << keyValue[1] << ';';
     }
-    styleOSS << "}</style>";
+    styleOSS << "}";
 
     previousVars = cssVars;
-    previousStyle = styleOSS.str();
+    previousStyle = macaron::Base64::Encode(styleOSS.str());
 
     return previousStyle;
 }

@@ -23,25 +23,39 @@
  * }
  */
 
-/* global JSDialog $ UNOKey UNOModifier */
+/* global JSDialog $ UNOKey app */
 
 function _drawingAreaControl (parentContainer, data, builder) {
-	var container = L.DomUtil.create('div', builder.options.cssClass + ' ui-drawing-area-container', parentContainer);
+	var container = window.L.DomUtil.create('div', builder.options.cssClass + ' ui-drawing-area-container', parentContainer);
 	container.id = data.id;
 
 	if (!data.image)
 		return;
 
-	var image = L.DomUtil.create('img', builder.options.cssClass + ' ui-drawing-area', container);
+	var image = window.L.DomUtil.create('img', builder.options.cssClass + ' ui-drawing-area', container);
 	var imageId = data.id + '-img';
 	image.id = imageId;
 	image.src = data.image.replace(/\\/g, '');
 	image.alt = data.text;
-	image.title = data.text;
-	image.tabIndex = 0;
 	image.draggable = false;
 	image.ondragstart = function() { return false; };
-	builder.map.uiManager.enableTooltip(image);
+
+	if (data.enabled && data.canFocus) {
+		image.tabIndex = 0;
+	}
+
+	if (data.text) {
+		image.setAttribute('data-cooltip', data.text);
+
+		if (builder.map) {
+			window.L.control.attachTooltipEventListener(image, builder.map);
+		}
+	} else if (data.aria && data.aria.label) {
+		container.setAttribute('aria-label', data.aria.label);
+		image.alt = '';
+	} else if (data.aria && data.aria.description) {
+		image.alt = data.aria.description;
+	}
 
 	// Line width dialog is affected from delay on image render.
 	// So If the image render is delayed, use width and height of the data
@@ -51,12 +65,12 @@ function _drawingAreaControl (parentContainer, data, builder) {
 	}
 
 	if (data.loading && data.loading === 'true') {
-		var loaderContainer = L.DomUtil.create('div', 'ui-drawing-area-loader-container', container);
-		L.DomUtil.create('div', 'ui-drawing-area-loader', loaderContainer);
+		var loaderContainer = window.L.DomUtil.create('div', 'ui-drawing-area-loader-container', container);
+		window.L.DomUtil.create('div', 'ui-drawing-area-loader', loaderContainer);
 	}
 	if (data.placeholderText && data.placeholderText === 'true') {
-		var spanContainer = L.DomUtil.create('div', 'ui-drawing-area-placeholder-container', container);
-		var span = L.DomUtil.create('span', 'ui-drawing-area-placeholder', spanContainer);
+		var spanContainer = window.L.DomUtil.create('div', 'ui-drawing-area-placeholder-container', container);
+		var span = window.L.DomUtil.create('span', 'ui-drawing-area-placeholder', spanContainer);
 		span.innerText = data.text;
 	}
 
@@ -81,7 +95,7 @@ function _drawingAreaControl (parentContainer, data, builder) {
 	var moveTimer = null;
 	var moveFunc = null;
 
-	L.DomEvent.on(image, 'dblclick', function(e) {
+	window.L.DomEvent.on(image, 'dblclick', function(e) {
 		var pos = getCoordinatesFromEvent(e);
 		var coordinates = pos[0] + ';' + pos[1];
 
@@ -91,7 +105,7 @@ function _drawingAreaControl (parentContainer, data, builder) {
 		builder.callback('drawingarea', 'dblclick', container, coordinates, builder);
 	}, this);
 
-	L.DomEvent.on(image, 'click touchend', function(e) {
+	window.L.DomEvent.on(image, 'click touchend', function(e) {
 		var pos = getCoordinatesFromEvent(e);
 		var coordinates = pos[0] + ';' + pos[1];
 
@@ -147,7 +161,7 @@ function _drawingAreaControl (parentContainer, data, builder) {
 
 	var modifier = 0;
 
-	container.addEventListener('keydown', function(event) {
+	image.addEventListener('keydown', function(event) {
 		if (event.key === 'Enter') {
 			builder.callback('drawingarea', 'keypress', container, UNOKey.RETURN | modifier, builder);
 			event.preventDefault();
@@ -184,31 +198,31 @@ function _drawingAreaControl (parentContainer, data, builder) {
 		} else if (event.key === 'Tab') {
 			builder.callback('drawingarea', 'keypress', container, UNOKey.TAB | modifier, builder);
 		} else if (event.key === 'Shift') {
-			modifier = modifier | UNOModifier.SHIFT;
+			modifier = modifier | app.UNOModifier.SHIFT;
 			event.preventDefault();
 		} else if (event.key === 'Control') {
-			modifier = modifier | UNOModifier.CTRL;
+			modifier = modifier | app.UNOModifier.CTRL;
 			event.preventDefault();
 		} else if (event.key === 'a' && event.ctrlKey) {
-			builder.callback('drawingarea', 'keypress', container, UNOKey.A | UNOModifier.CTRL, builder);
+			builder.callback('drawingarea', 'keypress', container, UNOKey.A | app.UNOModifier.CTRL, builder);
 		}
 	});
 
-	container.addEventListener('keyup', function(event) {
+	image.addEventListener('keyup', function(event) {
 		if (event.key === 'Shift') {
-			modifier = modifier & (~UNOModifier.SHIFT);
+			modifier = modifier & (~app.UNOModifier.SHIFT);
 			event.preventDefault();
 		} else if (event.key === 'Control') {
-			modifier = modifier & (~UNOModifier.CTRL);
+			modifier = modifier & (~app.UNOModifier.CTRL);
 			event.preventDefault();
 		}
 	});
 
-	container.addEventListener('blur', function() {
+	image.addEventListener('blur', function() {
 		modifier = 0;
 	});
 
-	container.addEventListener('keypress', function(event) {
+	image.addEventListener('keypress', function(event) {
 		if (event.key === 'Enter' ||
 			event.key === 'Escape' ||
 			event.key === 'Esc' ||
@@ -232,7 +246,7 @@ function _drawingAreaControl (parentContainer, data, builder) {
 			if (event.ctrlKey) {
 				keyCode = event.key.toUpperCase().charCodeAt(0);
 				keyCode = builder.map.keyboard._toUNOKeyCode(keyCode);
-				keyCode |= UNOModifier.CTRL;
+				keyCode |= app.UNOModifier.CTRL;
 			}
 
 			builder.callback('drawingarea', 'keypress', container, keyCode, builder);

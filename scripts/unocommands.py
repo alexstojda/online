@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- tab-width: 4; indent-tabs-mode: nil; py-indent-offset: 4 -*-
 #
+# Copyright the Collabora Online contributors.
+#
+# SPDX-License-Identifier: MPL-2.0
+#
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -75,7 +79,7 @@ def extractMenuCommands(path):
     commands = []
 
     # extract from the menu specifications
-    f = open(path + '/browser/src/control/Control.Menubar.js', 'r', encoding='utf-8')
+    f = open(path + '/browser/src/control/Control.Menubar.ts', 'r', encoding='utf-8')
     for line in f:
         if line.find("uno:") >= 0 and line.find("name:") < 0:
             commands += commandFromMenuLine(line)
@@ -203,6 +207,17 @@ def extractToolbarCommands(path):
     # may the list unique
     return set(commands)
 
+def extractMenubuttonCommands(path):
+    commands = []
+
+    f = open(path + '/browser/src/control/jsdialog/Definitions.Menu.ts', 'r', encoding='utf-8')
+    for line in f:
+        if line.find("_UNO(") >= 0:
+            commands += commandFromMenuLine(line)
+
+    # may the list unique
+    return set(commands)
+
 
 # Create mapping between the commands and appropriate strings
 def collectCommandsFromXCU(xcu, descriptions, commands, label, type):
@@ -247,7 +262,7 @@ def collectCommandsFromXCU(xcu, descriptions, commands, label, type):
 
 # Print commands from all the XCU files, and collect them too
 def writeUnocommandsJS(
-        onlineDir, lofficeDir, menuCommands, contextCommands, toolbarCommands):
+        onlineDir, lofficeDir, menuCommands, contextCommands, toolbarCommands, menubuttonCommands):
 
     descriptions = {}
     dir = lofficeDir + '/officecfg/registry/data/org/openoffice/Office/UI'
@@ -298,6 +313,10 @@ def writeUnocommandsJS(
                                                   descriptions,
                                                   toolbarCommands,
                                                   'Label', type)
+            descriptions = collectCommandsFromXCU(os.path.join(dir, file),
+                                                  descriptions,
+                                                  menubuttonCommands,
+                                                  'Label', type)
 
     # output the unocommands.js
     f = open(onlineDir + '/browser/src/unocommands.js', 'w',
@@ -327,6 +346,9 @@ window._UNO = function(string, component, isContext) {
 \tvar entry = unoCommandsArray[command];
 \tif (entry === undefined) {
 \t\treturn command;
+\t}
+\tif (component == 'drawing') {
+\t\tcomponent = 'presentation';
 \t}
 \tvar componentEntry = entry[component];
 \tif (componentEntry === undefined) {
@@ -407,13 +429,24 @@ def writeTranslations(onlineDir, translationsDir, strings):
         f.write('{\n')
 
         writeComma = False
+
         for key in sorted(translations.keys()):
             if writeComma:
                 f.write(',\n')
             else:
                 writeComma = True
+
+            value = translations[key]
+
+            # Remove trailing access keys like " (~T)", they are unused
+            value = re.sub(r' \(~[A-Z]\)', '', value)
+
+            # Sometimes translation contains ~ when source does not, and it may leak
+            if '~' not in key:
+                value = value.replace('~', '')
+
             f.write('"' + key.replace('"', '\\\"') + '":"' +
-                    translations[key].replace('"', '\\\"') + '"')
+                    value.replace('"', '\\\"') + '"')
 
         f.write('\n}\n')
 
@@ -445,13 +478,22 @@ if __name__ == "__main__":
             usageAndExit()
 
         onlineDir = sys.argv[2]
-        lofficeDir = sys.argv[3]
+        lofficeDir = os.path.abspath(sys.argv[3])
+        if not os.path.isdir(lofficeDir):
+            sys.stderr.write("ERROR: invalid loffice parameter '{}' is not a dir\n".format(sys.argv[3]))
+            exit(1)
     else:
         usageAndExit()
+
+    onlineDir = os.path.abspath(onlineDir)
+    if not os.path.isdir(onlineDir):
+        sys.stderr.write("ERROR: invalid online_dir parameter '{}' is not a dir\n".format(sys.argv[2]))
+        exit(1)
 
     menuCommands = extractMenuCommands(onlineDir)
     contextCommands = extractContextCommands(onlineDir)
     toolbarCommands = extractToolbarCommands(onlineDir)
+    menubuttonCommands = extractMenubuttonCommands(onlineDir)
 
     processedCommands = set([])
     parsed = {}
@@ -460,11 +502,11 @@ if __name__ == "__main__":
         processedCommands = set(parsed.keys())
     else:
         written = writeUnocommandsJS(onlineDir, lofficeDir, menuCommands,
-                                     contextCommands, toolbarCommands)
+                                     contextCommands, toolbarCommands, menubuttonCommands)
         processedCommands = set(written.keys())
 
     # check that we have translations for everything
-    requiredCommands = (menuCommands | contextCommands | toolbarCommands)
+    requiredCommands = (menuCommands | contextCommands | toolbarCommands | menubuttonCommands)
     dif = requiredCommands - processedCommands
 
     if len(dif) > 0:

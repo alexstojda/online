@@ -11,20 +11,81 @@
 
 #pragma once
 
+#include <common/Log.hpp>
+
 #include <cerrno>
 #include <chrono>
 #include <fcntl.h>
+#include <fstream>
 #include <string>
 #include <sys/stat.h>
 
 #include <Poco/Path.h>
 
-#include "Log.hpp"
+#if !defined(S_ISREG) && defined(S_IFMT) && defined(S_IFREG)
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#endif
+
+#if !defined(S_ISLNK)
+#if defined(S_IFMT) && defined(S_IFLNK)
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#else
+#define S_ISLNK(m) 0
+#endif
+#endif
+
+#if !defined(S_ISDIR) && defined(S_IFMT) && defined(S_IFDIR)
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
 
 namespace FileUtil
 {
+    // Wrappers for actual file handling library API.
+
+    // Also needed because Visual Studio insists on claiming that some POSIXy functions are "deprecated" and
+    // wants you to call the variant prefixed with an underscore instead, for example _close().
+
+    // As open(). Returns the file descriptor. On error returns -1 and sets errno.
+    int openFileAsFD(const std::string& file, int oflag, int mode = 0);
+
+    // As read() and write().
+    int readFromFD(int fd, void *buf, size_t nbytes);
+    int writeToFD(int fd, const void *buf, size_t nbytes);
+
+    // As close().
+    int closeFD(int fd);
+
+    // As std::ifstream::open.
+    void openFileToIFStream(const std::string& file, std::ifstream& stream, std::ios_base::openmode mode = std::ios_base::in);
+
+    // As stat().
+    int getStatOfFile(const std::string& file, struct stat& sb);
+
+    // As lstat().
+    int getLStatOfFile(const std::string& file, struct stat& sb);
+
+    // Wraps unlink()
+    int unlinkFile(const std::string& file);
+
+    // Wraps mkdir(dir.c_str(), S_IRWXU)
+    int makeDirectory(const std::string& dir);
+
+    // Wraps std::filesystem::create_directory.
+    void createDirectory(const std::string& dir);
+
+    // Wraps std::filesystem::temp_directory_path(), and if that fails, uses obvious fallbacks.
+    std::string getSysTempDirectoryPath();
+
+    /// Returns true iff the path given is writable by our *real* UID.
+    bool isWritable(const char* path);
+
+    /// Update the access-time and modified-time metadata for the given file.
+    bool updateTimestamps(const std::string& filename, timespec tsAccess, timespec tsModified);
+
+    // End of wrappers for platform-dependent API.
+
     /// Used for anonymizing URLs
-    void setUrlAnonymization(bool anonymize, const std::uint64_t salt);
+    void setUrlAnonymization(bool anonymize, std::uint64_t salt);
 
     /// Anonymize the basename of filenames, preserving the path and extension.
     std::string anonymizeUrl(const std::string& url);
@@ -46,6 +107,12 @@ namespace FileUtil
     /// -> /chroot/tmp/cool-jailId/tmp/user/doc/childId
     std::string buildLocalPathToJail(bool usingMountNamespaces, std::string localJailRoot, std::string jailPath);
 
+    // returns two strings
+    //   the first is the local path to the jailPath under localJailRoot as seen outside the jail
+    //   the second is that path as seen inside the jail, taking into account if capabilities are available.
+    std::pair<std::string, std::string> buildPathsToJail(bool usingMountNamespaces, bool noCapsForKit,
+                                                         std::string localJailRoot, std::string jailDir);
+
     // We work around some of the mess of using the same sources both on the server side and in unit
     // tests with conditional compilation based on BUILDING_TESTS.
 
@@ -56,7 +123,7 @@ namespace FileUtil
     // Perform the check. If the free space on any of the registered file systems is below 5%, call
     // 'alertAllUsers("internal", "diskfull")'. The check will be made no more often than once a
     // minute if cacheLastCheck is set to true.
-    std::string checkDiskSpaceOnRegisteredFileSystems(const bool cacheLastCheck = true);
+    std::string checkDiskSpaceOnRegisteredFileSystems(bool cacheLastCheck = true);
 
     // Check disk space on a specific file system, the one where 'path' is located. This does not
     // add that file system to the list used by 'registerFileSystemForDiskSpaceChecks'. If the free
@@ -64,11 +131,13 @@ namespace FileUtil
     // does not call 'alertAllUsers'.
     bool checkDiskSpace(const std::string& path);
 
+    bool platformDependentCheckDiskSpace(const std::string& path, int64_t enoughSpace);
+
     /// Safely remove a file or directory.
     /// Suppresses exception when the file is already removed.
     /// This can happen when there is a race (unavoidable) or when
     /// we don't care to check before we remove (when no race exists).
-    void removeFile(const std::string& path, const bool recursive = false);
+    void removeFile(const std::string& path, bool recursive = false);
 
     inline void removeFile(const Poco::Path& path, const bool recursive = false)
     {
@@ -83,12 +152,7 @@ namespace FileUtil
     bool isEmptyDirectory(const char* path);
     inline bool isEmptyDirectory(const std::string& path) { return isEmptyDirectory(path.c_str()); }
 
-    /// Returns true iff the path given is writable by our *real* UID.
-    bool isWritable(const char* path);
     inline bool isWritable(const std::string& path) { return isWritable(path.c_str()); }
-
-    /// Update the access-time and modified-time metadata for the given file.
-    bool updateTimestamps(const std::string& filename, timespec tsAccess, timespec tsModified);
 
     /// Copy the source file to the target.
     bool copy(const std::string& fromPath, const std::string& toPath, bool log,
@@ -109,19 +173,8 @@ namespace FileUtil
 
     /// Try to hard-link, and fallback to copying it linking fails.
     /// Returns true iff either linking or copying succeeds.
-    inline bool linkOrCopyFile(const std::string& source, const std::string& newPath)
-    {
-        // first try a simple hard-link
-        if (link(source.c_str(), newPath.c_str()) == 0)
-            return true;
-
-        const auto onrre = errno;
-        LOG_DBG("Failed to link [" << source << "] to [" << newPath << "] ("
-                                   << Util::symbolicErrno(onrre) << ": " << std::strerror(onrre)
-                                   << "), will try to copy");
-
-        return FileUtil::copy(source, newPath, /*log=*/true, /*throw_on_error=*/false);
-    }
+    /// Platform-dependent implementations.
+    bool linkOrCopyFile(const std::string& source, const std::string& newPath);
 
     /// Returns the system temporary directory.
     std::string getSysTempDirectoryPath();
@@ -132,10 +185,11 @@ namespace FileUtil
     std::string createRandomTmpDir(std::string root = std::string());
 
     /// Create a temporary directory in the root provided
-    std::string createTmpDir(std::string dirName, std::string root = std::string());
+    std::string createTmpDir(const std::string& dirName, std::string root = std::string());
 
     /// Returns the realpath(3) of the provided path.
     std::string realpath(const char* path);
+
     inline std::string realpath(const std::string& path)
     {
         return realpath(path.c_str());
@@ -148,79 +202,57 @@ namespace FileUtil
     /// have equal size and every byte of their contents match.
     bool compareFileContents(const std::string& rhsPath, const std::string& lhsPath);
 
-    /// Reads the whole file into the given buffer. Only for small files.
+    /// Read nbytes from fd into buf. Retries on EINTR.
+    /// Returns the number of bytes read, or -1 on error.
+    ssize_t read(int fd, void* buf, size_t nbytes);
+
+    /// Reads the whole file appending onto the given buffer. Only for small files.
     /// Does *not* clear the buffer before writing to it. Returns the number of bytes read, -1 for error.
     template <typename T>
     ssize_t readFile(const std::string& path, T& data, int maxSize = 256 * 1024)
     {
-        const int fd = ::open(path.c_str(), O_RDONLY);
+        const int fd = FileUtil::openFileAsFD(path, O_RDONLY);
         if (fd < 0)
             return -1;
 
         struct stat st;
         if (::fstat(fd, &st) != 0 || st.st_size > maxSize)
         {
-            ::close(fd);
+            closeFD(fd);
             return -1;
         }
 
         const std::size_t originalSize = data.size();
-        auto remainingSize = st.st_size;
+        const auto remainingSize = (st.st_size > 0 ? st.st_size : maxSize);
         data.resize(originalSize + remainingSize);
-        off_t off = originalSize;
-        for (;;)
-        {
-            if (remainingSize == 0)
-            {
-                // Nothing to read.
-                break;
-            }
 
-            int n;
-            while ((n = ::read(fd, &data[off], remainingSize)) < 0 && errno == EINTR)
-            {
-            }
+        const ssize_t n = read(fd, &data[originalSize], remainingSize);
+        closeFD(fd);
 
-            if (n <= 0)
-            {
-                if (n == 0) // EOF.
-                    break;
+        data.resize(originalSize + (n <= 0 ? 0 : n));
 
-                ::close(fd);
-                data.resize(originalSize);
-                return -1; // Error.
-            }
-
-            off += n;
-            remainingSize -= n;
-        }
-
-        close(fd);
-        return st.st_size;
+        return n;
     }
 
     /// Reads the whole file to memory. Only for small files.
     std::unique_ptr<std::vector<char>> readFile(const std::string& path, int maxSize = 256 * 1024);
 
+    void copyDirectoryRecursive(const std::string& srcDir, const std::string& destDir, bool log);
     /// File/Directory stat helper.
     class Stat
     {
     public:
         /// Stat the given path. Symbolic links are stat'ed when @link is true.
-        Stat(const std::string& file, bool link = false)
-            : _path(file)
-            , _sb{}
-            , _res(link ? lstat(file.c_str(), &_sb) : stat(file.c_str(), &_sb))
-            , _errno(errno)
+        Stat(const std::string& path, bool link = false)
+            : _sb{}
+            , _res(link ? FileUtil::getLStatOfFile(path, _sb) : FileUtil::getStatOfFile(path, _sb))
+            , _stat_errno(errno)
         {
         }
 
         bool good() const { return _res == 0; }
         bool bad() const { return !good(); }
-        bool erno() const { return _errno; }
         const struct ::stat& sb() const { return _sb; }
-
-        const std::string path() const { return _path; }
 
         bool isDirectory() const { return S_ISDIR(_sb.st_mode); }
         bool isFile() const { return S_ISREG(_sb.st_mode); }
@@ -270,50 +302,74 @@ namespace FileUtil
         }
 
         /// Returns true iff the path exists, regardless of access permission.
-        bool exists() const { return good() || (_errno != ENOENT && _errno != ENOTDIR); }
+        bool exists() const { return good() || (_stat_errno != ENOENT && _stat_errno != ENOTDIR); }
 
         /// Returns true if both files exist and have
         /// the same size and same contents.
-        bool isIdenticalTo(const Stat& other) const
+        static inline bool isIdenticalTo(const Stat& l, const std::string& lPath,
+                                         const Stat& r, const std::string& rPath)
         {
             // No need to check whether they are linked or not,
             // since if they are, the following check will match,
             // and if they aren't, we still need to rely on the following.
             // Finally, compare the contents, to avoid costly copying if we fail to update.
-            return (exists() && other.exists() && !isDirectory() && !other.isDirectory() &&
-                    size() == other.size() && compareFileContents(_path, other._path));
+            return (l.exists() && r.exists() && !l.isDirectory() && !r.isDirectory() &&
+                    l.size() == r.size() && compareFileContents(lPath, rPath));
         }
 
         /// Returns true if both files exist and have
         /// the same size and modified timestamp.
-        bool isUpToDate(const Stat& other) const
+        static inline bool isUpToDate(const Stat& l, const std::string& lPath,
+                                      const Stat& r, const std::string& rPath)
         {
             // No need to check whether they are linked or not,
             // since if they are, the following check will match,
             // and if they aren't, we still need to rely on the following.
             // Finally, compare the contents, to avoid costly copying if we fail to update.
-            if (isIdenticalTo(other))
+            if (isIdenticalTo(l, lPath, r, rPath))
             {
                 return true;
             }
 
             // Clearly, no match. Log something informative.
             LOG_DBG("File contents mismatch: ["
-                    << _path << "] " << (exists() ? "exists" : "missing") << ", " << size()
-                    << " bytes, modified at " << modifiedTime().tv_sec << " =/= [" << other._path
-                    << "]: " << (other.exists() ? "exists" : "missing") << ", " << other.size()
-                    << " bytes, modified at " << other.modifiedTime().tv_sec);
+                    << lPath << "] " << (l.exists() ? "exists" : "missing") << ", " << l.size()
+                    << " bytes, modified at " << l.modifiedTime().tv_sec << " =/= [" << rPath
+                    << "]: " << (r.exists() ? "exists" : "missing") << ", " << r.size()
+                    << " bytes, modified at " << r.modifiedTime().tv_sec);
             return false;
         }
 
     private:
-        const std::string _path;
         struct ::stat _sb;
         const int _res;
-        const int _errno;
+        const int _stat_errno;
+    };
+
+    /// File owning helper that removes it on destruction.
+    struct OwnedFile final
+    {
+        std::string _file;
+        bool _recursive;
+
+        OwnedFile(std::string file, bool recursive = false)
+            : _file(std::move(file))
+            , _recursive(recursive)
+        {
+        }
+
+        OwnedFile(const OwnedFile&) = delete;
+        OwnedFile& operator=(const OwnedFile&) = delete;
+
+        ~OwnedFile()
+        {
+            FileUtil::removeFile(_file, _recursive);
+        }
     };
 
     void lslr(const std::string& dir);
+
+    std::vector<std::string> getDirEntries(const std::string& dirPath);
 
 } // end namespace FileUtil
 

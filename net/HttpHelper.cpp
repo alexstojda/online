@@ -10,9 +10,9 @@
  */
 
 #include <config.h>
-#include <config_version.h>
 
 #include "HttpHelper.hpp"
+#include "HttpRequest.hpp"
 
 #include <algorithm>
 #include <string>
@@ -25,29 +25,8 @@
 #include <common/Util.hpp>
 #include <net/Socket.hpp>
 
-namespace HttpHelper
+namespace
 {
-void sendError(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
-               const std::string& body, const std::string& extraHeader)
-{
-    std::ostringstream oss;
-    oss << "HTTP/1.1 " << errorCode << "\r\n"
-        << "Date: " << Util::getHttpTimeNow() << "\r\n"
-        << "User-Agent: " << http::getAgentString() << "\r\n"
-        << "Content-Length: " << body.size() << "\r\n"
-        << extraHeader << "\r\n"
-        << body;
-    socket->send(oss.str());
-}
-
-void sendErrorAndShutdown(http::StatusCode errorCode, const std::shared_ptr<StreamSocket>& socket,
-                          const std::string& body, const std::string& extraHeader)
-{
-    sendError(errorCode, socket, body, extraHeader + "Connection: close\r\n");
-    socket->shutdown();
-    socket->ignoreInput();
-}
-
 void sendUncompressedFileContent(const std::shared_ptr<StreamSocket>& socket,
                                  const std::string& path, const int bufferSize)
 {
@@ -55,10 +34,10 @@ void sendUncompressedFileContent(const std::shared_ptr<StreamSocket>& socket,
     std::unique_ptr<char[]> buf = std::make_unique<char[]>(bufferSize);
     do
     {
-        file.read(&buf[0], bufferSize);
+        file.read(buf.get(), bufferSize);
         const int size = file.gcount();
         if (size > 0)
-            socket->send(&buf[0], size, true);
+            socket->send(buf.get(), size, true);
         else
             break;
     } while (file);
@@ -75,26 +54,26 @@ void sendDeflatedFileContent(const std::shared_ptr<StreamSocket>& socket, const 
     {
         std::ifstream file(path, std::ios::binary);
         std::unique_ptr<char[]> buf = std::make_unique<char[]>(fileSize);
-        file.read(&buf[0], fileSize);
+        file.read(buf.get(), fileSize);
 
         static const unsigned int Level = 1;
         const long unsigned int size = file.gcount();
         long unsigned int compSize = compressBound(size);
         std::unique_ptr<char[]> cbuf = std::make_unique<char[]>(compSize);
-        int result = compress2((Bytef*)&cbuf[0], &compSize, (Bytef*)&buf[0], size, Level);
+        int result = compress2((Bytef*)cbuf.get(), &compSize, (Bytef*)buf.get(), size, Level);
         if (result != Z_OK)
         {
              LOG_ERR("failed compress of: " << path << " result: " << result);
              return;
         }
         if (size > 0)
-            socket->send(&cbuf[0], compSize, true);
+            socket->send(cbuf.get(), compSize, true);
     }
 }
 
-void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
-                         http::Response& response, const bool noCache,
-                         const bool deflate, const bool headerOnly)
+void sendFileImpl(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
+                  http::Response& response, const bool noCache, const bool deflate,
+                  const bool headerOnly, const bool closeSocket)
 {
     FileUtil::Stat st(path);
     if (st.bad())
@@ -108,7 +87,7 @@ void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std:
     {
         // 60 * 60 * 24 * 128 (days) = 11059200
         response.set("Cache-Control", "max-age=11059200");
-        response.set("ETag", "\"" COOLWSD_VERSION_HASH "\"");
+        response.set("ETag", '"' + Util::getCoolVersionHash() + '"');
     }
     else
     {
@@ -117,9 +96,10 @@ void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std:
 
     response.add("X-Content-Type-Options", "nosniff");
 
-    //Should we add the header anyway ?
-    if (headerOnly)
-        response.add("Connection", "close");
+    if (closeSocket)
+    {
+        response.setConnectionToken(http::Header::ConnectionToken::Close);
+    }
 
     int bufferSize = std::min<std::size_t>(st.size(), Socket::MaximumSendBufferSize);
     if (static_cast<long>(st.size()) >= socket->getSendBufferSize())
@@ -151,7 +131,27 @@ void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std:
         if (!headerOnly)
             sendDeflatedFileContent(socket, path, st.size());
     }
-    socket->shutdown();
+    if(closeSocket) {
+        socket->asyncShutdown();
+    }
+}
+
+} // namespace
+
+namespace HttpHelper
+{
+void sendFile(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
+              http::Response& response, const bool noCache,
+              const bool deflate, const bool headerOnly)
+{
+    sendFileImpl(socket, path, response, noCache, deflate, headerOnly, false);
+}
+
+void sendFileAndShutdown(const std::shared_ptr<StreamSocket>& socket, const std::string& path,
+                         http::Response& response, const bool noCache,
+                         const bool deflate, const bool headerOnly)
+{
+    sendFileImpl(socket, path, response, noCache, deflate, headerOnly, true);
 }
 
 } // namespace HttpHelper
